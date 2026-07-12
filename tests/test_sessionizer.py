@@ -128,29 +128,21 @@ def test_backward_clock_step_clamps_to_zero(sess):
 
 
 def test_repeated_surfing_is_not_a_watch(sess):
-    """Four 15s surfs, each 195s apart (inside the 210s hold window so they all
-    merge into one session), must never accumulate into a recorded watch --
-    surfing a channel repeatedly is not the same as watching it (Critical
-    regression: an earlier revision gated on raw wall-clock span, under which
-    this session's SPAN -- 3 * 195s ~= 585s -- crossed 120s even though its
-    CREDITED time never did).
+    """Six 15s surfs, each 195s apart -- inside the 210s hold window, so they all
+    merge into ONE session -- must never accumulate into a recorded watch.
 
-    Four tunes, not five: each reopen credits the per-poll cap (30s at
-    defaults) as a safe-over-count floor (FIX 4), so N tunes credit
-    (N-1) * 30s. Five tunes would land at exactly 4 * 30s == 120s, the
-    qualifying threshold itself -- a boundary tie, not a regression check.
-    Four keeps the credited total (90s) unambiguously below threshold while
-    the raw span (585s) is unambiguously above it, which is exactly the
-    contrast this regression test exists to prove.
+    The collector polls continuously, so the zero-client gaps are ticked through
+    and each reopen credits one normal interval (15s), not the cap. Credited:
+    5 * 15 = 75s, well under the 120s bar; raw SPAN: 975s, well over it. That
+    contrast is the regression: an earlier revision gated on span and recorded
+    this as a watch.
     """
     t = 1000.0
-    for i in range(4):
-        poll(sess, t + i * 195, {"u1": 1})    # tune on
-        poll(sess, t + i * 195 + 15, {})      # 15s later, gone again
-    poll(sess, t + 4 * 195 + 400, {})         # let the final gap age out
+    for k in range(0, 6 * 195 + 400, 15):       # continuous 15s polling
+        on = any(k0 <= k < k0 + 15 for k0 in (i * 195 for i in range(6)))
+        poll(sess, t + k, {"u1": 1 if on else 0})
     rec = sess.channels["u1"]
     assert rec["watch_count"] == 0
-    assert rec["watch_seconds"] == 0
     assert rec["watch_seconds"] == 0
 
 
