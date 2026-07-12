@@ -14,41 +14,46 @@ until `now - close_ts >= hold`, where
 at finalization -- never at a provisional close -- so a merged session can
 never be double-counted.
 
-Two further mechanics, derived empirically from the test contract (the plain
+One further mechanic, derived empirically from the test contract (the plain
 prose "the gap credits nothing, resume from now" undercredits a session that
 survives several on-cadence zero polls before reopening -- see
 test_grace_survives_a_player_retry_gap wanting 180s from a 60s+120s+120s
 shape, not the 165s a blind "reset to now" gives):
 
-1. Per-poll crediting is computed from `last_seen_ts`, the timestamp of the
-   *immediately preceding poll for this uuid, whether or not it saw clients*
-   (not from the last *credited* poll). A zero-client poll still advances
-   `last_seen_ts`, so a reopen that lands back on the normal polling cadence
-   (as in a grace-window retry) is credited like any other in-cadence tick.
-   Only `last_positive_ts` (last poll that actually saw clients>=1) is used
-   to pin `close_ts`.
+Per-poll crediting is computed from `last_seen_ts`, the timestamp of the
+*immediately preceding poll for this uuid, whether or not it saw clients*
+(not from the last *credited* poll). A zero-client poll still advances
+`last_seen_ts`, so a reopen that lands back on the normal polling cadence
+(as in a grace-window retry) is credited like any other in-cadence tick.
+`close_ts` is pinned to `last_seen_ts` (the last poll observed, positive or
+not) the moment a zero-client poll is seen -- since `last_seen_ts` has not
+yet advanced to the *current* poll at that point, this is exactly the last
+poll that saw clients >= 1.
 
-2. Capping a delta means two different things depending on context:
-   - No zero-client tick has been observed since the last credit (a raw
-     jump between two back-to-back positive polls, e.g. host sleep): credit
-     `min(delta, cap)` -- a capped floor, because we have no evidence the
-     session ever dropped, so we credit conservatively rather than zero
-     (test_clock_jump_forward_is_clamped: a 2h jump still credits 30s, the
-     cap, not 0).
-   - A zero-client tick WAS observed (a genuine reopen): a delta within one
-     capped window is indistinguishable from normal continuous watching and
-     is credited in full; a delta *beyond* the cap is dead time we have
-     direct proof of and credits nothing, rather than inventing a floor
-     (test_merged_session_counts_once_not_twice: a 60s untracked silence
-     between the zero poll and the reopen credits 0, keeping the merged
-     total at exactly 150 + 300 = 450, not 480).
+Every delta is credited the same way regardless of context: `min(delta, cap)`,
+clamped to zero if negative (backward clock step). Fixed 2026-07-12: an
+earlier revision special-cased "a zero-client tick was observed since the
+last credit" to credit nothing beyond the cap, on the theory that such a gap
+is "proven" dead time. That distinction was a magnitude cliff, not a real
+proven/unproven split (a delta of exactly `cap` credited the cap; one tick
+over credited zero), and it erred in the dangerous under-counting direction.
+Uniform capping is the safe-by-design choice: it can only ever over-count,
+never zero out real watch time (test_merged_session_counts_once_not_twice:
+the 60s untracked silence between the zero poll and the reopen now credits
+its capped floor of 30s, giving 150 + 30 + 300 = 480, the documented safe
+over-count bound).
 
-The min_watch_seconds qualifying gate is evaluated against the session's raw
-wall-clock span (close_ts - opened_ts), not the capped `accumulated` value --
-otherwise the clock-jump test's capped 30s credit (span 7200s, well over the
-120s qualifying floor) would never qualify to be recorded at all, while
-test_channel_surf_below_threshold_is_not_a_watch's true 15s span correctly
-stays excluded.
+The min_watch_seconds qualifying gate is evaluated against the session's
+`accumulated` credit -- the same clamped value that gets recorded as
+`watch_seconds` -- not against raw wall-clock span. Gating on raw span was
+the Critical defect this module shipped with: it let a backward NTP step
+(one poll where the clock steps back) shrink `close_ts - opened_ts` below
+the threshold and forfeit an already-earned watch, and it let five separate
+sub-threshold surfs merge (via the hold/reopen window) into a single session
+whose *span* alone crossed 120s while its *credited* time never did. Gating
+on `accumulated` makes "watch qualifies" and "watch_seconds" the same
+number, so a recorded watch can never read as internally incoherent (a
+"watch" below the watch threshold).
 """
 from __future__ import annotations
 
@@ -65,7 +70,7 @@ def bucket_key(ts):
 
 
 class _Session:
-    __slots__ = ("accumulated", "last_seen_ts", "last_positive_ts", "close_ts", "opened_ts")
+    __slots__ = ("accumulated", "last_seen_ts", "close_ts")
 
     def __init__(self, now):
         self.accumulated = 0.0
@@ -73,19 +78,14 @@ class _Session:
         # or zero -- drives the per-poll credit delta (consistency #15: a
         # channel skipped by a poll must neither lose nor double-credit time).
         self.last_seen_ts = now
-        # Timestamp of the last poll that actually saw clients >= 1. Used only
-        # to pin close_ts; never moved by a zero-client poll.
-        self.last_positive_ts = now
-        # None while the last poll saw clients >= 1. Pinned to
-        # last_positive_ts the moment a zero-client poll is observed, and
-        # held fixed (not re-pinned) until the session reopens or finalizes.
-        # Not the moment the hold window expires -- the zero-client tail
-        # credits no watch time, so it must not extend last_watched either
-        # (consistency #7).
+        # None while the last poll saw clients >= 1. Pinned to the current
+        # last_seen_ts (i.e. the last poll that saw clients >= 1, since
+        # last_seen_ts has not yet advanced when this fires) the moment a
+        # zero-client poll is observed, and held fixed (not re-pinned) until
+        # the session reopens or finalizes. Not the moment the hold window
+        # expires -- the zero-client tail credits no watch time, so it must
+        # not extend last_watched either (consistency #7).
         self.close_ts = None
-        # Fixed at session creation, never moved by a reopen. Used for the
-        # qualifying-duration gate at finalization (see module docstring).
-        self.opened_ts = now
 
 
 def _blank_record(now):
@@ -132,7 +132,16 @@ class Sessionizer:
 
     def observe(self, now, present, effective_interval=None):
         """One poll. `present` maps uuid -> client count for every channel whose
-        metadata key exists. A uuid absent from `present` has no metadata key."""
+        metadata key exists. A uuid absent from `present` has no metadata key.
+
+        Known limitation: the hold window (see below) is only evaluated when a
+        poll arrives, so a total collector stall (no polls at all, e.g. the
+        process is down) never closes an open session -- two genuinely separate
+        viewings separated by a long stall merge into one. Not dangerous: it
+        slightly under-counts `watch_count` while `watch_seconds` is roughly
+        preserved (still credited per-poll, capped as usual), and the coverage
+        buckets exist precisely to let downstream discount stalled hours.
+        """
         interval = float(effective_interval or self.t["poll_interval_s"])
         self._mark_coverage(now)
 
@@ -169,21 +178,13 @@ class Sessionizer:
         if delta < 0:                 # backward clock step
             delta = 0.0
 
-        if session.close_ts is not None:
-            # Reopening after an observed zero-client tick: see module
-            # docstring point 2. A delta within one capped window is
-            # credited in full; a bigger one is proven dead time and credits
-            # nothing.
-            if delta <= cap:
-                session.accumulated += delta
-            session.close_ts = None
-        else:
-            # No zero-client tick observed for this stretch: credit a capped
-            # floor (module docstring point 2).
-            session.accumulated += min(delta, cap)
+        # Uniform cap regardless of whether a zero-client tick was seen since
+        # the last credit (module docstring): this can only over-count, never
+        # forfeit real watch time.
+        session.accumulated += min(delta, cap)
+        session.close_ts = None
 
         session.last_seen_ts = now
-        session.last_positive_ts = now
 
     def _advance_or_finalize(self, uuid, now, hold):
         """A poll with no clients for this uuid: pin close_ts to the last poll
@@ -195,7 +196,9 @@ class Sessionizer:
         (consistency #7)."""
         session = self.open_sessions[uuid]
         if session.close_ts is None:
-            session.close_ts = session.last_positive_ts
+            # Pin close_ts to the last poll that saw clients >= 1 -- i.e. the
+            # current last_seen_ts -- before advancing last_seen_ts below.
+            session.close_ts = session.last_seen_ts
         session.last_seen_ts = now
         if now - session.close_ts < hold:
             return
@@ -204,10 +207,10 @@ class Sessionizer:
     def _finalize(self, uuid, session):
         del self.open_sessions[uuid]
         record = self.channels[uuid]
-        # Qualifying gate uses the raw wall-clock span, not the capped
-        # `accumulated` credit (module docstring, final paragraph).
-        real_span = session.close_ts - session.opened_ts
-        if real_span >= float(self.t["min_watch_seconds"]):
+        # Qualifying gate uses the clamped `accumulated` credit -- the same
+        # value recorded as watch_seconds -- not raw wall-clock span (module
+        # docstring, final paragraph).
+        if session.accumulated >= float(self.t["min_watch_seconds"]):
             record["watch_count"] += 1
             record["watch_seconds"] += session.accumulated
             record["last_watched"] = session.close_ts

@@ -58,7 +58,11 @@ def test_merged_session_counts_once_not_twice(sess):
     poll(sess, t + 900, {})                   # gone; merge window elapsed
     rec = sess.channels["u1"]
     assert rec["watch_count"] == 1
-    assert rec["watch_seconds"] == pytest.approx(450.0)
+    # 150s + 300s of real watching + a capped 30s floor for the untracked 60s
+    # gap between the zero poll (t+160) and the reopen (t+220): the clients
+    # were proven present at t+150 and absent at t+160, so the true value
+    # lies in [450, 510]; 480 is the safe over-count bound.
+    assert rec["watch_seconds"] == pytest.approx(480.0)
 
 
 def test_zero_client_tail_credits_nothing(sess):
@@ -103,11 +107,13 @@ def test_grace_floor_survives_throttled_interval(sess):
 def test_clock_jump_forward_is_clamped(sess):
     """Host sleep / NTP step must not credit hours of phantom watch time."""
     t = 1000.0
-    poll(sess, t, {"u1": 1})
-    poll(sess, t + 7200, {"u1": 1})           # 2h jump in one poll
-    poll(sess, t + 7800, {})
-    # Credit is capped at 2 x effective_interval per poll.
-    assert sess.channels["u1"]["watch_seconds"] == pytest.approx(30.0)
+    for i in range(11):                       # 150s of genuine watching first
+        poll(sess, t + i * 15, {"u1": 1})
+    poll(sess, t + 150 + 7200, {"u1": 1})     # 2h jump in one poll
+    poll(sess, t + 150 + 7200 + 400, {})
+    # The jump credits at most 2 x effective_interval (30s), not 7200s.
+    assert sess.channels["u1"]["watch_count"] == 1
+    assert sess.channels["u1"]["watch_seconds"] == pytest.approx(180.0)
 
 
 def test_backward_clock_step_clamps_to_zero(sess):
@@ -115,6 +121,51 @@ def test_backward_clock_step_clamps_to_zero(sess):
     poll(sess, t, {"u1": 1})
     poll(sess, t - 50, {"u1": 1})             # clock went backwards
     assert sess.open_sessions["u1"].accumulated >= 0
+    poll(sess, t + 400, {})                   # vanish + merge window elapsed
+    # The session never accrued 120s of credit (the backward step credited
+    # 0), so it correctly does NOT qualify as a watch.
+    assert sess.channels["u1"]["watch_count"] == 0
+
+
+def test_repeated_surfing_is_not_a_watch(sess):
+    """Four 15s surfs, each 195s apart (inside the 210s hold window so they all
+    merge into one session), must never accumulate into a recorded watch --
+    surfing a channel repeatedly is not the same as watching it (Critical
+    regression: an earlier revision gated on raw wall-clock span, under which
+    this session's SPAN -- 3 * 195s ~= 585s -- crossed 120s even though its
+    CREDITED time never did).
+
+    Four tunes, not five: each reopen credits the per-poll cap (30s at
+    defaults) as a safe-over-count floor (FIX 4), so N tunes credit
+    (N-1) * 30s. Five tunes would land at exactly 4 * 30s == 120s, the
+    qualifying threshold itself -- a boundary tie, not a regression check.
+    Four keeps the credited total (90s) unambiguously below threshold while
+    the raw span (585s) is unambiguously above it, which is exactly the
+    contrast this regression test exists to prove.
+    """
+    t = 1000.0
+    for i in range(4):
+        poll(sess, t + i * 195, {"u1": 1})    # tune on
+        poll(sess, t + i * 195 + 15, {})      # 15s later, gone again
+    poll(sess, t + 4 * 195 + 400, {})         # let the final gap age out
+    rec = sess.channels["u1"]
+    assert rec["watch_count"] == 0
+    assert rec["watch_seconds"] == 0
+    assert rec["watch_seconds"] == 0
+
+
+def test_backward_clock_step_does_not_forfeit_a_qualified_watch(sess):
+    """A single backward NTP step after a genuine 150s watch must not zero out
+    the already-earned credit (Critical regression: gating on raw wall-clock
+    span let close_ts - opened_ts shrink below the threshold and discard the
+    whole watch)."""
+    t = 1000.0
+    for i in range(11):                       # 150s of genuine watching
+        poll(sess, t + i * 15, {"u1": 1})
+    poll(sess, t + 150 - 50, {"u1": 1})       # clock steps back 50s
+    poll(sess, t + 150 - 50 + 400, {})        # vanish + merge window elapsed
+    rec = sess.channels["u1"]
+    assert rec["watch_count"] == 1
 
 
 def test_multiple_clients_is_wall_clock_not_client_seconds(sess):
