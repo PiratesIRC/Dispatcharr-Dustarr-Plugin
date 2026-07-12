@@ -37,11 +37,11 @@ class Storage:
         if self._circuit_open(now):
             self.stats["dropped_writes"] += 1
             return False
+        tmp = self._path(USAGE + ".tmp")
         try:
             os.makedirs(self.data_dir, exist_ok=True)
             body = dict(payload)
             body["written_at"] = now
-            tmp = self._path(USAGE + ".tmp")
             with open(tmp, "w", encoding="utf-8") as fh:
                 json.dump(body, fh, separators=(",", ":"), default=str)
             # Same-directory rename: cross-device os.replace fails.
@@ -49,6 +49,13 @@ class Storage:
             self._fail_streak = 0
             return True
         except OSError:
+            # Best-effort cleanup: never let a stale .tmp linger after a
+            # failed replace. Swallow errors here too — cleanup must not
+            # mask the original failure or raise of its own accord.
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
             self._io_fail(now)
             return False
 
@@ -63,12 +70,29 @@ class Storage:
         except FileNotFoundError:
             return {}
         except (OSError, ValueError):
-            self.stats["corrupt_sidelines"] += 1
             try:
-                os.replace(path, f"{path}.corrupt-{int(now)}")
+                os.replace(path, self._sideline_path(path, now))
+                # Only count a sideline that actually happened.
+                self.stats["corrupt_sidelines"] += 1
             except OSError:
                 pass
             return {}
+
+    @staticmethod
+    def _sideline_path(path, now):
+        """Pick a sideline path that never overwrites an existing one.
+
+        One-second granularity means two corruptions in the same second
+        would otherwise collide; the forensic bytes of the earlier
+        corruption must never be silently clobbered.
+        """
+        base = f"{path}.corrupt-{int(now)}"
+        candidate = base
+        suffix = 0
+        while os.path.exists(candidate):
+            suffix += 1
+            candidate = f"{base}-{suffix}"
+        return candidate
 
     def ensure_stats_since(self, payload, now):
         """Stamp stats_since exactly once per usage.json lifetime.

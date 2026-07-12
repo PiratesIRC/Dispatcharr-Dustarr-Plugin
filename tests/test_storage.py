@@ -90,3 +90,43 @@ def test_written_file_is_valid_json_on_disk(store, tmp_path):
     store.write({"channels": {"u1": {}}, "meta": {}}, 1000.0)
     on_disk = json.loads((tmp_path / "usage.json").read_text(encoding="utf-8"))
     assert on_disk["channels"] == {"u1": {}}
+
+
+def test_write_cleans_up_tmp_on_replace_failure(store, storage_mod, tmp_path,
+                                                 monkeypatch):
+    def boom(*args, **kwargs):
+        raise OSError("locked")
+
+    monkeypatch.setattr(storage_mod.os, "replace", boom)
+    assert store.write({"channels": {}}, 1000.0) is False
+    # The failed os.replace must not leave usage.json.tmp behind as debris.
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_corrupt_sidelines_not_counted_when_rename_fails(store, storage_mod,
+                                                          tmp_path, monkeypatch):
+    (tmp_path / "usage.json").write_text("{not json", encoding="utf-8")
+
+    def boom(*args, **kwargs):
+        raise OSError("locked")
+
+    monkeypatch.setattr(storage_mod.os, "replace", boom)
+    assert store.load(1234.0) == {}
+    # The sideline rename never happened, so the stat must not claim it did.
+    assert store.stats["corrupt_sidelines"] == 0
+    # The corrupt file stays exactly where it was, bytes untouched.
+    assert (tmp_path / "usage.json").read_text(encoding="utf-8") == "{not json"
+
+
+def test_sideline_collision_preserves_both_corrupt_files(store, tmp_path):
+    (tmp_path / "usage.json").write_text("first corrupt", encoding="utf-8")
+    assert store.load(2000.0) == {}
+    (tmp_path / "usage.json").write_text("second corrupt", encoding="utf-8")
+    # Same integer second as the first corruption: must not clobber it.
+    assert store.load(2000.0) == {}
+
+    sidelined = sorted(tmp_path.glob("usage.json.corrupt-2000*"))
+    assert len(sidelined) == 2
+    contents = {p.read_text(encoding="utf-8") for p in sidelined}
+    assert contents == {"first corrupt", "second corrupt"}
+    assert store.stats["corrupt_sidelines"] == 2
