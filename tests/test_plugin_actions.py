@@ -95,6 +95,26 @@ def test_validate_settings_passes_on_defaults(plugin):
     assert result["status"] == "ok"
 
 
+def test_validate_settings_rejects_report_base_url_without_scheme(plugin):
+    result = plugin.Plugin().run("validate_settings", {},
+                                 {"settings": {"report_base_url": "192.168.1.53:9191"}})
+    assert result["status"] == "error"
+    assert "report base url" in result["message"].lower()
+    assert "http" in result["message"].lower()
+
+
+def test_validate_settings_accepts_report_base_url_with_http_scheme(plugin):
+    result = plugin.Plugin().run("validate_settings", {},
+                                 {"settings": {"report_base_url": "http://192.168.1.53:9191"}})
+    assert result["status"] == "ok"
+
+
+def test_validate_settings_accepts_report_base_url_with_https_scheme(plugin):
+    result = plugin.Plugin().run("validate_settings", {},
+                                 {"settings": {"report_base_url": "https://example.com"}})
+    assert result["status"] == "ok"
+
+
 def test_build_report_writes_files_and_returns_the_path(plugin, tmp_path,
                                                         monkeypatch):
     import sys

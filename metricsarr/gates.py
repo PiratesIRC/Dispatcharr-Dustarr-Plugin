@@ -217,15 +217,21 @@ def evaluate(usage, rows_total, never_watched, now, thresholds, judged_total):
     return {"ok": not alerts, "alerts": alerts, "coverage": coverage}
 
 
-def unobservable_alert(unobservable, rows_total):
+def unobservable_alert(unobservable, judged_total):
     """Task 8 calls this; evaluate() cannot -- it isn't given the count.
 
     Additive, not wired into evaluate(): a channel is "unobservable" for reasons
     evaluate() has no visibility into (e.g. no metadata key ever seen for it), so
     the caller that computes that count is responsible for surfacing this alert
     alongside evaluate()'s own alerts.
+
+    `judged_total` (like the never-watched ceiling I2) is the JUDGED population
+    (never_watched + too_new + tuned_never_qualified + watched), not rows_total
+    (the full ORM channel count). Unobservable channels are excluded from the
+    judged set, so the fraction is denominated on the channels actually eligible
+    for judgment, not every channel in the lineup.
     """
-    if rows_total and unobservable / float(rows_total) > MAX_UNOBSERVABLE_FRACTION:
-        return (f"{unobservable / rows_total:.0%} of the lineup is unobservable - "
+    if judged_total and unobservable / float(judged_total) > MAX_UNOBSERVABLE_FRACTION:
+        return (f"{unobservable / judged_total:.0%} of the judged channels are unobservable - "
                 "the dataset cannot support any conclusion")
     return None

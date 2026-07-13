@@ -562,6 +562,11 @@ class Plugin:
             return {"status": "error",
                     "message": "Webhook URL must start with http:// or https://"}
 
+        base_url = (thresholds.get("report_base_url") or "").strip()
+        if base_url and not base_url.startswith(("http://", "https://")):
+            return {"status": "error",
+                    "message": "Report base URL must start with http:// or https://"}
+
         # sync_schedule already ran once in run() before dispatch (I3) -- that
         # is the single arming site. Calling it again here would just arm the
         # schedule twice per click for no benefit.

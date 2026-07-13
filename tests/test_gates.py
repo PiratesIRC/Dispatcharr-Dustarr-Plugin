@@ -270,3 +270,27 @@ def test_unobservable_alert_at_threshold_passes(gates):
 
 def test_unobservable_alert_zero_rows_total(gates):
     assert gates.unobservable_alert(10, 0) is None
+
+
+def test_unobservable_alert_rebased_on_judged_population_fires_when_high(gates):
+    """The denominator must be the judged population (channels eligible for
+    judgment: never/too_new/tuned_only/watched), not the full ORM count. On
+    the real box, 1010 of 1440 channels are excluded, leaving only 430 judged.
+    If all 430 are unobservable, the alert must fire. Under the old (wrong)
+    denominator of rows_total=1440, this fraction (430/1440=30%) would never
+    reach the 90% ceiling, making the alert un-firable."""
+    judged_total = 430
+    unobservable = 430                          # 100% of the judged population
+    msg = gates.unobservable_alert(unobservable, judged_total)
+    assert msg is not None
+    assert "100%" in msg or "unobservable" in msg
+
+
+def test_unobservable_alert_healthy_lineup_stays_quiet(gates):
+    """A healthy household can have 1010 excluded channels and 430 judged, with
+    most of the judged looking never-watched but not ALL of them unobservable.
+    The alert must stay quiet (not fire) when <90% of the judged population is
+    unobservable, even though the total lineup is huge."""
+    judged_total = 430
+    unobservable = 380                          # 88% of the judged population
+    assert gates.unobservable_alert(unobservable, judged_total) is None

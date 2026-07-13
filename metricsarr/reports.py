@@ -255,9 +255,10 @@ def build_model(rows, usage, settings, now):
                           thresholds=settings, judged_total=judged_total)
     # C1: a non-proxying stream profile never writes Redis keys, so those
     # channels are structurally invisible to the collector -- if most of the
-    # lineup is unobservable, the dataset cannot support any conclusion.
-    # evaluate() has no visibility into this count; wire it in here.
-    unobservable_msg = gates.unobservable_alert(len(unobservable), len(rows))
+    # judged population is unobservable, the dataset cannot support any conclusion.
+    # evaluate() has no visibility into this count; wire it in here, using the
+    # same JUDGED denominator (never_watched + too_new + tuned_only + watched).
+    unobservable_msg = gates.unobservable_alert(len(unobservable), judged_total)
     if unobservable_msg:
         gate["alerts"].append(unobservable_msg)
         gate["ok"] = False
