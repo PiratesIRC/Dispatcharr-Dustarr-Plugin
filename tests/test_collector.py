@@ -440,3 +440,168 @@ def test_malformed_scan_keys_are_counted_not_silently_dropped(
 
     assert col.stats["channels_seen"] == 1          # only the valid channel counted
     assert col.stats["malformed_keys"] == 1
+
+
+# ---- Fix pass 2 -------------------------------------------------------------
+
+
+def test_deposed_and_connection_wedged_leader_does_not_write_on_shutdown(
+        col_mod, sess_mod, storage_mod, fake_redis, fake_clock, tmp_path):
+    """C1 + B4 combined repro.
+
+    C1 (Critical): renew() must FAIL CLOSED on a Redis error -- it is the
+    write fence, re-verified immediately before every flush. A worker whose
+    OWN connection wedges (a broken socket in THIS worker; Redis itself and
+    the lease are healthy for everyone else, and a real competitor
+    legitimately takes over while this worker is wedged) must not verify its
+    write against a stale cached `owned` belief -- a cached value is not a
+    verification. The reviewer's repro: A believes `leader: True, owned:
+    True` the whole time; B legitimately takes the key over; A's `renew()`
+    can no longer observe that (its own GETs raise) and, pre-fix, fell back
+    to the cached `True` and wrote anyway -- two concurrent writers.
+
+    B4 (Important): `_flush()`'s fence had no test of its own -- deleting the
+    `renew()` call from `_flush()` (leaving every other defense standing)
+    left the whole suite green, because nothing drove `_flush()` while a
+    FOREIGN token actually held the lease. `shutdown()` is the one call path
+    guaranteed to reach `_flush()` even once fully deposed, so it is also the
+    natural driver for that assertion.
+    """
+    class WedgeableProxy:
+        """Wraps the shared fake Redis store so ONE worker's connection can
+        wedge (every call raises) while the underlying store -- and every
+        OTHER worker's own client -- stays perfectly healthy. Models a
+        broken socket in a single uWSGI worker, not a real Redis outage."""
+
+        def __init__(self, real):
+            self._real = real
+            self.wedged = False
+
+        def __getattr__(self, name):
+            if self.wedged:
+                def raiser(*a, **k):
+                    raise RuntimeError("connection wedged")
+                return raiser
+            return getattr(self._real, name)
+
+    proxy = WedgeableProxy(fake_redis)
+    col = make_collector(col_mod, sess_mod, storage_mod, proxy, fake_clock,
+                         tmp_path, token="A")
+    fake_redis.open_channel("u1", clients=1)
+    col.run_tick()                                  # A legitimately leads + flushes
+    assert (tmp_path / "usage.json").exists()
+    assert col.lease.owned is True
+    before = (tmp_path / "usage.json").read_bytes()
+
+    # A's own connection wedges. 70s pass -- past LEASE_TTL=60 -- and B
+    # legitimately takes over in the REAL store; A's cached belief never
+    # observes this because its own GETs now raise instead of returning "B".
+    proxy.wedged = True
+    fake_clock.advance(70)
+    other = col_mod.Lease(fake_redis, "B")
+    assert other.tick(fake_clock.wall()) is True
+    assert fake_redis.get(col_mod.LEADER_KEY) == "B"
+    assert col._was_leader is True                  # A never observed the loss
+    assert col.lease.owned is True                  # still a stale cached belief
+
+    col.shutdown()
+
+    after = (tmp_path / "usage.json").read_bytes()
+    assert after == before                          # must NOT have been overwritten
+    assert col.stats["redis_errors"] >= 1
+    assert col.stats["last_error"]
+    assert fake_redis.get(col_mod.LEADER_KEY) == "B"   # B's lease untouched
+
+
+def test_sampling_cadence_gate_sheds_load_while_throttled(
+        col_mod, sess_mod, storage_mod, fake_redis, fake_clock, tmp_path, monkeypatch):
+    """B1: the `_last_sample` cadence gate (FIX3) is what actually sheds load
+    once throttled -- deleting it left the whole suite green, i.e. nothing
+    proved "throttling still sheds load" once `base_tick()` decoupled the
+    lease-renewal cadence from the sampling cadence. Drive `run_tick()` on
+    `base_tick()`'s own cadence (as the real thread loop would) while pinned
+    to the throttle ceiling and count actual SCANs (`scan_iter` calls), not
+    just an internal counter."""
+    col = make_collector(col_mod, sess_mod, storage_mod, fake_redis, fake_clock,
+                         tmp_path)
+    col.effective_interval = col_mod.THROTTLE_CEILING_S    # 120s, pinned
+    assert col.base_tick() == col_mod.LEASE_TTL / 3.0       # 20s renewal cadence
+    # Keep _throttle() a no-op for the whole run (grey zone strictly between
+    # SOFT_BUDGET_MS and HARD_BUDGET_MS) -- otherwise real wall-clock timing
+    # of this in-memory test would eventually trip the un-throttle path and
+    # silently change the cadence mid-run.
+    monkeypatch.setattr(col, "_cycle_ms",
+                        lambda start: (col_mod.SOFT_BUDGET_MS + col_mod.HARD_BUDGET_MS) / 2.0)
+
+    scan_calls = []
+    real_scan_iter = fake_redis.scan_iter
+
+    def counting_scan_iter(*a, **k):
+        scan_calls.append(1)
+        return real_scan_iter(*a, **k)
+    fake_redis.scan_iter = counting_scan_iter
+
+    step = col.base_tick()
+    n_calls = 60
+    for _ in range(n_calls):
+        col.run_tick()
+        fake_clock.advance(step)
+
+    assert len(scan_calls) < n_calls // 2            # far fewer SCANs than run_tick calls
+    assert len(scan_calls) == col.stats["cycle_seq"]
+    assert col.effective_interval == col_mod.THROTTLE_CEILING_S   # never reverted
+
+
+def test_observe_is_given_effective_interval_not_configured(
+        col_mod, sess_mod, storage_mod, fake_redis, fake_clock, tmp_path):
+    """B2: swapping `self.effective_interval` -> `self.configured_interval`
+    in the `observe()` call left the suite green. This is load-bearing: the
+    sessionizer's grace floor is `2 * effective_interval`, so passing the
+    wrong interval silently shreds sessions under throttling."""
+    col = make_collector(col_mod, sess_mod, storage_mod, fake_redis, fake_clock,
+                         tmp_path)
+    col.effective_interval = 999.0
+    assert col.effective_interval != col.configured_interval
+
+    seen = []
+    real_observe = col.sessionizer.observe
+
+    def spy_observe(now, present, effective_interval=None):
+        seen.append(effective_interval)
+        return real_observe(now, present, effective_interval)
+    col.sessionizer.observe = spy_observe
+
+    fake_redis.open_channel("u1", clients=1)
+    col.run_tick()
+
+    assert seen == [999.0]
+
+
+def test_lease_error_increments_redis_errors_via_drain(
+        col_mod, sess_mod, storage_mod, fake_clock, tmp_path):
+    """B3: mutation-tested -- stubbing out `stats["redis_errors"] += 1`
+    inside `_drain_lease_error()` left the suite green. Isolate the
+    lease-error path from the already-covered sample-error path
+    (`test_redis_error_is_counted_not_raised`): the lease's `.get()` fails on
+    the very first call, so `tick()` returns `False` (never acquired --
+    `owned` stays at its initial `False`) and `run_tick()` returns before
+    ever reaching `_sample()` -- so `redis_errors` can only have come from
+    `_drain_lease_error()`."""
+    class FlakyOnce(FakeRedis):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            self.fail_next_get = True
+
+        def get(self, key):
+            if self.fail_next_get:
+                self.fail_next_get = False
+                raise RuntimeError("redis blip")
+            return super().get(key)
+
+    redis = FlakyOnce(clock=fake_clock)
+    col = make_collector(col_mod, sess_mod, storage_mod, redis, fake_clock, tmp_path)
+    col.run_tick()
+
+    assert col._was_leader is False
+    assert col.stats["redis_errors"] == 1
+    assert col.stats["last_error"]

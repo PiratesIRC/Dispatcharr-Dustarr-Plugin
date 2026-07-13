@@ -97,7 +97,23 @@ class Lease:
 
     def renew(self, now):
         """Verify-and-renew WITHOUT acquiring: renews only if we already own
-        the key; NEVER SET NX a free key (FIX1). Used to fence writes."""
+        the key; NEVER SET NX a free key (FIX1). Used to fence writes.
+
+        Fails CLOSED on a Redis error -- the opposite of tick()'s fail-open
+        (C1). tick()'s fail-open answers "should an in-flight session be
+        forfeit on a blip" (no -- that needs an OBSERVED foreign token).
+        renew() answers a different question: "is it SAFE TO WRITE right
+        now", asked immediately before every flush. A worker whose OWN Redis
+        connection wedges (broken socket in this worker, Redis itself and
+        the lease fine for everyone else) must not verify a write against a
+        cached `owned` from its last successful call -- that is not a
+        verification, it is a stale belief, and it is exactly how a
+        deposed-but-wedged worker keeps writing forever alongside the real
+        new leader (dual-writer clobber). So on exception: return False
+        (never write what you cannot verify) and leave `self.owned`
+        untouched -- callers must gate writes on renew()'s RETURN VALUE,
+        never on `.owned` after calling it.
+        """
         self.last_error = None
         try:
             if to_text(self.r.get(self.key)) == self.token:
@@ -107,6 +123,7 @@ class Lease:
                 self.owned = False
         except Exception:
             self.last_error = traceback.format_exc(limit=8)[-800:]
+            return False
         return self.owned
 
     def release(self):
