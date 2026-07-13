@@ -34,7 +34,7 @@ except ImportError:                     # standalone (non-package) import path
 
 _LOGGER = logging.getLogger(__name__)
 
-PLUGIN_VERSION = "1.26.1931200"
+PLUGIN_VERSION = "1.26.1941407"
 
 DATA_DIR = "/data/metricsarr"           # plugin state (named volume)
 REPORT_DIR = "/data/logos/metricsarr"   # nginx serves /data/logos/** at /logos/**
@@ -48,6 +48,10 @@ RESTART_WINDOW_S = 3600.0
 # The metadata key's TTL is 30s (refreshed every 1s). A poll slower than this can
 # miss a live channel between refreshes entirely (fact-check #3).
 MAX_POLL_INTERVAL_S = 25
+
+# I5: the collector loop's outer except has NO OTHER observability -- rate
+# limit its one log line so a tight failure loop cannot flood the log.
+_ERROR_LOG_INTERVAL_S = 60.0
 
 _restart_times = []
 _spawn_lock = threading.Lock()
@@ -77,9 +81,16 @@ FIELDS = [
      "description": "A channel younger than this cannot be judged unused."},
     {"id": "top_n", "label": "Top/bottom N", "type": "number", "default": 20},
     {"id": "never_watched_ceiling", "label": "Never-watched alarm ceiling",
-     "type": "number", "default": 0.6,
-     "description": "If more than this fraction of channels look never-watched, "
-                    "the data is treated as untrustworthy (a blind collector)."},
+     "type": "number", "default": 0.98,
+     "description": "Fraction of JUDGED channels (never-watched + too-new + "
+                    "tuned-but-never-qualified + watched -- excluded/"
+                    "unobservable channels don't count) that must look "
+                    "never-watched before the data is treated as untrustworthy "
+                    "(a blind collector). Most real lineups exclude most "
+                    "channels by policy, so a healthy household can easily "
+                    "show 80-90% never-watched among the rest; this high "
+                    "default only catches the mass-casualty shape where "
+                    "essentially EVERY judged channel looks dead."},
     {"id": "exclude_auto_created", "label": "Exclude auto-created channels",
      "type": "boolean", "default": True,
      "description": "Protects PPV/LIVE EVENT slots and 24/7 channels, which M3U "
@@ -94,6 +105,13 @@ FIELDS = [
      "input_type": "password",
      "description": "Discord or any JSON endpoint. Gets a short nudge with a link "
                     "to the full report."},
+    {"id": "report_base_url", "label": "Report base URL", "type": "string",
+     "default": "",
+     "description": "Base URL of your Dispatcharr UI, e.g. "
+                    "http://192.168.1.53:9191. When set, the webhook/toast "
+                    "link to the full report becomes a real clickable URL "
+                    "instead of a bare path (Discord renders a bare path as "
+                    "inert text). Leave blank to keep the bare path."},
     {"id": "webhook_format", "label": "Webhook format", "type": "select",
      "default": "discord",
      "options": [{"value": "discord", "label": "Discord"},
@@ -189,6 +207,14 @@ def _is_uwsgi_worker():
 
 
 # ---- collector thread -------------------------------------------------------
+def _thresholds_fingerprint(thresholds):
+    """A hashable snapshot of coerced settings (I1), used to detect a settings
+    change that must respawn the collector even when PLUGIN_VERSION hasn't
+    moved. `thresholds` is always coerce_settings()'s output -- only numbers/
+    bools/strings -- so a sorted tuple of items is stable and comparable."""
+    return tuple(sorted(thresholds.items()))
+
+
 def _spawn_collector(settings):
     stop_event = threading.Event()
     thresholds = coerce_settings(settings)
@@ -201,6 +227,7 @@ def _spawn_collector(settings):
         store = storage.Storage(DATA_DIR)
         col = None
         backoff = 5.0
+        last_error_log = 0.0
         while not stop_event.is_set():
             wait = float(thresholds["poll_interval_s"])
             try:
@@ -214,6 +241,20 @@ def _spawn_collector(settings):
             except Exception:
                 wait = backoff
                 backoff = min(backoff * 2, 300.0)   # Redis-outage backoff
+                # I5: this is the ONLY observability this thread has. An
+                # exception escaping run_tick entirely (e.g. Collector
+                # construction itself failing) never touches run_tick's own
+                # stats["last_error"] -- that's set only inside run_tick's
+                # OWN try/except -- and stats never reach disk if run_tick
+                # keeps raising (usage.json is written by _flush, which
+                # never runs). Without this log line a persistently-broken
+                # collector is completely invisible: no logs, no usage.json,
+                # no self-health. Rate-limited so a tight failure loop
+                # cannot flood the log.
+                now_log = time.time()
+                if now_log - last_error_log >= _ERROR_LOG_INTERVAL_S:
+                    _LOGGER.exception("metricsarr collector tick failed")
+                    last_error_log = now_log
             if stop_event.wait(wait):
                 break
         if col is not None:
@@ -221,26 +262,43 @@ def _spawn_collector(settings):
 
     thread = threading.Thread(target=loop, name=THREAD_NAME, daemon=True)
     thread.metricsarr_version = PLUGIN_VERSION
+    thread.metricsarr_fingerprint = _thresholds_fingerprint(thresholds)
     thread.metricsarr_stop = stop_event
     thread.start()
     return thread
 
 
 def ensure_collector(settings=None):
-    """Idempotent: one live collector thread per worker, superseded on version bump."""
+    """Idempotent: one live collector thread per worker, superseded on a
+    version bump OR a settings change (I1).
+
+    Thresholds are frozen into the collector loop's closure at spawn time, so
+    a live thread whose settings have since changed (e.g. poll_interval_s
+    lowered 15 -> 5) would otherwise keep polling at the OLD cadence forever
+    while the report layer reads settings fresh every run -- silently
+    poisoning gates.coverage_fraction's `needed` computation and reading 0.0
+    coverage forever. Keying supersession on (PLUGIN_VERSION, thresholds
+    fingerprint) together, instead of version alone, closes that gap.
+    """
     if not _is_uwsgi_worker():
         return
+    fingerprint = _thresholds_fingerprint(coerce_settings(settings or {}))
     with _spawn_lock:
         live = [t for t in threading.enumerate()
                 if t.name == THREAD_NAME and t.is_alive()]
         for thread in live:
-            if getattr(thread, "metricsarr_version", None) == PLUGIN_VERSION:
+            if (getattr(thread, "metricsarr_version", None) == PLUGIN_VERSION
+                    and getattr(thread, "metricsarr_fingerprint", None) == fingerprint):
                 return
 
-        # M3: check the crash-loop bound BEFORE stopping any incumbent thread.
-        # Checking it after (the old order) meant a 6th version bump within
-        # the window would kill the running collector and then refuse to
-        # spawn its replacement, leaving the worker with NO collector at all.
+        # M3 / I1: check the crash-loop bound BEFORE stopping any incumbent
+        # thread, and for EITHER kind of supersession (version bump or
+        # settings change) -- both share one budget, so a burst of settings
+        # edits cannot bypass the same thrash guard a burst of version bumps
+        # would hit. Checking it after stopping the incumbent (the old order)
+        # meant a 6th supersession within the window would kill the running
+        # collector and then refuse to spawn its replacement, leaving the
+        # worker with NO collector at all.
         now = time.time()
         _restart_times[:] = [t for t in _restart_times if now - t < RESTART_WINDOW_S]
         if len(_restart_times) >= RESTART_BOUND:
@@ -272,7 +330,12 @@ def _build_report(settings):
     if not model["gate"]["ok"]:
         message += f" NOT TRUSTWORTHY: {model['gate']['alerts'][0]}"
 
-    url = written.get("url")
+    # I4: written["url"] is always the bare REPORT_URL_PATH -- combine it with
+    # the optional report_base_url setting so the toast (and, via _send_webhook,
+    # the Discord/generic-JSON payload) can carry a REAL clickable link instead
+    # of a bare path Discord renders as inert text.
+    url = reports.full_report_url(thresholds.get("report_base_url"),
+                                  written.get("url") or reports.REPORT_URL_PATH)
     result = {"status": "ok", "message": message + f" Report: {url}",
               "file": written.get("html_path") or url}
     if written.get("error"):
@@ -286,7 +349,9 @@ def _send_webhook(settings, model):
     if not url:
         return {"status": "error",
                 "message": "No webhook URL configured in plugin settings."}
-    summary = reports.summary_for_webhook(model, reports.REPORT_URL_PATH)
+    report_url = reports.full_report_url(thresholds.get("report_base_url"),
+                                         reports.REPORT_URL_PATH)
+    summary = reports.summary_for_webhook(model, report_url)
     return webhook.fire(url, summary, thresholds.get("webhook_format", "discord"),
                         PLUGIN_VERSION)
 
@@ -311,6 +376,16 @@ def build_report_task():
     scheduled report show green and unretryable forever. Re-raising preserves
     both guarantees at once -- the credential redaction AND Celery's normal
     failure/retry semantics.
+
+    Raised `from None` (I6) -- NOT `from exc`. `from exc` sets `__cause__` to
+    the ORIGINAL exception, so Celery's stored/logged traceback renders the
+    credential-bearing original verbatim even though the message string is
+    clean (`ValueError: ...topsecretpass.../ The above exception was the
+    direct cause of the following exception: RuntimeError: ...<redacted>...`).
+    A bare `raise RuntimeError(redacted)` inside this except block isn't safe
+    either: Python still sets `__context__` to the exception being handled
+    (implicit chaining), which the traceback formatter also renders unless
+    told not to. `from None` is the only form that suppresses BOTH.
     """
     from django.db import close_old_connections
 
@@ -324,7 +399,7 @@ def build_report_task():
     except Exception as exc:
         redacted = webhook.redact(str(exc))
         _LOGGER.error("metricsarr build_report_task failed: %s", redacted)
-        raise RuntimeError(redacted) from exc
+        raise RuntimeError(redacted) from None
 
 
 def _load_settings():
@@ -366,9 +441,33 @@ class Plugin:
     actions = ACTIONS
 
     def __init__(self):
-        # I/O-free: the collector is started on the first action/settings dispatch,
-        # not here.
-        pass
+        """C1: Plugin.run() used to be the ONLY thing that called
+        ensure_collector() -- but Dispatcharr's settings-save flow never
+        calls run(), and the plugin declares no `events`, so nothing else
+        ever did either. A user who installs, enables, and configures the
+        plugin then walks away collected NOTHING, forever -- and after
+        following the README's own "restart the container after upgrading"
+        advice, collection stopped dead until a button was next clicked.
+
+        The platform hook is __init__ itself: apps/plugins/apps.py's
+        ready() runs discover_plugins() in EVERY uWSGI worker (lazy-apps,
+        each starts cold), and loader.py instantiates `plugin_cls()` --
+        exactly this constructor. ensure_collector()'s own uWSGI-worker gate
+        (a single procfs read) makes this a no-op everywhere else (Celery
+        workers, manage.py shell, tests).
+
+        Deliberately does NOT read settings here -- app-ready is explicitly
+        a no-DB path (no ORM, no Redis round-trip IN THE CONSTRUCTOR itself;
+        spawning the daemon thread is the one exception, and is O(ms)). The
+        collector starts on DEFAULTS and the first action/settings dispatch
+        refreshes it via ensure_collector's respawn-on-fingerprint-change
+        path (I1). Wrapped in a bare try/except: a collector failure here
+        must never break plugin construction, i.e. break Dispatcharr itself.
+        """
+        try:
+            ensure_collector()
+        except Exception:
+            pass
 
     def stop(self):
         """Called by the loader on disable/uninstall/reload (C2). Must never

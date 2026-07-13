@@ -81,10 +81,12 @@ it's reported separately as **unobservable**, not folded into never-watched.
   `subprocess`/`os.system`/`os.popen`/`os.exec*`/`os.spawn*` and a bare
   `ffprobe(...)` call — no provider I/O, ever. What it does *not* and cannot
   prove: it can't see through reflection (`getattr(channel, "delete")()`),
-  `eval`/`exec`, or a write issued through a driver/library this guard doesn't
-  know to look for. It's a strong, continuously-enforced structural guarantee
-  against the natural ways an author would reach for a write, not a formal
-  proof that no Python code anywhere could ever mutate the database.
+  `eval`/`exec`, a queryset arriving as a **function parameter** (rather than
+  being built or assigned in the same module the guard can see), or a write
+  issued through a driver/library this guard doesn't know to look for. It's a
+  strong, continuously-enforced structural guarantee against the natural ways
+  an author would reach for a write, not a formal proof that no Python code
+  anywhere could ever mutate the database.
 - **It never contacts your provider.** No ffprobe, no stream requests of any kind —
   a single probe consumes one of your provider connections and kicks whoever is
   currently watching.
@@ -100,6 +102,23 @@ it's reported separately as **unobservable**, not folded into never-watched.
   data, and if those checks fail it puts a loud banner at the top of the report
   listing exactly what looked wrong, instead of silently telling you every channel
   is dead.
+
+## What to expect early on — this is by design, not broken
+
+- **Your first ~30 days of reports will carry the "not trustworthy" banner.**
+  The default "unused threshold" is 30 days, and the dataset can't be trusted
+  to call anything unused until it's actually that old — a fresh install (or
+  a fresh `usage.json`) is, by definition, younger than that. This is the age
+  gate working as intended, not a bug. Wait it out, or lower the threshold in
+  settings if you're comfortable judging on a shorter window.
+- **Most of a default lineup is excluded from judgment, and that's the point.**
+  On a typical box roughly 70% of channels (PPV/LIVE EVENT slots, 24/7
+  channels, local/OTA news, sports) are excluded by default — see "Excluded by
+  default" above for why. The actionable "turn this off" answer is drawn from
+  the remaining ~30%, not the whole lineup; the never-watched ceiling gate
+  (see "Key settings") is deliberately rebased on that judged remainder rather
+  than the full channel count, so a healthy household can show a large
+  never-watched share among it without tripping a false alarm.
 
 ## Key settings
 
@@ -117,7 +136,18 @@ Everything lives in the plugin's settings card in the Dispatcharr UI:
   kept out of the never-watched judgment (see "Excluded by default" above).
 - **Unused threshold (days)** — how old a channel must be before it can fairly be
   called unused.
+- **Never-watched alarm ceiling** (default 0.98) — the fraction of *judged*
+  channels (never-watched + too-new + tuned-but-never-qualified + watched —
+  excluded/unobservable channels don't count) that must look never-watched
+  before the data itself is flagged as untrustworthy. It's deliberately high:
+  a normal household can show 80–90% never-watched among the channels it was
+  ever asked to judge, so this only fires on the mass-casualty shape where
+  essentially *every* judged channel looks dead.
 - **Webhook URL / format** — Discord or generic JSON.
+- **Report base URL** — the base URL of your Dispatcharr UI (e.g.
+  `http://192.168.1.53:9191`). Set this so the webhook's "link to the full
+  report" is an actual clickable link — without it, Discord renders the bare
+  report path as inert text.
 - **Scheduled report** — off / daily / weekly / monthly, run by Celery Beat.
 
 ## Install / upgrade

@@ -28,13 +28,17 @@ import os
 import time
 
 try:
-    from . import gates, gateway
+    from . import gates, gateway, sessionizer
 except ImportError:                     # standalone (non-package) import path
     import gates
     import gateway
+    import sessionizer
 
-EMPTY = {"watch_count": 0, "watch_seconds": 0.0, "tune_count": 0,
-         "last_watched": None, "last_tuned": None, "first_seen": None}
+# M3: same shape as sessionizer._blank_record(now) (the record a live tick
+# creates), not hand-duplicated -- calling it with now=None gives exactly the
+# all-zero/all-None shape this module needs as the default for a channel
+# absent from usage.channels (THE INVARIANT above).
+EMPTY = sessionizer._blank_record(None)
 
 
 def _coerce_int(value, default=0):
@@ -139,13 +143,20 @@ def _setting_number(settings, key, default, cast):
 def _entry(row, record, reason, now):
     created = row.created_at
     age_days = ((now - created) / 86400.0) if created else None
+    last_watched = record.get("last_watched")
     return {
         "uuid": row.uuid,
         "name": row.name,
         "group": row.group or "(no group)",
         "watch_count": int(record.get("watch_count") or 0),
         "hours": round(float(record.get("watch_seconds") or 0.0) / 3600.0, 2),
-        "last_watched": record.get("last_watched"),
+        "last_watched": last_watched,
+        # M1: "last watched 8 months ago" is the single highest-value signal
+        # in the dataset for "what do I turn off" -- it was collected and
+        # stored but never rendered. Formatted at entry-build time (via the
+        # same _fmt_local the data-confidence header already uses) so the
+        # HTML table renderer stays a generic column-driven loop.
+        "last_watched_display": _fmt_local(last_watched),
         "last_tuned": record.get("last_tuned"),
         "tune_count": int(record.get("tune_count") or 0),
         "age_days": round(age_days, 1) if age_days is not None else None,
@@ -234,9 +245,14 @@ def build_model(rows, usage, settings, now):
     never_watched_entries = [e for e in never if e["reason"] == "never_watched"]
     too_new_entries = [e for e in never if e["reason"] == "too_new"]
 
+    # I2: the never-watched ceiling is denominated on the JUDGED population,
+    # not the full ORM row count -- `never` already holds BOTH never_watched
+    # and too_new entries (module docstring), so this sum is exactly
+    # never_watched + too_new + tuned_never_qualified + watched.
+    judged_total = len(never) + len(used) + len(tuned_only)
     gate = gates.evaluate(usage, rows_total=len(rows),
                           never_watched=len(never_watched_entries), now=now,
-                          thresholds=settings)
+                          thresholds=settings, judged_total=judged_total)
     # C1: a non-proxying stream profile never writes Redis keys, so those
     # channels are structurally invisible to the collector -- if most of the
     # lineup is unobservable, the dataset cannot support any conclusion.
@@ -315,6 +331,20 @@ def summary_for_webhook(model, report_url):
 REPORT_HTML = "report.html"
 REPORT_URL_PATH = "/logos/metricsarr/report.html"
 
+
+def full_report_url(base_url, path=REPORT_URL_PATH):
+    """I4: REPORT_URL_PATH is a bare path -- inert text in a Discord embed, so
+    the webhook's whole "link to the full report" nudge couldn't actually
+    link anywhere. `base_url` is the plugin's optional `report_base_url`
+    setting (the Dispatcharr UI's own base URL, e.g.
+    "http://192.168.1.53:9191"); when unset, degrade to the bare path
+    (today's behavior) rather than produce a broken relative-looking string.
+    """
+    base_url = (base_url or "").strip()
+    if not base_url:
+        return path
+    return base_url.rstrip("/") + path
+
 _CSS = """
 :root { color-scheme: light dark; }
 body { font: 15px/1.5 system-ui, -apple-system, Segoe UI, sans-serif;
@@ -366,9 +396,12 @@ document.querySelectorAll('table').forEach(function (table) {
 """
 
 # Allowlisted per-channel columns only -- see the credential-safety note above.
+# M1: last_watched_display renders through _fmt_local (local time, human
+# text) -- the raw epoch `last_watched` field stays out of _COLUMNS and is
+# only ever written to the CSV's trailing ISO-8601 columns (render_csv).
 _COLUMNS = [("name", "Channel"), ("group", "Group"), ("watch_count", "Watches"),
             ("hours", "Hours"), ("tune_count", "Tunes"), ("age_days", "Age (d)"),
-            ("reason", "Reason")]
+            ("last_watched_display", "Last watched"), ("reason", "Reason")]
 
 
 def _esc(value):
@@ -440,6 +473,15 @@ def render_html(model):
     # rather than let the heading count and the table's row count diverge.
     never_only = [e for e in model["never_watched"] if e["reason"] != "too_new"]
     too_new_only = [e for e in model["never_watched"] if e["reason"] == "too_new"]
+
+    # M4: "Least used" silently rendering "None." whenever len(used) <= top_n
+    # is CORRECT (it keeps most_used/least_used disjoint) but baffling with
+    # no explanation -- a one-line note names the reason.
+    least_used_note = ""
+    if counts["watched"] and not model["least_used"]:
+        least_used_note = ("<p class='sub'>All watched channels are listed "
+                           "above.</p>")
+
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -481,6 +523,7 @@ has passed to fairly call these unused. Not dead weight; just wait.</p>
 {_table(model['tuned_never_qualified'])}
 
 <h2>Least used</h2>
+{least_used_note}
 {_table(model['least_used'])}
 
 <h2>Most used</h2>
@@ -518,6 +561,20 @@ def _csv_safe(value):
     return value
 
 
+def _iso_utc(ts):
+    """M1: an Excel/LibreOffice user double-clicking the CSV must see a real
+    date, not a raw epoch float like `1752...`. UTC (not local time) so the
+    CSV is unambiguous regardless of where it's opened; `_COLUMNS`' own
+    `last_watched_display` already carries the local, human-formatted form
+    for the HTML report."""
+    if not ts:
+        return ""
+    try:
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(float(ts)))
+    except (TypeError, ValueError, OSError):
+        return ""
+
+
 def render_csv(model):
     """One row per channel across every section, deduplicated by uuid."""
     buffer = io.StringIO()
@@ -533,7 +590,8 @@ def render_csv(model):
             continue
         seen.add(entry["uuid"])
         row = [entry.get(key) for key, _ in _COLUMNS] + [
-            entry["uuid"], entry.get("last_watched"), entry.get("last_tuned")]
+            entry["uuid"], _iso_utc(entry.get("last_watched")),
+            _iso_utc(entry.get("last_tuned"))]
         writer.writerow([_csv_safe(cell) for cell in row])
     return buffer.getvalue()
 

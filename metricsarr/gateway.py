@@ -72,6 +72,10 @@ class DjangoGateway:
     def channels(self):
         from apps.channels.models import Channel  # Dispatcharr runtime only
 
+        # I3: resolve the GLOBAL default stream profile ONCE per report run
+        # (a single extra read), not per row -- see _default_stream_profile_name.
+        default_profile_name = _default_stream_profile_name()
+
         rows = []
         queryset = (Channel.objects
                     .select_related("channel_group", "stream_profile")
@@ -86,7 +90,7 @@ class DjangoGateway:
                 group=group,
                 auto_created=bool(getattr(channel, "auto_created", False)),
                 created_at=_epoch(getattr(channel, "created_at", None)),
-                proxying=_is_proxying(channel),
+                proxying=_is_proxying(channel, default_profile_name),
             ))
         return rows
 
@@ -100,11 +104,57 @@ def _epoch(value):
         return float(value)
 
 
-def _is_proxying(channel):
+_NON_PROXYING_NAMES = ("redirect", "proxy off", "direct")
+
+
+def _default_stream_profile_name():
+    """Resolve Dispatcharr's GLOBAL default stream profile's name ONCE per
+    report run (I3). 1438 of 1440 channels on the real box carry
+    stream_profile=NULL, and Dispatcharr resolves that NULL to the global
+    default AT PLAY TIME (core.models.CoreSettings.get_default_stream_profile_id(),
+    backed by stream_settings.default_stream_profile) -- NOT to an
+    unconditional "always proxying" answer. Hardcoding the old behavior
+    silently breaks the moment an operator points the global default at
+    Redirect: the whole lineup stops writing live:channel:* keys, but every
+    NULL-profile channel would still read as proxying, so `unobservable`
+    stays 0 and the ">90% unobservable" gate can never fire.
+
+    Read-only; function-local import (Django is not ready at module import
+    time). Fails SAFE (returns None) on any error -- a resolution failure
+    must never manufacture a specific-but-wrong verdict; the caller
+    (_is_proxying) treats None as "assume proxying", the old behavior.
+    """
+    try:
+        from core.models import CoreSettings  # Dispatcharr runtime only
+
+        profile_id = CoreSettings.get_default_stream_profile_id()
+        if not profile_id:
+            return None
+        from apps.channels.models import StreamProfile  # Dispatcharr runtime only
+
+        profile = StreamProfile.objects.only("name").get(id=profile_id)
+        return (getattr(profile, "name", "") or "").strip().lower()
+    except Exception:
+        return None
+
+
+def _is_proxying(channel, default_profile_name=None):
     """A non-proxying (Redirect) profile never writes live:channel:* keys, so the
-    channel is invisible to the collector. Default profile (None) proxies."""
+    channel is invisible to the collector.
+
+    `default_profile_name` (I3) is the resolved GLOBAL default stream
+    profile's lowercased name, or None if that resolution itself failed. A
+    NULL `channel.stream_profile` is NOT an unconditional "always proxying"
+    answer -- Dispatcharr resolves NULL to this global default at play time,
+    so a NULL-profile channel must inherit the SAME verdict as that default,
+    not a hardcoded True. If the default could not be resolved at all
+    (default_profile_name is None), fail SAFE and assume proxying -- the old
+    behavior -- rather than guess.
+    """
     profile = getattr(channel, "stream_profile", None)
     if profile is None:
-        return True
+        if default_profile_name is None:
+            return True
+        return default_profile_name not in _NON_PROXYING_NAMES
     name = (getattr(profile, "name", "") or "").strip().lower()
-    return name not in ("redirect", "proxy off", "direct")
+    return name not in _NON_PROXYING_NAMES

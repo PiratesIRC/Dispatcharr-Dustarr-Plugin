@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock
+
 import pytest
 from conftest import load_plugin
 
@@ -84,3 +86,120 @@ def test_default_group_exclusion_matches_real_case(gw):
     end-to-end, proving the normalization is consistent."""
     ex = gw.parse_exclusions({})
     assert gw.classify(row(gw, group="US: PPV"), ex, 2000.0) == "excluded:group"
+
+
+# -- I3: _is_proxying must resolve the GLOBAL default stream profile, not
+# hardcode NULL -> True. 1438 of 1440 real channels carry stream_profile=NULL,
+# and Dispatcharr resolves that NULL to the global default AT PLAY TIME -- not
+# to an unconditional "always proxying" answer.
+
+def test_is_proxying_none_profile_inherits_a_proxying_default(gw):
+    channel = type("C", (), {"stream_profile": None})()
+    assert gw._is_proxying(channel, default_profile_name="hls proxy") is True
+
+
+def test_is_proxying_none_profile_inherits_a_redirect_default(gw):
+    """If the operator ever points the global default at Redirect, every NULL
+    channel must become unobservable -- not silently keep reading as proxying."""
+    channel = type("C", (), {"stream_profile": None})()
+    assert gw._is_proxying(channel, default_profile_name="redirect") is False
+
+
+def test_is_proxying_none_profile_fails_safe_when_default_is_unresolved(gw):
+    """A lookup failure (default_profile_name=None) must never manufacture a
+    false "not proxying" verdict -- fail SAFE, same as the old behavior."""
+    channel = type("C", (), {"stream_profile": None})()
+    assert gw._is_proxying(channel, default_profile_name=None) is True
+
+
+def test_is_proxying_explicit_profile_ignores_the_resolved_default(gw):
+    profile = type("P", (), {"name": "Redirect"})()
+    channel = type("C", (), {"stream_profile": profile})()
+    assert gw._is_proxying(channel, default_profile_name="hls proxy") is False
+
+
+def test_default_stream_profile_name_resolves_and_lowercases(gw, monkeypatch):
+    import sys
+
+    core_models = sys.modules["core.models"]
+    apps_models = sys.modules["apps.channels.models"]
+    fake_profile = MagicMock()
+    fake_profile.name = "Redirect"
+    fake_queryset = MagicMock()
+    fake_queryset.get.return_value = fake_profile
+    monkeypatch.setattr(core_models.CoreSettings, "get_default_stream_profile_id",
+                        MagicMock(return_value=4))
+    monkeypatch.setattr(apps_models.StreamProfile, "objects",
+                        MagicMock(only=MagicMock(return_value=fake_queryset)))
+    assert gw._default_stream_profile_name() == "redirect"
+
+
+def test_default_stream_profile_name_fails_safe_to_none_on_error(gw, monkeypatch):
+    import sys
+
+    core_models = sys.modules["core.models"]
+    monkeypatch.setattr(core_models.CoreSettings, "get_default_stream_profile_id",
+                        MagicMock(side_effect=RuntimeError("boom")))
+    assert gw._default_stream_profile_name() is None
+
+
+def test_default_stream_profile_name_returns_none_when_no_default_is_configured(gw,
+                                                                                monkeypatch):
+    import sys
+
+    core_models = sys.modules["core.models"]
+    monkeypatch.setattr(core_models.CoreSettings, "get_default_stream_profile_id",
+                        MagicMock(return_value=None))
+    assert gw._default_stream_profile_name() is None
+
+
+def test_channels_resolves_default_profile_once_and_applies_to_null_profile_rows(
+        gw, monkeypatch):
+    """The default must be resolved ONCE per report run (a single CoreSettings
+    read), not once per channel row, and a NULL-profile channel must inherit
+    that resolved verdict -- proven here with a default that resolves to
+    Redirect, which must turn a NULL-profile channel unobservable."""
+    import sys
+
+    apps_models = sys.modules["apps.channels.models"]
+
+    class FakeGroup:
+        name = "US: News"
+
+    class FakeChannel:
+        def __init__(self, cid, profile):
+            self.id = cid
+            self.uuid = f"u{cid}"
+            self.name = f"CH{cid}"
+            self.channel_group = FakeGroup()
+            self.stream_profile = profile
+            self.auto_created = False
+            self.created_at = None
+
+    redirect_profile = type("P", (), {"name": "Redirect"})()
+    rows_in = [FakeChannel(1, None), FakeChannel(2, redirect_profile)]
+
+    class FakeQuerySet:
+        def select_related(self, *a, **k):
+            return self
+
+        def only(self, *a, **k):
+            return self
+
+        def iterator(self, chunk_size=500):
+            return iter(rows_in)
+
+    monkeypatch.setattr(apps_models.Channel, "objects", FakeQuerySet())
+
+    calls = []
+
+    def fake_default():
+        calls.append(1)
+        return "redirect"
+
+    monkeypatch.setattr(gw, "_default_stream_profile_name", fake_default)
+
+    result = gw.DjangoGateway().channels()
+    assert len(calls) == 1                        # resolved ONCE per report run
+    assert result[0].proxying is False            # NULL profile inherits Redirect
+    assert result[1].proxying is False            # explicit Redirect profile

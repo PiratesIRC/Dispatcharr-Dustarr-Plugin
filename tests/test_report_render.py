@@ -1,5 +1,6 @@
 import csv
 import io
+import time
 
 import pytest
 from conftest import load_plugin
@@ -154,6 +155,84 @@ def test_write_report_keeps_a_dated_archive(rp, gw, tmp_path):
     report_dir = tmp_path / "logos"
     rp.write_report(model(rp, gw), str(report_dir), str(tmp_path / "config"), NOW)
     assert list(report_dir.glob("report-*.html"))
+
+
+# -- I4: report_base_url turns the bare report path into a real link ---------
+
+def test_full_report_url_falls_back_to_the_bare_path_when_base_is_empty(rp):
+    assert rp.full_report_url("", rp.REPORT_URL_PATH) == rp.REPORT_URL_PATH
+    assert rp.full_report_url(None, rp.REPORT_URL_PATH) == rp.REPORT_URL_PATH
+    assert rp.full_report_url("   ", rp.REPORT_URL_PATH) == rp.REPORT_URL_PATH
+
+
+def test_full_report_url_joins_base_and_path(rp):
+    assert (rp.full_report_url("http://192.168.1.53:9191", rp.REPORT_URL_PATH)
+            == "http://192.168.1.53:9191" + rp.REPORT_URL_PATH)
+
+
+def test_full_report_url_strips_a_trailing_slash_on_base(rp):
+    assert (rp.full_report_url("http://host:9191/", rp.REPORT_URL_PATH)
+            == "http://host:9191" + rp.REPORT_URL_PATH)
+
+
+# -- M1: last-watched is the highest-value signal in the dataset -------------
+
+def test_html_includes_a_last_watched_column(rp, gw):
+    rows = [gw.ChannelRow(id=1, uuid="u1", name="CH1", group="US: Movies",
+                          auto_created=False, created_at=NOW - 90 * 86400,
+                          proxying=True)]
+    channels = {"u1": {"watch_count": 3, "watch_seconds": 7200.0, "tune_count": 3,
+                       "last_watched": NOW - 3600, "last_tuned": NOW - 3600,
+                       "first_seen": NOW - 80 * 86400}}
+    usage = {"channels": channels,
+             "meta": {"stats_since": NOW - 40 * 86400, "coverage": {}}}
+    html = rp.render_html(rp.build_model(rows, usage, SETTINGS, NOW))
+    assert "Last watched" in html
+    assert rp._fmt_local(NOW - 3600) in html
+
+
+def test_csv_last_watched_and_last_tuned_are_iso8601_not_raw_epoch(rp, gw):
+    """An Excel/LibreOffice user must see a real date, not `1752...`."""
+    rows = [gw.ChannelRow(id=1, uuid="u1", name="CH1", group="US: Movies",
+                          auto_created=False, created_at=NOW - 90 * 86400,
+                          proxying=True)]
+    channels = {"u1": {"watch_count": 3, "watch_seconds": 7200.0, "tune_count": 3,
+                       "last_watched": NOW - 3600, "last_tuned": NOW - 1800,
+                       "first_seen": NOW - 80 * 86400}}
+    usage = {"channels": channels,
+             "meta": {"stats_since": NOW - 40 * 86400, "coverage": {}}}
+    built = rp.build_model(rows, usage, SETTINGS, NOW)
+    text = rp.render_csv(built)
+    row = next(csv.DictReader(io.StringIO(text)))
+    assert row["last_watched"] == time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                                time.gmtime(NOW - 3600))
+    assert row["last_tuned"] == time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                              time.gmtime(NOW - 1800))
+    assert "." not in row["last_watched"]     # not a raw float
+
+
+def test_csv_blank_last_watched_stays_blank_not_a_bogus_epoch_date(rp, gw):
+    text = rp.render_csv(model(rp, gw, n=3, watched=0))
+    row = next(csv.DictReader(io.StringIO(text)))
+    assert row["last_watched"] == ""
+
+
+# -- M4: "Least used" silently rendering "None." is baffling, not correct ----
+
+def test_least_used_notes_that_all_watched_channels_are_listed_above(rp, gw):
+    html = rp.render_html(model(rp, gw, n=5, watched=2))   # top_n=5 >= watched=2
+    least_at = html.index("Least used")
+    most_at = html.index("Most used")
+    section = html[least_at:most_at]
+    assert "all watched channels are listed above" in section.lower()
+
+
+def test_least_used_has_no_note_when_it_actually_has_entries(rp, gw):
+    html = rp.render_html(model(rp, gw, n=20, watched=20))  # top_n=5 << watched=20
+    least_at = html.index("Least used")
+    most_at = html.index("Most used")
+    section = html[least_at:most_at]
+    assert "all watched channels are listed above" not in section.lower()
 
 
 # -- FIX 1: CSV formula injection (CWE-1236) --------------------------------

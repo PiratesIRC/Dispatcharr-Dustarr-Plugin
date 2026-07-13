@@ -2,6 +2,7 @@ import logging
 import sys
 import threading
 import time
+import traceback
 
 import pytest
 from conftest import load_plugin
@@ -14,11 +15,16 @@ def plugin():
     return load_plugin()
 
 
-def _make_thread(plugin, version=None, alive_for=30.0):
+def _make_thread(plugin, version=None, fingerprint=None, alive_for=30.0):
     """A lightweight stand-in for a collector thread: the right name/version/
-    stop-event shape that ensure_collector's bookkeeping inspects, without any
-    of the real Redis-polling work. Caller must set() the stop event and
-    join() when done (tests do this in a `finally`)."""
+    fingerprint/stop-event shape that ensure_collector's bookkeeping inspects,
+    without any of the real Redis-polling work. Caller must set() the stop
+    event and join() when done (tests do this in a `finally`).
+
+    `fingerprint` defaults to the fingerprint of the DEFAULT settings ({}) --
+    i.e. "this stand-in thread was spawned with today's current settings" --
+    matching the common case where a test's `ensure_collector({})` call
+    should be treated as a no-op repeat, not a settings change (I1)."""
     stop_event = threading.Event()
 
     def loop():
@@ -26,6 +32,9 @@ def _make_thread(plugin, version=None, alive_for=30.0):
 
     thread = threading.Thread(target=loop, name=plugin.THREAD_NAME, daemon=True)
     thread.metricsarr_version = version or plugin.PLUGIN_VERSION
+    thread.metricsarr_fingerprint = (
+        fingerprint if fingerprint is not None
+        else plugin._thresholds_fingerprint(plugin.coerce_settings({})))
     thread.metricsarr_stop = stop_event
     thread.start()
     return thread
@@ -211,7 +220,14 @@ def test_build_report_task_logs_redacted_and_reraises_so_celery_can_retry(
     value, whatever its contents), so a failed scheduled report could never
     be retried. The fix logs the redacted error and RE-RAISES it -- Celery
     sees a real failure -- while still never leaking credentials into the
-    log or the exception text."""
+    log or the exception text.
+
+    I6: `str(exc_info.value)` alone gives FALSE ASSURANCE -- it only ever
+    saw the message. `raise RuntimeError(redacted) from exc` sets
+    __cause__ to the ORIGINAL exception, so Celery's stored/logged
+    traceback renders the credential-bearing original verbatim even though
+    the message string is clean. Assert over the FULL formatted traceback,
+    the thing Celery actually stores/logs."""
     def boom():
         raise RuntimeError("http://host/live/topsecretuser/topsecretpass/x")
 
@@ -221,6 +237,9 @@ def test_build_report_task_logs_redacted_and_reraises_so_celery_can_retry(
             plugin.build_report_task()
     assert "topsecretpass" not in caplog.text
     assert "topsecretpass" not in str(exc_info.value)
+    full_traceback = "".join(traceback.format_exception(exc_info.value))
+    assert "topsecretpass" not in full_traceback
+    assert exc_info.value.__cause__ is None
 
 
 # ---- C2: Plugin.stop() ------------------------------------------------------
@@ -260,6 +279,128 @@ def test_stop_never_raises_even_if_scheduling_cleanup_fails(plugin, monkeypatch)
 
     monkeypatch.setattr(core_sched, "delete_periodic_task", boom)
     plugin.Plugin().stop()               # must not raise
+
+
+# ---- C1: the collector must actually START -- nothing else ever calls run() -
+
+def test_plugin_init_spawns_the_collector_under_the_uwsgi_gate(plugin, monkeypatch):
+    """C1: Plugin.run() is the ONLY thing that called ensure_collector() --
+    but nothing calls run() until an action or settings-save fires, which
+    Dispatcharr's settings-save flow never does. A user who installs,
+    configures, and walks away collects NOTHING, forever. The platform hook
+    is Plugin.__init__ (apps/plugins/apps.py's ready() calls
+    discover_plugins() in every uWSGI worker, loader.py instantiates
+    plugin_cls()) -- so __init__ must call ensure_collector() itself."""
+    monkeypatch.setattr(plugin, "_is_uwsgi_worker", lambda: True)
+    spawned = []
+
+    def fake_spawn(settings):
+        thread = _make_thread(plugin)
+        spawned.append(thread)
+        return thread
+
+    monkeypatch.setattr(plugin, "_spawn_collector", fake_spawn)
+    try:
+        plugin.Plugin()
+        assert len(spawned) == 1
+    finally:
+        for thread in spawned:
+            thread.metricsarr_stop.set()
+            thread.join(timeout=2)
+
+
+def test_plugin_init_does_not_spawn_the_collector_outside_uwsgi(plugin, monkeypatch):
+    """The Celery/manage.py-shell/test process must never spawn a collector
+    thread of its own -- only an actual uWSGI worker."""
+    monkeypatch.setattr(plugin, "_is_uwsgi_worker", lambda: False)
+    spawned = []
+    monkeypatch.setattr(plugin, "_spawn_collector",
+                        lambda settings: spawned.append(1))
+    plugin.Plugin()
+    assert spawned == []
+
+
+def test_plugin_init_never_raises_even_if_ensure_collector_blows_up(plugin,
+                                                                     monkeypatch):
+    def boom(settings=None):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(plugin, "ensure_collector", boom)
+    plugin.Plugin()          # must not raise
+
+
+# ---- I1: a running collector must pick up a settings change ----------------
+
+def test_ensure_collector_respawns_on_a_settings_change_even_at_the_same_version(
+        plugin, monkeypatch):
+    """I1: thresholds are frozen into the collector loop's closure at spawn
+    time. A live thread on the CURRENT version but STALE settings (e.g. the
+    user lowered poll_interval_s) must be superseded exactly like a version
+    bump -- otherwise the collector keeps polling at the OLD cadence forever
+    while gates.coverage_fraction computes `needed` from the NEW configured
+    interval, permanently zeroing coverage and poisoning every future report
+    with a false "the collector was blind" banner."""
+    monkeypatch.setattr(plugin, "_is_uwsgi_worker", lambda: True)
+    old = _make_thread(plugin)                 # fingerprint of default settings {}
+    spawned = []
+
+    def fake_spawn(settings):
+        thread = _make_thread(plugin)
+        spawned.append(thread)
+        return thread
+
+    monkeypatch.setattr(plugin, "_spawn_collector", fake_spawn)
+    try:
+        plugin.ensure_collector({"poll_interval_s": 5})
+        assert old.metricsarr_stop.is_set()
+        assert len(spawned) == 1
+    finally:
+        old.metricsarr_stop.set()
+        old.join(timeout=2)
+        for thread in spawned:
+            thread.metricsarr_stop.set()
+            thread.join(timeout=2)
+
+
+def test_ensure_collector_does_not_respawn_when_settings_are_unchanged(plugin,
+                                                                       monkeypatch):
+    monkeypatch.setattr(plugin, "_is_uwsgi_worker", lambda: True)
+    old = _make_thread(plugin)
+    spawned = []
+    monkeypatch.setattr(plugin, "_spawn_collector",
+                        lambda settings: spawned.append(1))
+    try:
+        plugin.ensure_collector({})
+        assert not old.metricsarr_stop.is_set()
+        assert spawned == []
+    finally:
+        old.metricsarr_stop.set()
+        old.join(timeout=2)
+
+
+def test_ensure_collector_settings_change_respawn_shares_the_crash_loop_budget(
+        plugin, monkeypatch):
+    """A settings-change respawn is a supersession just like a version bump,
+    so it must consume the SAME crash-loop budget (_restart_times) -- a burst
+    of rapid settings edits must not bypass the thrash guard a burst of
+    version bumps would hit."""
+    monkeypatch.setattr(plugin, "_is_uwsgi_worker", lambda: True)
+    old = _make_thread(plugin)
+    monkeypatch.setattr(plugin, "_spawn_collector",
+                        lambda settings: spawned.append(1))
+    spawned = []
+    now = time.time()
+    monkeypatch.setattr(plugin, "_restart_times", [now] * plugin.RESTART_BOUND)
+    try:
+        plugin.ensure_collector({"poll_interval_s": 5})
+        # crash-loop bound already saturated -- refuse the respawn, keep the
+        # incumbent alive, exactly as it would for a version-bump respawn.
+        assert spawned == []
+        assert not old.metricsarr_stop.is_set()
+        assert old.is_alive()
+    finally:
+        old.metricsarr_stop.set()
+        old.join(timeout=2)
 
 
 # ---- I1: ensure_collector's riskiest branches -------------------------------
@@ -497,3 +638,121 @@ def test_coerce_settings_falls_back_to_default_on_positive_infinity(plugin):
 def test_coerce_settings_falls_back_to_default_on_negative_infinity(plugin):
     out = plugin.coerce_settings({"poll_interval_s": float("-inf")})
     assert out["poll_interval_s"] == 15
+
+
+# ---- I4 (this fix wave): report_base_url turns the webhook link real -------
+#
+# Not to be confused with the "I4" label above (select-value validation) --
+# that was a prior fix wave's finding, kept for its own history.
+
+def test_report_base_url_field_exists_and_defaults_to_empty(plugin):
+    field = next(f for f in plugin.FIELDS if f["id"] == "report_base_url")
+    assert field["default"] == ""
+    assert field["type"] == "string"
+
+
+def _fake_gateway_with_no_channels():
+    class FakeGateway:
+        def now(self):
+            return NOW
+
+        def channels(self):
+            return []
+
+    return FakeGateway()
+
+
+def test_build_report_message_uses_the_bare_path_when_base_url_is_unset(
+        plugin, tmp_path, monkeypatch):
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(plugin, "REPORT_DIR", str(tmp_path / "logos"))
+    monkeypatch.setattr(plugin, "CSV_DIR", str(tmp_path / "config"))
+    monkeypatch.setattr(plugin, "_gateway", _fake_gateway_with_no_channels)
+
+    result = plugin.Plugin().run("build_report", {}, {"settings": {}})
+    assert result["message"].endswith("Report: " + plugin.reports.REPORT_URL_PATH)
+
+
+def test_build_report_message_uses_the_full_url_when_base_is_set(plugin, tmp_path,
+                                                                  monkeypatch):
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(plugin, "REPORT_DIR", str(tmp_path / "logos"))
+    monkeypatch.setattr(plugin, "CSV_DIR", str(tmp_path / "config"))
+    monkeypatch.setattr(plugin, "_gateway", _fake_gateway_with_no_channels)
+
+    result = plugin.Plugin().run(
+        "build_report", {},
+        {"settings": {"report_base_url": "http://192.168.1.53:9191"}})
+    expected = "http://192.168.1.53:9191" + plugin.reports.REPORT_URL_PATH
+    assert expected in result["message"]
+
+
+def test_send_webhook_now_uses_the_full_report_url_when_base_is_set(plugin, tmp_path,
+                                                                    monkeypatch):
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(plugin, "REPORT_DIR", str(tmp_path / "logos"))
+    monkeypatch.setattr(plugin, "CSV_DIR", str(tmp_path / "config"))
+    monkeypatch.setattr(plugin, "_gateway", _fake_gateway_with_no_channels)
+
+    captured = {}
+
+    def fake_fire(url, summary, fmt, version, **kw):
+        captured["summary"] = summary
+        return {"status": "ok", "message": "sent"}
+
+    monkeypatch.setattr(plugin.webhook, "fire", fake_fire)
+
+    plugin.Plugin().run(
+        "send_webhook_now", {},
+        {"settings": {"webhook_url": "http://discord.example/hook",
+                      "report_base_url": "http://host:9191"}})
+    assert (captured["summary"]["report_url"]
+            == "http://host:9191" + plugin.reports.REPORT_URL_PATH)
+
+
+def test_send_webhook_now_uses_the_bare_path_when_base_url_is_unset(plugin, tmp_path,
+                                                                    monkeypatch):
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(plugin, "REPORT_DIR", str(tmp_path / "logos"))
+    monkeypatch.setattr(plugin, "CSV_DIR", str(tmp_path / "config"))
+    monkeypatch.setattr(plugin, "_gateway", _fake_gateway_with_no_channels)
+
+    captured = {}
+
+    def fake_fire(url, summary, fmt, version, **kw):
+        captured["summary"] = summary
+        return {"status": "ok", "message": "sent"}
+
+    monkeypatch.setattr(plugin.webhook, "fire", fake_fire)
+
+    plugin.Plugin().run("send_webhook_now", {},
+                        {"settings": {"webhook_url": "http://discord.example/hook"}})
+    assert captured["summary"]["report_url"] == plugin.reports.REPORT_URL_PATH
+
+
+# ---- I5: the collector loop has NO observability on an escaping exception --
+
+def test_collector_loop_logs_on_a_persistent_failure(plugin, monkeypatch, caplog):
+    """I5: run_tick's own try/except only sets stats["last_error"] for errors
+    IT catches internally -- an exception escaping run_tick entirely (e.g.
+    Collector construction itself failing because Redis is unreachable) had
+    NO log line, no stats update, nothing. A persistently-broken collector
+    was completely invisible. Force a persistent failure and prove it logs --
+    the only observability this thread has."""
+    def boom(*a, **k):
+        raise RuntimeError("redis unreachable")
+
+    monkeypatch.setattr(plugin.collector_mod, "Collector", boom)
+    monkeypatch.setattr(plugin, "_get_redis", lambda: object())
+
+    thread = None
+    with caplog.at_level(logging.ERROR):
+        thread = plugin._spawn_collector({"poll_interval_s": 5})
+        time.sleep(0.3)
+        thread.metricsarr_stop.set()
+        thread.join(timeout=3)
+
+    assert "collector tick failed" in caplog.text
+
+
+# ---- I7 is covered in tests/test_no_mutations.py, not here ------------------

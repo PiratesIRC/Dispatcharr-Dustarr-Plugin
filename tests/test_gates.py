@@ -17,6 +17,26 @@ def buckets(now, hours, ticks, max_gap=15.0):
     return out
 
 
+# -- M3: gates._bucket_key must not duplicate sessionizer.bucket_key --------
+
+def test_bucket_key_delegates_to_sessionizer_not_a_duplicate(gates):
+    """gates._bucket_key used to duplicate sessionizer.bucket_key byte-for-
+    byte -- a UTC-hour-bucket-FORMAT drift hazard (the two modules would
+    silently disagree on bucket keys if one were ever edited alone). Proven
+    at the SOURCE level (gates.py must contain no `def _bucket_key` of its
+    own -- both load_pure("gates") and the real package-loaded gates.py
+    create independent module objects, so runtime identity can't be checked
+    across them) plus a behavioral cross-check against the real sessionizer
+    implementation."""
+    from conftest import PLUGIN_DIR
+    source = (PLUGIN_DIR / "gates.py").read_text(encoding="utf-8")
+    assert "def _bucket_key" not in source
+
+    sessionizer = load_pure("sessionizer")
+    now = 1_700_000_000.0
+    assert gates._bucket_key(now) == sessionizer.bucket_key(now)
+
+
 def test_full_coverage_reads_one(gates):
     now = 1_700_000_000.0
     cov = buckets(now, 24 * 7, ticks=240)          # 3600/15 = 240 ticks/hour
@@ -98,7 +118,7 @@ def test_healthy_dataset_passes(gates):
     now = 1_700_000_000.0
     usage = usage_with(now, watched_channels=40)
     result = gates.evaluate(usage, rows_total=1440, never_watched=800, now=now,
-                            thresholds=THRESHOLDS)
+                            thresholds=THRESHOLDS, judged_total=1440)
     assert result["ok"] is True
     assert result["alerts"] == []
 
@@ -109,7 +129,7 @@ def test_zero_watches_in_7_days_means_the_sensor_is_blind(gates):
     now = 1_700_000_000.0
     usage = usage_with(now, watched_channels=0)
     result = gates.evaluate(usage, rows_total=1440, never_watched=1440, now=now,
-                            thresholds=THRESHOLDS)
+                            thresholds=THRESHOLDS, judged_total=1440)
     assert result["ok"] is False
     assert any("no qualified watches" in a for a in result["alerts"])
 
@@ -120,7 +140,7 @@ def test_stale_watches_outside_the_7_day_window_still_trip_the_gate(gates):
     for rec in usage["channels"].values():
         rec["last_watched"] = now - 30 * 86400      # all watches are ancient
     result = gates.evaluate(usage, rows_total=1440, never_watched=1430, now=now,
-                            thresholds=THRESHOLDS)
+                            thresholds=THRESHOLDS, judged_total=1440)
     assert result["ok"] is False
 
 
@@ -139,7 +159,7 @@ def test_one_recent_watch_does_not_satisfy_the_blindness_gate(gates):
         rec["last_watched"] = now - 200 * 86400
     chans[39]["last_watched"] = now - 6 * 86400
     result = gates.evaluate(usage, rows_total=1440, never_watched=1400, now=now,
-                            thresholds=THRESHOLDS)
+                            thresholds=THRESHOLDS, judged_total=1440)
     assert result["ok"] is False
     assert any("distinct channels watched in the last 7" in a for a in result["alerts"])
 
@@ -148,7 +168,40 @@ def test_never_watched_ceiling_trips(gates):
     now = 1_700_000_000.0
     usage = usage_with(now, watched_channels=40)
     result = gates.evaluate(usage, rows_total=1000, never_watched=900, now=now,
-                            thresholds=THRESHOLDS)     # 90% > 60% ceiling
+                            thresholds=THRESHOLDS, judged_total=1000)  # 90% > 60% ceiling
+    assert result["ok"] is False
+    assert any("never-watched fraction" in a for a in result["alerts"])
+
+
+# -- I2: the ceiling must be rebased on the JUDGED population, not rows_total --
+#
+# On the real box, 1010 of 1440 channels are excluded by policy (auto-created,
+# group, name regex) -- only 430 are ever JUDGED (never/too_new/tuned_only/
+# watched). Denominating the fraction on rows_total gives never_watched a hard
+# ceiling of 430/1440 = 0.299, so a 0.60 ceiling could NEVER fire under any
+# failure. Rebasing on the judged population instead gives 365/430 = 85%
+# never-watched in a perfectly HEALTHY household -- so the ceiling must also
+# rise (new default 0.98) to only catch the actual mass-casualty shape:
+# essentially every judged channel looks dead.
+I2_THRESHOLDS = dict(THRESHOLDS, never_watched_ceiling=0.98)
+
+
+def test_never_watched_ceiling_does_not_fire_on_a_healthy_household_with_mass_exclusions(gates):
+    now = 1_700_000_000.0
+    usage = usage_with(now, watched_channels=65)          # 65 watched of 430 judged
+    result = gates.evaluate(usage, rows_total=1440, never_watched=365, now=now,
+                            thresholds=I2_THRESHOLDS, judged_total=430)
+    assert result["ok"] is True
+    assert not any("never-watched fraction" in a for a in result["alerts"])
+
+
+def test_never_watched_ceiling_fires_on_the_mass_casualty_shape(gates):
+    """Every judged channel looks dead -- the shape this gate exists to catch,
+    even after rebasing raises the healthy baseline to 85%."""
+    now = 1_700_000_000.0
+    usage = usage_with(now, watched_channels=0)
+    result = gates.evaluate(usage, rows_total=1440, never_watched=430, now=now,
+                            thresholds=I2_THRESHOLDS, judged_total=430)
     assert result["ok"] is False
     assert any("never-watched fraction" in a for a in result["alerts"])
 
@@ -157,7 +210,7 @@ def test_too_few_distinct_channels_trips(gates):
     now = 1_700_000_000.0
     usage = usage_with(now, watched_channels=3)        # < 5 distinct
     result = gates.evaluate(usage, rows_total=1440, never_watched=100, now=now,
-                            thresholds=THRESHOLDS)
+                            thresholds=THRESHOLDS, judged_total=1440)
     assert result["ok"] is False
     assert any("ever watched" in a for a in result["alerts"])
 
@@ -166,7 +219,7 @@ def test_young_dataset_trips_the_age_gate(gates):
     now = 1_700_000_000.0
     usage = usage_with(now, watched_channels=40, stats_since=now - 5 * 86400)
     result = gates.evaluate(usage, rows_total=1440, never_watched=200, now=now,
-                            thresholds=THRESHOLDS)
+                            thresholds=THRESHOLDS, judged_total=1440)
     assert result["ok"] is False
     assert any("only 5 days" in a for a in result["alerts"])
 
@@ -176,7 +229,7 @@ def test_low_coverage_trips(gates):
     usage = usage_with(now, watched_channels=40,
                        coverage=buckets(now, 10, ticks=240))   # sparse
     result = gates.evaluate(usage, rows_total=1440, never_watched=200, now=now,
-                            thresholds=THRESHOLDS)
+                            thresholds=THRESHOLDS, judged_total=1440)
     assert result["ok"] is False
     assert any("is below" in a for a in result["alerts"])
 
@@ -184,7 +237,7 @@ def test_low_coverage_trips(gates):
 def test_empty_usage_never_reads_as_nobody_watched(gates):
     now = 1_700_000_000.0
     result = gates.evaluate({}, rows_total=1440, never_watched=1440, now=now,
-                            thresholds=THRESHOLDS)
+                            thresholds=THRESHOLDS, judged_total=1440)
     assert result["ok"] is False
 
 
@@ -195,7 +248,7 @@ def test_zero_rows_total_trips_the_ceiling_gate(gates):
     now = 1_700_000_000.0
     usage = usage_with(now, watched_channels=40)
     result = gates.evaluate(usage, rows_total=0, never_watched=0, now=now,
-                            thresholds=THRESHOLDS)
+                            thresholds=THRESHOLDS, judged_total=0)
     assert result["ok"] is False
     assert any("rows_total is 0" in a for a in result["alerts"])
 

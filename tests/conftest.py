@@ -25,7 +25,7 @@ def _install_runtime_stubs():
     apps_channels.__path__ = []
     models = types.ModuleType("apps.channels.models")
     for name in ("Channel", "ChannelGroup", "ChannelProfile",
-                 "ChannelProfileMembership"):
+                 "ChannelProfileMembership", "StreamProfile"):
         setattr(models, name, MagicMock(name=name))
     django = types.ModuleType("django")
     django_db = types.ModuleType("django.db")
@@ -37,11 +37,17 @@ def _install_runtime_stubs():
     core_sched = types.ModuleType("core.scheduling")
     core_sched.create_or_update_periodic_task = MagicMock(name="create_task")
     core_sched.delete_periodic_task = MagicMock(name="delete_task")
+    # I3: gateway._default_stream_profile_name() resolves the global default
+    # stream profile via core.models.CoreSettings -- stubbed here so the
+    # function-local import inside gateway.py resolves in tests.
+    core_models = types.ModuleType("core.models")
+    core_models.CoreSettings = MagicMock(name="CoreSettings")
     sys.modules.update({
         "apps": apps, "apps.channels": apps_channels,
         "apps.channels.models": models,
         "django": django, "django.db": django_db,
         "core": core, "core.utils": core_utils, "core.scheduling": core_sched,
+        "core.models": core_models,
     })
 
     # celery is imported at MODULE scope in plugin.py (the C1 fix -- the

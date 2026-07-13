@@ -2,6 +2,78 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Critical: the collector never started.** Nothing but `Plugin.run()` ever
+  called `ensure_collector()`, and Dispatcharr's settings-save flow never
+  calls `run()` — a user who installed, configured, and walked away collected
+  nothing, forever. `Plugin.__init__` now calls `ensure_collector()` itself
+  (matching the platform hook: `apps/plugins/apps.py`'s `ready()` instantiates
+  the plugin class in every uWSGI worker), gated the same way as before by a
+  cheap procfs check so it's a no-op everywhere except a live uWSGI worker,
+  and stays I/O-free beyond spawning the daemon thread — no settings are read
+  in the constructor itself.
+- A running collector now picks up a changed setting instead of polling
+  forever at a stale cadence. Thread supersession is keyed on
+  `(version, thresholds fingerprint)` instead of version alone, so e.g.
+  lowering the poll interval respawns the collector immediately rather than
+  silently poisoning `coverage_fraction` into 0.0 forever. Shares the
+  existing crash-loop budget with version-bump supersession.
+- The never-watched alarm ceiling is now denominated on the *judged*
+  population (never-watched + too-new + tuned-but-never-qualified + watched)
+  instead of the full channel count, and its default was raised from 0.60 to
+  0.98. Denominating on the full lineup gave the fraction a hard ceiling far
+  below any sane threshold on a real box (most channels are excluded by
+  policy), so the gate could never fire under any failure; rebasing on the
+  judged population alone would make a perfectly healthy household (which can
+  show 80–90% never-watched among the channels it was ever asked to judge)
+  trip a 0.60 ceiling permanently, hence the higher default.
+- The default stream profile is now resolved once per report run and used as
+  the fallback for a `NULL` `stream_profile` (99.9% of a real lineup), instead
+  of unconditionally treating `NULL` as "always proxying". Dispatcharr itself
+  resolves `NULL` to the global default at play time, so if that default is
+  ever pointed at a non-proxying profile, the affected channels are now
+  correctly reported as unobservable instead of silently misreported as
+  proxying.
+- The webhook/toast "link to the full report" is now a real clickable URL
+  when the new `report_base_url` setting is configured — previously it was
+  always a bare path, which Discord renders as inert text.
+- The collector's tick loop now logs (rate-limited) when an exception escapes
+  `run_tick` entirely. Previously such a failure was completely invisible: no
+  log line, no `stats["last_error"]`, no usage.json update.
+- Re-raising a redacted error from the scheduled report task now uses
+  `raise ... from None` instead of `from exc`. `from exc` left the *original*,
+  credential-bearing exception reachable as `__cause__`, so Celery's
+  stored/logged traceback rendered it verbatim even though the redacted
+  message string was clean; `from None` suppresses both explicit (`__cause__`)
+  and implicit (`__context__`) chaining.
+- The structural read-only guard (`tests/test_no_mutations.py`) now also
+  catches a Django ORM write bound via `with ... as`, the walrus operator,
+  an annotated assignment, or tuple/list-unpack assignment — not just plain
+  assignment and `for` loops — and its raw-SQL detector no longer keys on the
+  literal variable name `cursor` (a rename such as
+  `with connection.cursor() as cur:`, the Django-docs idiom, used to slide
+  straight past it). Re-verified zero false positives on every legitimate
+  pattern already shipped in this codebase.
+
+### Improved
+
+- The HTML report now shows a "Last watched" column (channel and group
+  tables) — arguably the single highest-value signal for deciding what to
+  turn off — and the CSV export now formats `last_watched`/`last_tuned` as
+  ISO 8601 instead of a raw epoch float.
+- The "Least used" section now explains itself with a one-line note when it's
+  empty because every watched channel already fit inside "Most used", instead
+  of silently rendering "None."
+- `gates.py`'s coverage-mechanism docstring corrected (it previously
+  described a mechanism that doesn't exist) and `gates._bucket_key` /
+  `reports.EMPTY` now delegate to `sessionizer.bucket_key` /
+  `sessionizer._blank_record` instead of duplicating their shape.
+- README: documented that a queryset arriving as a function parameter is a
+  genuine (not evasive) blind spot of the read-only guard, and that the first
+  ~30 days of reports carrying the "not trustworthy" banner, and ~70% of a
+  default lineup being excluded from judgment, are both by design.
+
 ### Added
 
 - Initial Phase 1 release: read-only channel usage metrics for Dispatcharr.

@@ -9,10 +9,18 @@ collector produces. Every naive gate passes and the plugin concludes the househo
 watches nothing. Spec S8.
 
 coverage_fraction measures sampling DENSITY, never DATA VALIDITY. It is computed
-from sessionizer._mark_coverage(now), which is called unconditionally at the top
-of every tick, BEFORE any channel scan. So after a Redis flush, a keyspace change,
-or a silently-wedged collector, the tick loop keeps running, gaps stay ~15s, and
-coverage reads 1.0 FOREVER -- coverage is structurally incapable of detecting a
+from sessionizer._mark_coverage(now), which is actually the first line of
+sessionizer.observe() -- and run_tick only reaches observe() AFTER a successful
+_sample() (collector.py's Redis SCAN + pipelined SCARD). So a Redis SCAN error
+DOES depress coverage (correctly, fail-closed): run_tick's `except` around
+_sample() returns before observe() ever runs, so that tick marks no bucket at
+all. What coverage_fraction cannot see is a collector that keeps SAMPLING
+successfully while the SAMPLE ITSELF is meaningless -- e.g. a Dispatcharr
+upgrade that reshapes the Redis keyspace so the SCAN pattern silently matches
+nothing, or matches keys whose client counts no longer mean what they used to.
+In that shape the tick loop keeps running, _sample() keeps "succeeding" (it
+just returns an empty or wrong `present` dict), gaps stay ~15s, and coverage
+reads 1.0 FOREVER -- coverage is structurally incapable of detecting a
 blind-but-ticking collector. The watch-plausibility gates below (recent-distinct-
 channel count, above all) are the ONLY defense against that failure mode, which is
 exactly why they matter as much as density does. The residual blind window after a
@@ -41,6 +49,19 @@ RECENT_WATCH_WINDOW_S old passes, an unobservable fraction exactly
 MAX_UNOBSERVABLE_FRACTION passes. This is coherent (the gate is "fail past the
 line"), just worth knowing when reading a borderline alert.
 
+The never-watched ceiling (I2) is denominated on the JUDGED population
+(never_watched + too_new + tuned_never_qualified + watched), passed in
+explicitly as `judged_total` -- NOT on `rows_total`, the full ORM channel
+count. A real lineup routinely excludes most of its rows by policy (auto-
+created slots, whole groups, a name regex) -- e.g. 1010 of 1440 channels on a
+real box -- so `never_watched / rows_total` has a hard ceiling far below any
+sane threshold and could never fire under any failure. Rebasing on the
+judged population instead means a perfectly healthy household can show 80-90%
+never-watched among the channels it was ever asked to judge, so the default
+ceiling is deliberately high (0.98): it exists to catch the mass-casualty
+shape -- essentially EVERY judged channel looking dead -- not to flag a
+normal lineup with a large disused tail.
+
 A sustained throttle is also a legitimate way to trip these gates, not just a
 sensor going blind: doubling the poll interval to 120s against a 15s-configured
 expectation yields ~30 ticks/hour where ~216 are needed (0.9 * 3600/15), so
@@ -55,16 +76,39 @@ means report only, never act.
 """
 from __future__ import annotations
 
-import time
+
+def _load_sibling(name):
+    """Load a sibling stdlib-only module by FILE PATH (mirrors what
+    tests/conftest.py already does for standalone module loading), so this
+    works whether gates.py is imported as part of the plugin package OR
+    loaded standalone (as the test suite's load_pure() does, with no parent
+    package for a relative import to resolve against). Used once, below, to
+    delegate to sessionizer.bucket_key instead of duplicating it (M3)."""
+    import importlib.util
+    import pathlib
+
+    spec = importlib.util.spec_from_file_location(
+        f"_metricsarr_gates_sibling_{name}",
+        pathlib.Path(__file__).resolve().parent / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+try:
+    from . import sessionizer as _sessionizer
+except ImportError:                     # standalone (non-package) import path
+    _sessionizer = _load_sibling("sessionizer")
 
 MIN_COVERAGE = 0.90
 RECENT_WATCH_WINDOW_S = 7 * 86400
 MIN_DISTINCT_CHANNELS = 5
 MAX_UNOBSERVABLE_FRACTION = 0.90
 
-
-def _bucket_key(ts):
-    return time.strftime("%Y-%m-%dT%H", time.gmtime(ts))
+# M3: NOT a hand-duplicate of sessionizer.bucket_key -- delegates to the same
+# implementation so the two modules can never silently disagree on the UTC
+# hour-bucket format.
+_bucket_key = _sessionizer.bucket_key
 
 
 def coverage_fraction(coverage, now, window_days, poll_interval_s,
@@ -97,8 +141,17 @@ def coverage_fraction(coverage, now, window_days, poll_interval_s,
     return covered / float(total_hours)
 
 
-def evaluate(usage, rows_total, never_watched, now, thresholds):
-    """Decide whether the dataset may be believed. ok=False => report only."""
+def evaluate(usage, rows_total, never_watched, now, thresholds, judged_total):
+    """Decide whether the dataset may be believed. ok=False => report only.
+
+    `judged_total` (I2) is the JUDGED population -- never_watched + too_new +
+    tuned_never_qualified + watched -- the denominator for the never-watched
+    ceiling. It is REQUIRED, not defaulted: `rows_total` includes every
+    excluded/unobservable channel too, and denominating on it makes the
+    ceiling structurally unreachable on a real lineup (see the module
+    docstring). `reports.build_model` is the sole real caller and always has
+    this count on hand.
+    """
     alerts = []
     usage = usage or {}
     channels = usage.get("channels") or {}
@@ -146,14 +199,20 @@ def evaluate(usage, rows_total, never_watched, now, thresholds):
                       f"days (need {MIN_DISTINCT_CHANNELS}) - the sensor is blind, not "
                       "the household idle")
 
-    ceiling = float(thresholds.get("never_watched_ceiling", 0.60))
+    ceiling = float(thresholds.get("never_watched_ceiling", 0.98))
     if not rows_total:
         alerts.append("rows_total is 0 - the channel lineup is empty")
-    else:
-        fraction = never_watched / float(rows_total)
+    elif judged_total:
+        # I2: denominated on the JUDGED population, not rows_total -- see the
+        # module docstring. judged_total==0 with rows_total>0 means every
+        # channel was excluded/unobservable, which the unobservable-fraction
+        # alert (wired in by reports.build_model) already covers; skip rather
+        # than divide by zero.
+        fraction = never_watched / float(judged_total)
         if fraction > ceiling:
-            alerts.append(f"never-watched fraction {fraction:.0%} exceeds the "
-                          f"{ceiling:.0%} ceiling - this is a bug report, not a policy")
+            alerts.append(f"never-watched fraction {fraction:.0%} of judged "
+                          f"channels exceeds the {ceiling:.0%} ceiling - this "
+                          f"is a bug report, not a policy")
 
     return {"ok": not alerts, "alerts": alerts, "coverage": coverage}
 

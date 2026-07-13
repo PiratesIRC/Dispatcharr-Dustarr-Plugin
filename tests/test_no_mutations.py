@@ -184,38 +184,95 @@ def _is_orm_receiver(base, orm_names=frozenset(), orm_dotted=frozenset()):
     return bool(path and path in orm_dotted)
 
 
-def _collect_orm_aliases(tree):
-    """Assignment-provenance pass (single forward scan, order-sensitive --
-    "for the rest of the module" per the module docstring): any Name or
-    dotted attribute target ever bound from an ORM-proven expression becomes
-    an ORM receiver for every later call site. Closes `qs = Channel.objects
-    ...` then `qs.update()`/`qs.delete()` (including through an aliased
-    import, since the chain still carries `.objects`), `self.queryset = ...`
-    then `self.queryset.update()`, `for channel in queryset.iterator():` then
-    `channel.streams.add(...)` (m2m related-manager writes), and a helper
-    function whose `return` is ORM-shaped, so `f().update()` cannot hide
-    behind an otherwise-unprovable call receiver.
+def _collect_bindings(tree, is_source):
+    """Generic single forward-scan provenance pass (order-sensitive -- "for
+    the rest of the module" per the module docstring): any Name or dotted
+    attribute target ever bound from an expression `is_source` proves true of
+    becomes a receiver for every later call site. Shared by the ORM-alias
+    pass (`is_source=_is_orm_receiver`) and the raw-SQL cursor-alias pass
+    (`is_source=_is_cursor_receiver`, I7) so both get identical coverage of
+    every binding SHAPE, not two hand-maintained copies that could drift.
+
+    Covers (I7 closed every one of these -- a prior revision walked only
+    ast.Assign and ast.For, so all of the rest escaped provenance entirely):
+      * plain/chained assignment (`qs = Channel.objects...`,
+        `self.queryset = ...`), including an ALIASED IMPORT (the chain still
+        carries `.objects`)
+      * tuple/list unpacking, paired POSITIONALLY (`qs, n = Channel.objects
+        .all(), 1` binds `qs` -- pairing element-by-element is required
+        because the RHS as a whole is a Tuple, never itself ORM-shaped)
+      * annotated assignment (`qs: QuerySet = Channel.objects.all()`)
+      * the walrus operator (`if (qs := Channel.objects.all()):`)
+      * `with EXPR as NAME:` (`with connection.cursor() as cur:`,
+        `with Channel.objects.filter(...) as qs:`) -- the Django-docs cursor
+        idiom used a RENAMED variable, which defeated the old guard's literal
+        `"cursor"`-token match entirely
+      * a for-loop target (`for channel in queryset.iterator(): channel
+        .streams.add(...)`, m2m related-manager writes)
+      * a helper function whose `return` is source-shaped, so `f().update()`
+        cannot hide behind an otherwise-unprovable call receiver
     """
-    orm_names, orm_dotted = set(), set()
+    names, dotted = set(), set()
+
+    def bind(target, value):
+        if (isinstance(target, (ast.Tuple, ast.List))
+                and isinstance(value, (ast.Tuple, ast.List))
+                and len(target.elts) == len(value.elts)):
+            for t_el, v_el in zip(target.elts, value.elts, strict=True):
+                bind(t_el, v_el)
+            return
+        if not is_source(value, names, dotted):
+            return
+        if isinstance(target, ast.Name):
+            names.add(target.id)
+        else:
+            path = _dotted(target)
+            if path:
+                dotted.add(path)
+
     for node in ast.walk(tree):
-        if isinstance(node, ast.Assign) and _is_orm_receiver(node.value, orm_names, orm_dotted):
+        if isinstance(node, ast.Assign):
             for target in node.targets:
-                if isinstance(target, ast.Name):
-                    orm_names.add(target.id)
-                else:
-                    path = _dotted(target)
-                    if path:
-                        orm_dotted.add(path)
-        elif isinstance(node, ast.For) and _is_orm_receiver(node.iter, orm_names, orm_dotted):
+                bind(target, node.value)
+        elif (isinstance(node, ast.AnnAssign) and node.value is not None
+              and node.target is not None):
+            bind(node.target, node.value)
+        elif isinstance(node, ast.NamedExpr):                     # walrus
+            if is_source(node.value, names, dotted) and isinstance(node.target, ast.Name):
+                names.add(node.target.id)
+        elif isinstance(node, ast.With):
+            for item in node.items:
+                if item.optional_vars is not None:
+                    bind(item.optional_vars, item.context_expr)
+        elif isinstance(node, ast.For) and is_source(node.iter, names, dotted):
             if isinstance(node.target, ast.Name):
-                orm_names.add(node.target.id)
+                names.add(node.target.id)
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             for sub in ast.walk(node):
                 if isinstance(sub, ast.Return) and sub.value is not None and \
-                        _is_orm_receiver(sub.value, orm_names, orm_dotted):
-                    orm_names.add(node.name)
+                        is_source(sub.value, names, dotted):
+                    names.add(node.name)
                     break
-    return orm_names, orm_dotted
+    return names, dotted
+
+
+def _is_cursor_receiver(base, cursor_names=frozenset(), cursor_dotted=frozenset()):
+    """True if `base` provably resolves to a DB cursor (I7): either the
+    receiver chain's immediate call is `<anything>.cursor(...)` (covers
+    `connection.cursor().execute(...)` chained directly, and `self.conn
+    .cursor()`, regardless of receiver name), or it resolves -- via the
+    cursor-alias provenance pass (_collect_bindings) -- to a Name/dotted path
+    bound from `with X.cursor() as alias:` or `alias = X.cursor()` anywhere
+    in the module. Replaces the old guard, which keyed on the literal token
+    "cursor" and so was defeated by nothing more than a variable rename
+    (`with connection.cursor() as cur:` -- the Django-docs idiom)."""
+    tokens = _receiver_chain_tokens(base)
+    if "cursor" in tokens:
+        return True
+    if cursor_names and any(t in cursor_names for t in tokens):
+        return True
+    path = _dotted(base)
+    return bool(path and cursor_dotted and path in cursor_dotted)
 
 
 def _orm_write_offenders(source, filename="<test>"):
@@ -224,7 +281,8 @@ def _orm_write_offenders(source, filename="<test>"):
     `create_or_update_periodic_task(...)`) are never examined -- only
     attribute calls (`X.method(...)`) are ORM-shaped at all."""
     tree = ast.parse(source, filename=filename)
-    orm_names, orm_dotted = _collect_orm_aliases(tree)
+    orm_names, orm_dotted = _collect_bindings(tree, _is_orm_receiver)
+    cursor_names, cursor_dotted = _collect_bindings(tree, _is_cursor_receiver)
     offenders = []
     for call in _calls(tree):
         func = call.func
@@ -240,7 +298,7 @@ def _orm_write_offenders(source, filename="<test>"):
             if _dotted(func.value) not in SAFE_DELETE_RECEIVERS:
                 offenders.append(f"{filename}:{call.lineno} .{attr}()")
         elif attr == "execute":
-            if any("cursor" in t.lower() for t in _receiver_chain_tokens(func.value)):
+            if _is_cursor_receiver(func.value, cursor_names, cursor_dotted):
                 offenders.append(f"{filename}:{call.lineno} .{attr}() [raw SQL]")
         elif attr in AMBIGUOUS_ORM_METHODS and _is_orm_receiver(func.value, orm_names, orm_dotted):
             offenders.append(f"{filename}:{call.lineno} .{attr}()")
@@ -437,6 +495,32 @@ TRUE_POSITIVE_ORM_WRITES = {
         'f().update(name="x")'),
     "raw_sql_cursor_execute": (
         'cursor.execute("UPDATE channels_channel SET name=%s", [x])'),
+    # I7: renaming the cursor variable used to defeat the guard entirely --
+    # it keyed on the literal token "cursor", so the Django-docs idiom
+    # `with connection.cursor() as cur:` slid straight past it.
+    "raw_sql_cursor_execute_renamed_via_with_as": (
+        'with connection.cursor() as cur:\n'
+        '    cur.execute("UPDATE channels_channel SET name=%s", [x])'),
+    # I7: `with ... as` bindings escaped provenance entirely -- only
+    # ast.Assign and ast.For were walked.
+    "queryset_bound_via_with_as": (
+        'with Channel.objects.filter(a=1) as qs:\n'
+        '    qs.update(n=1)'),
+    # I7: the walrus operator (ast.NamedExpr) was never walked either.
+    "queryset_bound_via_walrus": (
+        'if (qs := Channel.objects.all()):\n'
+        '    qs.update(n=1)'),
+    # I7: an annotated assignment (ast.AnnAssign) was never walked.
+    "queryset_bound_via_annassign": (
+        'qs: object = Channel.objects.all()\n'
+        'qs.update(name="x")'),
+    # I7: tuple-unpack assignment (`qs, n = Channel.objects.all(), 1`) paired
+    # a Tuple target against a Tuple value -- the old single `_is_orm_receiver
+    # (node.value, ...)` check saw only the outer Tuple, which is never
+    # itself ORM-shaped, so provenance was never bound to `qs` at all.
+    "queryset_bound_via_tuple_unpack": (
+        'qs, n = Channel.objects.all(), 1\n'
+        'qs.update(name="x")'),
 }
 
 
@@ -470,6 +554,29 @@ LEGITIMATE_NON_ORM_PATTERNS = {
         'create_or_update_periodic_task("metricsarr_build_report", '
         '"tasks.build_report", cron_expression="0 3 * * *", enabled=True)'),
     "beat_delete": 'delete_periodic_task("metricsarr_build_report")',
+    # I7 re-verification checklist: os.replace/os.makedirs (already covered
+    # for the I/O guard below, re-checked here against the ORM-write guard
+    # too) and webhook.py's urllib POST to the user's OWN endpoint.
+    "os_replace_orm_guard": "os.replace(tmp, path)",
+    "os_makedirs_orm_guard": "os.makedirs(data_dir, exist_ok=True)",
+    "urllib_post_orm_guard": (
+        "urllib.request.urlopen(urllib.request.Request(url, data=payload, "
+        "method='POST'))"),
+    # I7: none of the new with/walrus/AnnAssign/tuple-unpack provenance
+    # shapes may accidentally bind a Redis client, a stdlib context manager,
+    # or an unrelated cursor-shaped name as ORM/cursor provenance.
+    "with_as_open_file_not_orm": (
+        'with open(tmp, "w") as fh:\n'
+        '    fh.write(x)'),
+    "walrus_non_orm_value": (
+        'if (n := len(items)):\n'
+        '    stats.update({"n": n})'),
+    "annassign_non_orm_value": (
+        'count: int = len(items)\n'
+        'stats.update({"count": count})'),
+    "tuple_unpack_non_orm_values": (
+        'a, b = 1, 2\n'
+        'stats.update({"a": a, "b": b})'),
 }
 
 
