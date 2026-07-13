@@ -52,6 +52,31 @@ def test_missing_buckets_reduce_coverage(gates):
     assert frac == pytest.approx(0.5, abs=0.05)
 
 
+def test_density_alone_vetoes_the_hour(gates):
+    """Half the expected ticks, but every gap inside the grace. The density check
+    is the ONLY thing that can catch this -- test_one_tick_per_hour double-signals
+    through max_gap and does not pin it."""
+    now = 1_700_000_000.0
+    cov = buckets(now, 24, ticks=120, max_gap=15.0)   # 120 of 240 expected
+    assert gates.coverage_fraction(cov, now, window_days=1, poll_interval_s=15.0,
+                                   client_gap_grace_s=90.0) == 0.0
+
+
+def test_window_is_the_RECENT_hours_not_just_any_hours(gates):
+    """A keys()-walk that preserves the denominator would read the OLDEST hours
+    once coverage is pruned past the window -- a collector dead for the last 10
+    of 45 pruned days would wrongly score 1.0. Pins that the window anchors to
+    `now`, not to whatever keys happen to exist."""
+    now = 1_700_000_000.0
+    cov = {}                                   # 35 perfect days, then dead for 10
+    for i in range(24 * 35):
+        key = time.strftime("%Y-%m-%dT%H", time.gmtime(now - (i + 24 * 10) * 3600))
+        cov[key] = {"ticks": 240, "max_gap_s": 15.0}
+    frac = gates.coverage_fraction(cov, now, window_days=30, poll_interval_s=15.0,
+                                   client_gap_grace_s=90.0)
+    assert frac == pytest.approx(20 / 30.0, abs=0.02)
+
+
 def usage_with(now, watched_channels, stats_since=None, coverage=None):
     channels = {}
     for i in range(watched_channels):
@@ -99,6 +124,26 @@ def test_stale_watches_outside_the_7_day_window_still_trip_the_gate(gates):
     assert result["ok"] is False
 
 
+def test_one_recent_watch_does_not_satisfy_the_blindness_gate(gates):
+    """Reviewer's breach repro: 40 channels, 39 last watched 200 days ago, 1
+    watched 6 days ago, coverage 100%, stats_since 400 days old. A non-empty
+    `recent` list and a `distinct` count of 40 (which counts watch_count > 0
+    EVER, no recency constraint) used to pass this straight through -- a
+    40-channel household producing one watch in 200 days is a blind sensor,
+    not an idle household."""
+    now = 1_700_000_000.0
+    usage = usage_with(now, watched_channels=40, stats_since=now - 400 * 86400,
+                       coverage=buckets(now, 24 * 45, ticks=240))
+    chans = list(usage["channels"].values())
+    for rec in chans[:39]:
+        rec["last_watched"] = now - 200 * 86400
+    chans[39]["last_watched"] = now - 6 * 86400
+    result = gates.evaluate(usage, rows_total=1440, never_watched=1400, now=now,
+                            thresholds=THRESHOLDS)
+    assert result["ok"] is False
+    assert any("distinct channels watched in the last 7" in a for a in result["alerts"])
+
+
 def test_never_watched_ceiling_trips(gates):
     now = 1_700_000_000.0
     usage = usage_with(now, watched_channels=40)
@@ -133,7 +178,7 @@ def test_low_coverage_trips(gates):
     result = gates.evaluate(usage, rows_total=1440, never_watched=200, now=now,
                             thresholds=THRESHOLDS)
     assert result["ok"] is False
-    assert any("coverage" in a for a in result["alerts"])
+    assert any("is below" in a for a in result["alerts"])
 
 
 def test_empty_usage_never_reads_as_nobody_watched(gates):
@@ -141,3 +186,34 @@ def test_empty_usage_never_reads_as_nobody_watched(gates):
     result = gates.evaluate({}, rows_total=1440, never_watched=1440, now=now,
                             thresholds=THRESHOLDS)
     assert result["ok"] is False
+
+
+def test_zero_rows_total_trips_the_ceiling_gate(gates):
+    """An ORM query returning nothing (schema change, bad filter, empty profile)
+    must not read as `ok=True` on a lineup of zero channels -- a zero-row
+    lineup is never a believable dataset."""
+    now = 1_700_000_000.0
+    usage = usage_with(now, watched_channels=40)
+    result = gates.evaluate(usage, rows_total=0, never_watched=0, now=now,
+                            thresholds=THRESHOLDS)
+    assert result["ok"] is False
+    assert any("rows_total is 0" in a for a in result["alerts"])
+
+
+def test_unobservable_alert_above_threshold(gates):
+    msg = gates.unobservable_alert(95, 100)
+    assert msg is not None
+    assert "unobservable" in msg
+
+
+def test_unobservable_alert_below_threshold(gates):
+    assert gates.unobservable_alert(50, 100) is None
+
+
+def test_unobservable_alert_at_threshold_passes(gates):
+    # MAX_UNOBSERVABLE_FRACTION is 0.90; the gate must pass AT the threshold.
+    assert gates.unobservable_alert(90, 100) is None
+
+
+def test_unobservable_alert_zero_rows_total(gates):
+    assert gates.unobservable_alert(10, 0) is None
