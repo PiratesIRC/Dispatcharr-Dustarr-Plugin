@@ -495,6 +495,28 @@ has passed to fairly call these unused. Not dead weight; just wait.</p>
 """
 
 
+# Excel/LibreOffice treat a cell beginning with any of these as a formula
+# (CWE-1236). Provider-controlled channel/group names reach this file raw.
+_FORMULA_LEAD_CHARS = ("=", "+", "-", "@")
+
+
+def _csv_safe(value):
+    """Neutralize CSV formula injection for a single cell.
+
+    Only strings are touched -- watch_count/hours/tune_count/age_days are
+    always int/float here, so a genuinely negative *number* is written
+    unmangled. A string cell (channel name, group, reason) whose content --
+    after stripping leading whitespace/tabs -- starts with =, +, -, or @ gets
+    a leading single quote, the standard mitigation: Excel/LibreOffice then
+    render it as literal text instead of evaluating it as a formula.
+    """
+    if not isinstance(value, str):
+        return value
+    if value.lstrip(" \t").startswith(_FORMULA_LEAD_CHARS):
+        return "'" + value
+    return value
+
+
 def render_csv(model):
     """One row per channel across every section, deduplicated by uuid."""
     buffer = io.StringIO()
@@ -509,9 +531,9 @@ def render_csv(model):
         if entry["uuid"] in seen:
             continue
         seen.add(entry["uuid"])
-        writer.writerow([entry.get(key) for key, _ in _COLUMNS]
-                        + [entry["uuid"], entry.get("last_watched"),
-                           entry.get("last_tuned")])
+        row = [entry.get(key) for key, _ in _COLUMNS] + [
+            entry["uuid"], entry.get("last_watched"), entry.get("last_tuned")]
+        writer.writerow([_csv_safe(cell) for cell in row])
     return buffer.getvalue()
 
 
@@ -519,7 +541,14 @@ def _atomic_write(path, text):
     tmp = f"{path}.tmp"
     with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(text)
-    os.replace(tmp, path)          # same directory: cross-device rename fails
+    try:
+        os.replace(tmp, path)      # same directory: cross-device rename fails
+    except OSError:
+        try:
+            os.remove(tmp)         # best-effort: never mask the original error
+        except OSError:
+            pass
+        raise
 
 
 def write_report(model, report_dir, csv_dir, now):

@@ -154,3 +154,97 @@ def test_write_report_keeps_a_dated_archive(rp, gw, tmp_path):
     report_dir = tmp_path / "logos"
     rp.write_report(model(rp, gw), str(report_dir), str(tmp_path / "config"), NOW)
     assert list(report_dir.glob("report-*.html"))
+
+
+# -- FIX 1: CSV formula injection (CWE-1236) --------------------------------
+#
+# Provider-controlled channel/group names beginning with =, +, -, or @ (or
+# leading whitespace/tab then one of those) are interpreted by Excel /
+# LibreOffice as formulas when the CSV is double-clicked open. Every such
+# cell must be neutralized with a leading single quote; ordinary names and
+# genuinely negative *numbers* in numeric columns must survive unmangled.
+_FORMULA_PAYLOADS = ["=1+1", "+1+1", "-1+1", "@SUM(1+1)", "\t=1+1"]
+
+
+def _model_with_channel_name(rp, gw, name):
+    rows = [gw.ChannelRow(id=1, uuid="u1", name=name, group="US: Movies",
+                          auto_created=False, created_at=NOW - 90 * 86400,
+                          proxying=True)]
+    usage = {"channels": {}, "meta": {"stats_since": NOW - 40 * 86400, "coverage": {}}}
+    return rp.build_model(rows, usage, SETTINGS, NOW)
+
+
+@pytest.mark.parametrize("payload", _FORMULA_PAYLOADS)
+def test_csv_neutralizes_formula_injection_in_channel_name(rp, gw, payload):
+    text = rp.render_csv(_model_with_channel_name(rp, gw, payload))
+    row = next(csv.DictReader(io.StringIO(text)))
+    # Neutralized: a leading single quote defeats Excel/LibreOffice formula
+    # evaluation while keeping the text visible.
+    assert row["name"] == "'" + payload
+
+
+@pytest.mark.parametrize("payload", _FORMULA_PAYLOADS)
+def test_csv_neutralizes_formula_injection_in_group_name(rp, gw, payload):
+    rows = [gw.ChannelRow(id=1, uuid="u1", name="CH1", group=payload,
+                          auto_created=False, created_at=NOW - 90 * 86400,
+                          proxying=True)]
+    usage = {"channels": {}, "meta": {"stats_since": NOW - 40 * 86400, "coverage": {}}}
+    text = rp.render_csv(rp.build_model(rows, usage, SETTINGS, NOW))
+    row = next(csv.DictReader(io.StringIO(text)))
+    assert row["group"] == "'" + payload
+
+
+def test_csv_leaves_ordinary_channel_names_untouched(rp, gw):
+    text = rp.render_csv(_model_with_channel_name(rp, gw, "BBC 1 FHD"))
+    row = next(csv.DictReader(io.StringIO(text)))
+    assert row["name"] == "BBC 1 FHD"
+
+
+def test_csv_does_not_mangle_negative_numbers_in_numeric_columns(rp, gw):
+    """age_days is a numeric column and can legitimately be written; only
+    STRING cells (name/group/reason) are candidates for neutralization, so a
+    negative number must round-trip as a plain number, not gain a quote."""
+    rows = [gw.ChannelRow(id=1, uuid="u1", name="CH1", group="US: Movies",
+                          auto_created=False, created_at=NOW + 5 * 86400,
+                          proxying=True)]
+    usage = {"channels": {}, "meta": {"stats_since": NOW - 40 * 86400, "coverage": {}}}
+    built = rp.build_model(rows, usage, SETTINGS, NOW)
+    assert built["never_watched"][0]["age_days"] < 0
+    text = rp.render_csv(built)
+    row = next(csv.DictReader(io.StringIO(text)))
+    assert row["age_days"] == str(built["never_watched"][0]["age_days"])
+    assert not row["age_days"].startswith("'")
+
+
+# -- FIX 2: atomic-write guarantee on os.replace failure --------------------
+#
+# _atomic_write must never leave a stale .tmp file behind, including when
+# os.replace() itself fails (disk full / permission / locked file). These
+# tests pin the tmp+replace MECHANISM (not just cleanup behavior): they
+# monkeypatch os.replace to fail, so a rewrite that skipped the tmp+replace
+# dance entirely (writing straight to the final path) would never trigger
+# the failure and would fail these assertions instead of vacuously passing.
+def test_atomic_write_removes_tmp_file_when_replace_fails(rp, tmp_path, monkeypatch):
+    def boom(_src, _dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(rp.os, "replace", boom)
+    target = tmp_path / "out.txt"
+    with pytest.raises(OSError):
+        rp._atomic_write(str(target), "hello")
+    assert not list(tmp_path.glob("*.tmp"))
+    assert not target.exists()
+
+
+def test_write_report_survives_a_replace_failure_with_no_stale_tmp(rp, gw, tmp_path,
+                                                                    monkeypatch):
+    def boom(_src, _dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(rp.os, "replace", boom)
+    report_dir = tmp_path / "logos"
+    csv_dir = tmp_path / "config"
+    out = rp.write_report(model(rp, gw), str(report_dir), str(csv_dir), NOW)
+    assert "error" in out
+    assert not list(report_dir.glob("*.tmp"))
+    assert not list(csv_dir.glob("*.tmp"))

@@ -103,14 +103,26 @@ def test_build_report_writes_files_and_returns_the_path(plugin, tmp_path,
 
 def test_show_summary_never_crashes_on_a_missing_usage_file(plugin, tmp_path,
                                                             monkeypatch):
+    # show_summary only touches Storage(DATA_DIR) today, but patch all three
+    # real-path globals here too (defense in depth / FIX 3 audit) so a future
+    # change that routes it through _build_report can't silently write to the
+    # real host paths (/data/logos/metricsarr, /config/metricsarr) again.
     monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path / "nothing-here"))
+    monkeypatch.setattr(plugin, "REPORT_DIR", str(tmp_path / "logos"))
+    monkeypatch.setattr(plugin, "CSV_DIR", str(tmp_path / "config"))
     result = plugin.Plugin().run("show_summary", {}, {"settings": {}})
     assert result["status"] in ("ok", "error")
     assert result["message"]
 
 
 def test_send_webhook_now_errors_without_a_url(plugin, tmp_path, monkeypatch):
+    # send_webhook_now runs _build_report() first (to build the summary),
+    # which writes real files via REPORT_DIR/CSV_DIR unless patched -- without
+    # this, the suite was writing to C:\data\logos\metricsarr and
+    # C:\config\metricsarr on the host (FIX 3).
     monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(plugin, "REPORT_DIR", str(tmp_path / "logos"))
+    monkeypatch.setattr(plugin, "CSV_DIR", str(tmp_path / "config"))
     result = plugin.Plugin().run("send_webhook_now", {}, {"settings": {}})
     assert result["status"] == "error"
     assert "webhook" in result["message"].lower()
