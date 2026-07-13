@@ -4,6 +4,16 @@ Provider credentials live INSIDE stream URLs in this deployment, so every string
 that reaches a payload passes through redact(). The payload is built from an
 allowlist -- Stream.url and M3UAccount are unreachable from here by construction
 (spec S7.1).
+
+The redact() function is a shape-matcher, not a semantic scrubber. It covers the
+credential transports this deployment actually uses: path creds (/live|movie|series/<user>/<pass>/),
+Xtream query creds (?username=&password=), and basic-auth-in-host. It does NOT cover
+other transports (?token=, ?pwd=, ?auth=, ?key=, ?secret=, Authorization header, etc.)
+because those are unreachable today (alerts are produced solely by gates.py with
+hand-authored literals containing no URLs). The allowlist is the load-bearing control;
+the redactor is defense-in-depth. If a future caller ever puts exception text or provider
+URLs into alerts, the right fix is to redact at the PRODUCER, not to widen these regexes
+to guess at every possible transport.
 """
 from __future__ import annotations
 
@@ -48,7 +58,7 @@ def _clean(value):
     if isinstance(value, str):
         return redact(value)
     if isinstance(value, dict):
-        return {k: _clean(v) for k, v in value.items()}
+        return {redact(k) if isinstance(k, str) else k: _clean(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         return [_clean(v) for v in value]
     return value
@@ -78,7 +88,8 @@ def build_payload(summary, fmt, version):
         content = "\n".join(lines)
         if len(content) > DISCORD_LIMIT:
             content = content[:DISCORD_LIMIT - 3] + "..."
-        return json.dumps({"content": content}).encode("utf-8")
+        return json.dumps({"content": content,
+                          "allowed_mentions": {"parse": []}}).encode("utf-8")
 
     body = {"plugin": "metricsarr", "event": "usage_report", "version": version}
     body.update(data)

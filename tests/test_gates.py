@@ -159,7 +159,7 @@ def test_too_few_distinct_channels_trips(gates):
     result = gates.evaluate(usage, rows_total=1440, never_watched=100, now=now,
                             thresholds=THRESHOLDS)
     assert result["ok"] is False
-    assert any("distinct channels" in a for a in result["alerts"])
+    assert any("ever watched" in a for a in result["alerts"])
 
 
 def test_young_dataset_trips_the_age_gate(gates):

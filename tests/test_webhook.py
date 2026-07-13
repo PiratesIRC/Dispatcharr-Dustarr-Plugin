@@ -81,7 +81,7 @@ def test_generic_payload_is_machine_readable(wh):
 
 def test_discord_payload_uses_a_content_envelope(wh):
     body = json.loads(wh.build_payload(SUMMARY, "discord", "1.26.0"))
-    assert set(body) == {"content"}
+    assert set(body) == {"content", "allowed_mentions"}
     assert "1187" in body["content"]
     assert "report.html" in body["content"]
 
@@ -197,3 +197,29 @@ def test_fire_never_raises_when_summary_contains_bytes(wh):
                      opener=lambda req, timeout=None: (_ for _ in ()).throw(
                          AssertionError("should not reach the network")))
     assert result["status"] == "error"
+
+
+def test_dict_keys_containing_credentials_are_redacted_generic(wh):
+    """Defense-in-depth: a dict keyed by stream URL must not leak credentials."""
+    leaky = dict(SUMMARY)
+    leaky["top"] = [{"http://h.tv/live/joe/pw123/1.ts": 5}]
+    raw = wh.build_payload(leaky, "generic", "1.26.0").decode()
+    assert "pw123" not in raw
+    assert "joe" not in raw
+    assert "redacted" in raw
+
+
+def test_dict_keys_containing_credentials_are_redacted_discord(wh):
+    """Defense-in-depth: a dict keyed by stream URL must not leak credentials."""
+    leaky = dict(SUMMARY)
+    leaky["top"] = [{"http://h.tv/live/joe/pw123/1.ts": 5}]
+    raw = wh.build_payload(leaky, "discord", "1.26.0").decode()
+    assert "pw123" not in raw
+    assert "joe" not in raw
+
+
+def test_discord_payload_includes_allowed_mentions_empty_parse(wh):
+    """Discord allowed_mentions must have parse=[] to prevent @everyone pings."""
+    body = json.loads(wh.build_payload(SUMMARY, "discord", "1.26.0"))
+    assert "allowed_mentions" in body
+    assert body["allowed_mentions"]["parse"] == []
