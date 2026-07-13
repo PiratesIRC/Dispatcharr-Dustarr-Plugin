@@ -36,6 +36,42 @@ def test_redact_handles_movie_and_series_paths(wh):
         assert "pass" not in wh.redact(dirty)
 
 
+def test_redact_strips_xtream_query_string_credentials_get_php(wh):
+    dirty = ("Failed refreshing http://edge-23.provider.tv/get.php"
+              "?username=joe123&password=s3cr3tpass&type=m3u_plus")
+    clean = wh.redact(dirty)
+    assert "joe123" not in clean
+    assert "s3cr3tpass" not in clean
+    assert "redacted" in clean
+
+
+def test_redact_strips_xtream_query_string_credentials_player_api(wh):
+    dirty = ("player_api.php request to http://h.tv/player_api.php"
+              "?username=joe123&password=s3cr3tpass failed: 403")
+    clean = wh.redact(dirty)
+    assert "joe123" not in clean
+    assert "s3cr3tpass" not in clean
+
+
+def test_redact_handles_password_segment_at_end_of_string(wh):
+    clean = wh.redact("http://h.tv/live/user/pass")
+    assert "pass" not in clean
+    assert "user" not in clean
+    assert "redacted" in clean
+
+
+def test_redact_handles_password_segment_before_query_string(wh):
+    clean = wh.redact("http://h.tv/live/joe/pw1?p=1")
+    assert "pw1" not in clean
+    assert "joe" not in clean
+
+
+def test_redact_handles_basic_auth_in_host(wh):
+    clean = wh.redact("http://user:pass@host/live/feed.ts")
+    assert "user" not in clean
+    assert "pass" not in clean
+
+
 def test_generic_payload_is_machine_readable(wh):
     body = json.loads(wh.build_payload(SUMMARY, "generic", "1.26.0"))
     assert body["plugin"] == "metricsarr"
@@ -51,11 +87,16 @@ def test_discord_payload_uses_a_content_envelope(wh):
 
 
 def test_discord_content_stays_under_the_2000_char_limit(wh):
+    # `top` is never rendered in the Discord branch -- growing it exercises
+    # nothing. `alerts` IS rendered (one line per entry), so that's what has
+    # to grow to genuinely hit the truncation path.
     big = dict(SUMMARY)
-    big["top"] = [{"name": "X" * 80, "watch_count": i, "hours": 1.0}
-                  for i in range(200)]
-    body = json.loads(wh.build_payload(big, "discord", "1.26.0"))
+    big["alerts"] = [f"channel {i} tuned but never qualified, host edge-{i}"
+                      for i in range(200)]
+    raw = wh.build_payload(big, "discord", "1.26.0")
+    body = json.loads(raw)
     assert len(body["content"]) <= 2000
+    assert json.loads(raw.decode())["content"] == body["content"]
 
 
 def test_payload_cannot_carry_a_stream_url_even_if_one_leaks_into_alerts(wh):
@@ -67,6 +108,18 @@ def test_payload_cannot_carry_a_stream_url_even_if_one_leaks_into_alerts(wh):
         raw = wh.build_payload(leaky, fmt, "1.26.0").decode()
         assert "pw123" not in raw
         assert "joe" not in raw
+
+
+def test_build_payload_only_serializes_allowlisted_keys(wh):
+    """Mutation test for the allowlist: an unlisted key holding a raw secret
+    must never reach either payload format, even nested."""
+    leaky = dict(SUMMARY)
+    leaky["debug_context"] = {"m3u_password": "hunter2"}
+    for fmt in ("generic", "discord"):
+        raw = wh.build_payload(leaky, fmt, "1.26.0").decode()
+        assert "hunter2" not in raw
+        assert "debug_context" not in raw
+        assert "m3u_password" not in raw
 
 
 def test_fire_sets_an_explicit_user_agent(wh):
@@ -118,3 +171,29 @@ def test_fire_redacts_credentials_out_of_its_own_error_message(wh):
     result = wh.fire("https://example.com/hook", SUMMARY, "generic", "1.0",
                      opener=opener)
     assert "hunter2" not in result["message"]
+
+
+def test_fire_never_raises_on_a_summary_that_is_none(wh):
+    """An upstream caller bug (summary=None) must not crash fire()."""
+    result = wh.fire("https://example.com/hook", None, "generic", "1.0",
+                     opener=lambda req, timeout=None: (_ for _ in ()).throw(
+                         AssertionError("should not reach the network")))
+    assert result["status"] == "error"
+
+
+def test_fire_never_raises_when_summary_contains_a_non_json_serializable_set(wh):
+    bad = dict(SUMMARY)
+    bad["alerts"] = {"http://h.tv/live/joe/pw1/1.ts"}
+    result = wh.fire("https://example.com/hook", bad, "generic", "1.0",
+                     opener=lambda req, timeout=None: (_ for _ in ()).throw(
+                         AssertionError("should not reach the network")))
+    assert result["status"] == "error"
+
+
+def test_fire_never_raises_when_summary_contains_bytes(wh):
+    bad = dict(SUMMARY)
+    bad["alerts"] = [b"not a string"]
+    result = wh.fire("https://example.com/hook", bad, "generic", "1.0",
+                     opener=lambda req, timeout=None: (_ for _ in ()).throw(
+                         AssertionError("should not reach the network")))
+    assert result["status"] == "error"

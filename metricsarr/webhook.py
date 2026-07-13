@@ -17,15 +17,30 @@ USER_AGENT_PREFIX = "Dispatcharr-Metricsarr/"
 DISCORD_LIMIT = 2000
 TIMEOUT_S = 10
 
-# http://host/live|movie|series/<user>/<pass>/rest -> creds replaced
-_CREDS_RE = re.compile(r"(/(?:live|movie|series)/)[^/\s]+/[^/\s]+/",
+# http://host/live|movie|series/<user>/<pass>/rest -> creds replaced.
+# The password segment may be terminated by '/', '?', whitespace, or the end
+# of the string -- not just '/' -- so a truncated log line or a bare
+# playlist URL (no trailing path/query) still gets redacted.
+_CREDS_RE = re.compile(r"(/(?:live|movie|series)/)[^/\s?]+/[^/\s?]+(?=[/?\s]|$)",
                        re.IGNORECASE)
+
+# Xtream Codes query-string auth: get.php / player_api.php etc take
+# username=...&password=... (also user=/pass=) as plain query params.
+_QUERY_CREDS_RE = re.compile(r"([?&](?:username|user|password|pass)=)[^&\s]+",
+                             re.IGNORECASE)
+
+# http://user:pass@host/... basic-auth-in-host form.
+_BASIC_AUTH_RE = re.compile(r"(://)[^/\s@]+:[^/\s@]+(@)")
 
 
 def redact(text):
     if text is None:
         return None
-    return _CREDS_RE.sub(r"\1<redacted>/<redacted>/", str(text))
+    out = str(text)
+    out = _CREDS_RE.sub(r"\1<redacted>/<redacted>", out)
+    out = _QUERY_CREDS_RE.sub(r"\1<redacted>", out)
+    out = _BASIC_AUTH_RE.sub(r"\1<redacted>:<redacted>\2", out)
+    return out
 
 
 def _clean(value):
@@ -78,13 +93,16 @@ def fire(url, summary, fmt, version, timeout=TIMEOUT_S, opener=None):
         return {"status": "error",
                 "message": "Webhook URL must start with http:// or https://"}
 
-    payload = build_payload(summary, fmt, version)
-    request = urllib.request.Request(
-        url, data=payload, method="POST",
-        headers={"Content-Type": "application/json",
-                 # Discord's Cloudflare edge 403s the default Python-urllib UA
-                 # and silently drops every webhook.
-                 "User-Agent": f"{USER_AGENT_PREFIX}{version}"})
+    try:
+        payload = build_payload(summary, fmt, version)
+        request = urllib.request.Request(
+            url, data=payload, method="POST",
+            headers={"Content-Type": "application/json",
+                     # Discord's Cloudflare edge 403s the default Python-urllib
+                     # UA and silently drops every webhook.
+                     "User-Agent": f"{USER_AGENT_PREFIX}{version}"})
+    except Exception as exc:                        # never raises to the caller
+        return {"status": "error", "message": redact(f"Webhook failed: {exc}")}
 
     send = opener or urllib.request.urlopen
     try:
