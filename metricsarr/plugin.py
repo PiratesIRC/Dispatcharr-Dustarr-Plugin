@@ -3,14 +3,22 @@
 Phase 1 mutates NOTHING in Dispatcharr: it polls Redis, writes its own files, and
 reports. Spec: docs/superpowers/specs/2026-07-12-metricsarr-design.md (rev 2).
 
-Plugin.__init__ is O(ms) and I/O-free (the procfs read is exempt). Django imports
-are function-local -- a module-level Django import breaks the loader.
+Plugin.__init__ is O(ms) and I/O-free. (The procfs read that gates the collector
+to uWSGI workers lives in ensure_collector, not here.) Django imports are
+function-local -- a module-level Django import breaks the loader. celery is the
+one exception: it must be imported at module scope so @shared_task actually
+registers build_report_task (C1) -- celery is available in the Dispatcharr
+runtime, same as every sibling plugin's Celery task.
 """
 from __future__ import annotations
 
+import logging
+import math
 import os
 import threading
 import time
+
+from celery import shared_task
 
 try:
     from . import collector as collector_mod
@@ -23,6 +31,8 @@ except ImportError:                     # standalone (non-package) import path
     import sessionizer
     import storage
     import webhook
+
+_LOGGER = logging.getLogger(__name__)
 
 PLUGIN_VERSION = "1.26.1931200"
 
@@ -121,7 +131,7 @@ _NUMERIC_FLOORS = {"poll_interval_s": (5, MAX_POLL_INTERVAL_S),
 
 def coerce_settings(settings):
     """Settings arrive UNVALIDATED from the API: coerce and floor everything."""
-    settings = settings or {}
+    settings = settings if isinstance(settings, dict) else {}
     out = {}
     for field in FIELDS:
         fid = field["id"]
@@ -134,6 +144,12 @@ def coerce_settings(settings):
                 value = float(value)
             except (TypeError, ValueError):
                 value = float(default)
+            if not math.isfinite(value):
+                # NaN/inf must fall back to the field default, not clamp to
+                # whatever floor/ceiling happens to be nearest (M2) -- e.g.
+                # unused_threshold_days=inf must NOT become 3650 (meaning
+                # nothing is EVER judged unused).
+                value = float(default)
             low, high = _NUMERIC_FLOORS.get(fid, (None, None))
             if low is not None:
                 value = max(low, min(high, value))
@@ -143,6 +159,14 @@ def coerce_settings(settings):
                 value = int(value)
         elif field["type"] == "boolean":
             value = bool(value)
+        elif field["type"] == "select":
+            options = {opt["value"] for opt in field.get("options", [])}
+            if value not in options:
+                # An unrecognized select value (e.g. report_schedule="hourly")
+                # must fall back to the field default, not flow through to
+                # sync_schedule's CRON_BY_SCHEDULE.get() miss -> silently OFF
+                # scheduling (I4).
+                value = default
         out[fid] = value
     return out
 
@@ -212,12 +236,19 @@ def ensure_collector(settings=None):
         for thread in live:
             if getattr(thread, "metricsarr_version", None) == PLUGIN_VERSION:
                 return
-            getattr(thread, "metricsarr_stop", threading.Event()).set()
 
+        # M3: check the crash-loop bound BEFORE stopping any incumbent thread.
+        # Checking it after (the old order) meant a 6th version bump within
+        # the window would kill the running collector and then refuse to
+        # spawn its replacement, leaving the worker with NO collector at all.
         now = time.time()
         _restart_times[:] = [t for t in _restart_times if now - t < RESTART_WINDOW_S]
         if len(_restart_times) >= RESTART_BOUND:
-            return                          # crash-loop bound
+            return                          # crash-loop bound; incumbent survives
+
+        for thread in live:
+            getattr(thread, "metricsarr_stop", threading.Event()).set()
+
         _restart_times.append(now)
         _spawn_collector(settings or {})
 
@@ -249,7 +280,7 @@ def _build_report(settings):
     return result, model, written
 
 
-def _send_webhook(settings, model, written):
+def _send_webhook(settings, model):
     thresholds = coerce_settings(settings)
     url = (thresholds.get("webhook_url") or "").strip()
     if not url:
@@ -260,17 +291,34 @@ def _send_webhook(settings, model, written):
                         PLUGIN_VERSION)
 
 
+@shared_task
 def build_report_task():
     """Celery entry point. Runs on the PREFORK queue -- real processes, no gevent,
-    so ORM-heavy work here cannot wedge a uWSGI worker (bug-117)."""
+    so ORM-heavy work here cannot wedge a uWSGI worker (bug-117).
+
+    @shared_task is REQUIRED, not decorative (C1): Dispatcharr's worker_ready
+    hook eagerly imports plugins so their @shared_task functions register --
+    the import alone does not register anything. Without the decorator, Beat
+    fires this task's name on schedule forever and the worker rejects every
+    run with "Received unregistered task".
+
+    The whole body is wrapped (I2): an uncaught exception here propagates raw
+    into the Celery log, and provider credentials live inside stream URLs in
+    this deployment -- so a failure must be logged redacted, never raw.
+    """
     from django.db import close_old_connections
 
-    close_old_connections()
-    settings = _load_settings()
-    _, model, _ = _build_report(settings)
-    if (settings.get("webhook_url") or "").strip():
-        _send_webhook(settings, model, None)
-    return model["counts"]
+    try:
+        close_old_connections()
+        settings = _load_settings()
+        _, model, _ = _build_report(settings)
+        if (settings.get("webhook_url") or "").strip():
+            _send_webhook(settings, model)
+        return model["counts"]
+    except Exception as exc:
+        _LOGGER.error("metricsarr build_report_task failed: %s",
+                      webhook.redact(str(exc)))
+        return {"error": True}
 
 
 def _load_settings():
@@ -316,6 +364,29 @@ class Plugin:
         # not here.
         pass
 
+    def stop(self):
+        """Called by the loader on disable/uninstall/reload (C2). Must never
+        raise -- a cleanup failure must not break the loader.
+
+        Cleans up the two things a fresh plugin.py has no other hook for:
+        (a) the orphaned Beat PeriodicTask row (every sibling plugin in this
+        workspace ships an orphan-task cleaner for exactly this reason), and
+        (b) the collector daemon thread, which would otherwise keep polling
+        Redis and writing usage.json after the plugin is disabled.
+        """
+        try:
+            from core.scheduling import delete_periodic_task
+            delete_periodic_task(TASK_NAME)
+        except Exception:
+            pass
+
+        try:
+            for thread in threading.enumerate():
+                if thread.name == THREAD_NAME:
+                    getattr(thread, "metricsarr_stop", threading.Event()).set()
+        except Exception:
+            pass
+
     def run(self, action, params=None, context=None):
         settings = (context or {}).get("settings") or {}
         try:
@@ -324,14 +395,19 @@ class Plugin:
             pass                    # a collector failure must never break an action
 
         try:
+            sync_schedule(settings)
+        except Exception:
+            pass                    # I3: a scheduling failure must never break an action
+
+        try:
             if action == "build_report":
                 result, _, _ = _build_report(settings)
                 return result
             if action == "show_summary":
                 return self._show_summary(settings)
             if action == "send_webhook_now":
-                _, model, written = _build_report(settings)
-                return _send_webhook(settings, model, written)
+                _, model, _ = _build_report(settings)
+                return _send_webhook(settings, model)
             if action == "validate_settings":
                 return self._validate(settings)
         except Exception as exc:
@@ -342,7 +418,7 @@ class Plugin:
     def _show_summary(self, settings):
         thresholds = coerce_settings(settings)
         store = storage.Storage(DATA_DIR)
-        now = time.time()
+        now = _gateway().now()      # M8: same clock source as _build_report
         usage = store.load(now)
         channels = (usage.get("channels") or {})
         meta = usage.get("meta") or {}
@@ -373,7 +449,8 @@ class Plugin:
                 re.compile(str(raw_re))
             except re.error as exc:
                 return {"status": "error",
-                        "message": f"Excluded name regex does not compile: {exc}"}
+                        "message": webhook.redact(
+                            f"Excluded name regex does not compile: {exc}")}
 
         url = (thresholds.get("webhook_url") or "").strip()
         if url and not url.startswith(("http://", "https://")):
@@ -384,7 +461,8 @@ class Plugin:
             sync_schedule(settings)
         except Exception as exc:
             return {"status": "ok",
-                    "message": f"Settings OK, but scheduling failed: {exc}"}
+                    "message": webhook.redact(
+                        f"Settings OK, but scheduling failed: {exc}")}
 
         return {"status": "ok",
                 "message": (f"Settings OK. Poll {thresholds['poll_interval_s']}s, "

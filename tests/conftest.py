@@ -5,6 +5,7 @@ loaded directly from file paths (no stubs). plugin.py / gateway.py / reports.py
 import Django lazily inside functions; the stubs below cover what tests exercise.
 """
 import fnmatch
+import functools
 import importlib.util
 import sys
 import types
@@ -36,15 +37,48 @@ def _install_runtime_stubs():
     core_sched = types.ModuleType("core.scheduling")
     core_sched.create_or_update_periodic_task = MagicMock(name="create_task")
     core_sched.delete_periodic_task = MagicMock(name="delete_task")
-    celery_mod = types.ModuleType("celery")
-    celery_mod.shared_task = lambda *a, **k: (lambda fn: fn)
     sys.modules.update({
         "apps": apps, "apps.channels": apps_channels,
         "apps.channels.models": models,
         "django": django, "django.db": django_db,
         "core": core, "core.utils": core_utils, "core.scheduling": core_sched,
-        "celery": celery_mod,
     })
+
+    # celery is imported at MODULE scope in plugin.py (the C1 fix -- the
+    # @shared_task decorator is what registers the task, not the eager
+    # plugin import), so it is only ever imported ONCE per test session
+    # (plugin.py itself is cached in sys.modules after the first load_plugin()
+    # call). Recreating this module on every call, like the stubs above,
+    # would silently orphan the registration recorded at that first import --
+    # so install it once and reuse it.
+    if "celery" not in sys.modules:
+        celery_mod = types.ModuleType("celery")
+        celery_mod.registered_tasks = {}
+
+        def _fake_shared_task(*dargs, **dkwargs):
+            """Records registration (celery_mod.registered_tasks) so C1 is
+            actually testable. Supports both bare (@shared_task) and
+            parameterized (@shared_task(name=...)) usage, like real Celery."""
+
+            def _register(fn):
+                name = dkwargs.get("name") or f"{fn.__module__}.{fn.__qualname__}"
+
+                @functools.wraps(fn)
+                def _task(*args, **kwargs):
+                    return fn(*args, **kwargs)
+
+                _task.name = name
+                _task.delay = _task
+                _task.run = fn
+                celery_mod.registered_tasks[name] = _task
+                return _task
+
+            if dargs and callable(dargs[0]) and not dkwargs:
+                return _register(dargs[0])
+            return _register
+
+        celery_mod.shared_task = _fake_shared_task
+        sys.modules["celery"] = celery_mod
 
 
 def _load_from_path(module_name, file_name):

@@ -506,13 +506,14 @@ def _csv_safe(value):
     Only strings are touched -- watch_count/hours/tune_count/age_days are
     always int/float here, so a genuinely negative *number* is written
     unmangled. A string cell (channel name, group, reason) whose content --
-    after stripping leading whitespace/tabs -- starts with =, +, -, or @ gets
+    after stripping ALL leading Unicode whitespace (M9: a bare " \t" strip
+    missed \r and NBSP-prefixed payloads) -- starts with =, +, -, or @ gets
     a leading single quote, the standard mitigation: Excel/LibreOffice then
     render it as literal text instead of evaluating it as a formula.
     """
     if not isinstance(value, str):
         return value
-    if value.lstrip(" \t").startswith(_FORMULA_LEAD_CHARS):
+    if value.lstrip().startswith(_FORMULA_LEAD_CHARS):
         return "'" + value
     return value
 
