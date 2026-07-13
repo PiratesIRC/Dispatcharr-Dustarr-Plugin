@@ -20,7 +20,7 @@ def row(gw, **kw):
 def test_parse_exclusions_defaults(gw):
     ex = gw.parse_exclusions({})
     assert ex["exclude_auto_created"] is True
-    assert "US: PPV" in ex["groups"]
+    assert "us: ppv" in ex["groups"]
     assert ex["name_re"].search("LIVE EVENT 04 - Sturm v Stein")
 
 
@@ -77,3 +77,10 @@ def test_unobservable_wins_over_nothing_but_loses_to_explicit_exclusions(gw):
     ex = gw.parse_exclusions({})
     reason = gw.classify(row(gw, auto_created=True, proxying=False), ex, 2000.0)
     assert reason == "excluded:auto_created"
+
+
+def test_default_group_exclusion_matches_real_case(gw):
+    """The default exclusion set must match real-world channel group casing
+    end-to-end, proving the normalization is consistent."""
+    ex = gw.parse_exclusions({})
+    assert gw.classify(row(gw, group="US: PPV"), ex, 2000.0) == "excluded:group"

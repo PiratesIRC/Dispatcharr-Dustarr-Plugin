@@ -25,17 +25,9 @@ DEFAULT_EXCLUDE_NAME_RE = r"(?i)(LIVE EVENT|PPV|NO EVENT|24/7)"
 def parse_exclusions(settings):
     settings = settings or {}
 
-    # Defaults keep their real-world casing ("US: PPV", matching Dispatcharr's
-    # actual group names) so a caller inspecting ex["groups"] sees the literal
-    # configured value; user-supplied lists are normalized (stripped + lowered)
-    # for typo/case tolerance. classify() lower-cases both sides at match time,
-    # so either form matches correctly regardless of casing.
-    if "exclude_groups" in settings:
-        raw_groups = settings.get("exclude_groups")
-        groups = {g.strip().lower() for g in str(raw_groups or "").split(",")
-                  if g.strip()}
-    else:
-        groups = {g.strip() for g in DEFAULT_EXCLUDE_GROUPS.split(",") if g.strip()}
+    # Always lower-case for consistent O(1) set lookups in classify().
+    groups = {g.strip().lower() for g in str(settings.get("exclude_groups", DEFAULT_EXCLUDE_GROUPS) or "").split(",")
+              if g.strip()}
 
     raw_re = settings.get("exclude_name_regex", DEFAULT_EXCLUDE_NAME_RE)
     name_re = None
@@ -62,10 +54,8 @@ def classify(row, exclusions, now):
     """
     if exclusions["exclude_auto_created"] and row.auto_created:
         return "excluded:auto_created"
-    if row.group:
-        group = row.group.strip().lower()
-        if any(group == excl.strip().lower() for excl in exclusions["groups"]):
-            return "excluded:group"
+    if row.group and row.group.strip().lower() in exclusions["groups"]:
+        return "excluded:group"
     if exclusions["name_re"] and row.name and exclusions["name_re"].search(row.name):
         return "excluded:name"
     if not row.proxying:
