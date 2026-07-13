@@ -26,7 +26,7 @@ separate scheduled task, not inline with the collector.
 
 | Where | What |
 |---|---|
-| `http://<your-dispatcharr-host>:9191/logos/metricsarr/report.html` | The report. Self-contained, sortable HTML — one click from any browser, including a phone or a Shield/Fire TV. Served by Dispatcharr's own nginx (the `/logos/` static route), so there's no extra container and no extra port to open. |
+| `http://<your-dispatcharr-host>:9191/logos/metricsarr/report.html` | The report. Self-contained, sortable HTML — one click from any browser, including a phone or a Shield/Fire TV. Served on the **same host and port as the Dispatcharr UI you already have open** (Dispatcharr's own nginx, the `/logos/` static route) — no extra container, no extra port to open, no new address to remember. If you can reach Dispatcharr, you can reach the report. |
 | `/config/metricsarr/report-<timestamp>.csv` | The same data as CSV. `/config` is Dispatcharr's existing bind mount, so this file lands somewhere on your host you can double-click straight into Excel or LibreOffice. |
 | A webhook (Discord or generic JSON) | A short message with the headline numbers and a link to the full report, sent on whatever schedule you configure. |
 
@@ -66,12 +66,25 @@ it's reported separately as **unobservable**, not folded into never-watched.
 
 ## Safety
 
-- **It never writes to Dispatcharr's database.** This isn't a promise in the
-  README — `tests/test_no_mutations.py` reads the AST of every shipped module on
-  every CI run and fails the build if a write-shaped Django ORM call (`.save()`,
-  `.update()`, `.create()`, `.delete()`, `.bulk_create()`, and friends, once the
-  receiver is proven to be a Dispatcharr model or queryset) exists anywhere in the
-  plugin. The same test also fails the build on any subprocess or `ffprobe` call.
+- **It never writes to Dispatcharr's database.** This isn't just a promise in
+  the README — `tests/test_no_mutations.py` reads the AST of every shipped
+  module on every CI run and fails the build on any write-shaped Django ORM
+  call it can prove: `.save()`, `.bulk_create()`, `.bulk_update()`,
+  `.get_or_create()`, `.update_or_create()`, and the async ORM equivalents are
+  flagged unconditionally; `.update()`/`.create()`/`.add()`/`.remove()`/
+  `.set()`/`.clear()` are flagged once the receiver is proven to be a
+  Dispatcharr model or queryset — including through a local alias, a
+  `self.attr`, a for-loop variable, or a helper function's return value, not
+  just a literal `Channel.objects...` at the call site; and `.delete()` is
+  flagged **by default, on any receiver**, with a single narrow exception for
+  the plugin's own Redis client. The same test also fails the build on
+  `subprocess`/`os.system`/`os.popen`/`os.exec*`/`os.spawn*` and a bare
+  `ffprobe(...)` call — no provider I/O, ever. What it does *not* and cannot
+  prove: it can't see through reflection (`getattr(channel, "delete")()`),
+  `eval`/`exec`, or a write issued through a driver/library this guard doesn't
+  know to look for. It's a strong, continuously-enforced structural guarantee
+  against the natural ways an author would reach for a write, not a formal
+  proof that no Python code anywhere could ever mutate the database.
 - **It never contacts your provider.** No ffprobe, no stream requests of any kind —
   a single probe consumes one of your provider connections and kicks whoever is
   currently watching.

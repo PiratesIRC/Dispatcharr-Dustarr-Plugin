@@ -12,8 +12,10 @@
 - Report joining the Dispatcharr channel universe (the ORM) against a sparse
   usage overlay (`usage.json`) — a channel absent from the overlay is
   never-watched, the default and expected state, not an error.
-- Self-contained HTML report served at `/logos/metricsarr/report.html`
-  (Dispatcharr's own nginx static route — no extra container, no extra port),
+- Self-contained HTML report served at `/logos/metricsarr/report.html` — the
+  same host and port as the Dispatcharr UI you already have open
+  (Dispatcharr's own nginx static route), so it's one click, no extra
+  container, no extra port, and it works from a phone or a TV browser — plus
   a CSV export to `/config/metricsarr/`, and a Discord/generic-JSON webhook
   nudge with the headline numbers and a link to the report.
 - The "tuned but never qualified" list: channels tried and abandoned inside
@@ -34,10 +36,24 @@
   plugin actions to build the report, show a quick summary, send the webhook
   on demand, and validate settings.
 - Structural read-only guard (`tests/test_no_mutations.py`): the build fails
-  if any shipped module contains a write-shaped Django ORM call (`.save()`,
-  `.update()`, `.create()`, `.delete()`, `.bulk_create()`, `.bulk_update()`,
-  `.get_or_create()`, `.update_or_create()`, once the receiver is proven to
-  be a Dispatcharr model or queryset) or any subprocess/`ffprobe` call. The
-  Redis-facing modules (`collector`, `sessionizer`, `storage`, `gates`,
-  `webhook`) are additionally verified to import no Django, ORM, or Celery
-  code at all.
+  on any write-shaped Django ORM call it can prove — `.save()`,
+  `.bulk_create()`, `.bulk_update()`, `.get_or_create()`,
+  `.update_or_create()`, and the async ORM equivalents are flagged
+  unconditionally; `.update()`/`.create()`/`.add()`/`.remove()`/`.set()`/
+  `.clear()` are flagged once an assignment-provenance pass proves the
+  receiver is a Dispatcharr model or queryset (a local alias, a `self.attr`,
+  a for-loop variable, or a helper function's return value all count, not
+  just a literal `Channel.objects...` at the call site); and `.delete()` is
+  flagged by default on ANY receiver, with a single narrow exception for the
+  plugin's own Redis client — a guard whose job is proving a negative must
+  default to "fail", not "pass", on a receiver it cannot classify. The same
+  test fails the build on any subprocess/`os.system`/`os.popen`/`os.exec*`/
+  `os.spawn*` or bare `ffprobe` call. It does not and cannot see through
+  reflection (`getattr(obj, "delete")()`), `eval`/`exec`, or a write issued
+  through a driver this guard doesn't know to look for. The Redis-facing
+  modules (`collector`, `sessionizer`, `storage`, `gates`, `webhook`) are
+  additionally verified to import no Django, ORM, or Celery code at all, and
+  `gateway.py`/`reports.py`/`plugin.py` are verified to keep every
+  Django/ORM/Celery import function-local (module-scope imports break the
+  plugin loader) except the one `from celery import shared_task` that
+  `@shared_task` requires.

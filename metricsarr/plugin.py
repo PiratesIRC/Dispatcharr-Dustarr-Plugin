@@ -304,7 +304,13 @@ def build_report_task():
 
     The whole body is wrapped (I2): an uncaught exception here propagates raw
     into the Celery log, and provider credentials live inside stream URLs in
-    this deployment -- so a failure must be logged redacted, never raw.
+    this deployment -- so a failure must be logged redacted, never raw. The
+    redacted message is then RE-RAISED (not swallowed into a `{"error": True}`
+    return): Celery's result backend records a return value as SUCCESS
+    regardless of its contents, so swallowing the exception made a failed
+    scheduled report show green and unretryable forever. Re-raising preserves
+    both guarantees at once -- the credential redaction AND Celery's normal
+    failure/retry semantics.
     """
     from django.db import close_old_connections
 
@@ -316,9 +322,9 @@ def build_report_task():
             _send_webhook(settings, model)
         return model["counts"]
     except Exception as exc:
-        _LOGGER.error("metricsarr build_report_task failed: %s",
-                      webhook.redact(str(exc)))
-        return {"error": True}
+        redacted = webhook.redact(str(exc))
+        _LOGGER.error("metricsarr build_report_task failed: %s", redacted)
+        raise RuntimeError(redacted) from exc
 
 
 def _load_settings():
@@ -457,13 +463,9 @@ class Plugin:
             return {"status": "error",
                     "message": "Webhook URL must start with http:// or https://"}
 
-        try:
-            sync_schedule(settings)
-        except Exception as exc:
-            return {"status": "ok",
-                    "message": webhook.redact(
-                        f"Settings OK, but scheduling failed: {exc}")}
-
+        # sync_schedule already ran once in run() before dispatch (I3) -- that
+        # is the single arming site. Calling it again here would just arm the
+        # schedule twice per click for no benefit.
         return {"status": "ok",
                 "message": (f"Settings OK. Poll {thresholds['poll_interval_s']}s, "
                             f"min watch {thresholds['min_watch_seconds']:.0f}s, "

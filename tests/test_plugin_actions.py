@@ -137,6 +137,27 @@ def test_show_summary_never_crashes_on_a_missing_usage_file(plugin, tmp_path,
     assert result["message"]
 
 
+def test_show_summary_uses_the_gateway_clock_not_wall_clock(plugin, tmp_path,
+                                                             monkeypatch):
+    """M8 (Task 10): _show_summary must read `now` from _gateway().now(), the
+    same clock _build_report uses -- not time.time() directly -- so the two
+    actions can never disagree about "today" if the gateway's clock is ever
+    faked (tests) or diverges from wall-clock (production). Uses a sentinel
+    `now` far from real wall-clock time so a regression to time.time() would
+    make the computed tracking-days figure nonsensical instead of ~10.0."""
+    storage_mod = sys.modules["metricsarr_under_test.storage"]
+    store = storage_mod.Storage(str(tmp_path / "data"))
+    store.write({"channels": {},
+                "meta": {"stats_since": NOW - 10 * 86400, "coverage": {}}}, NOW)
+
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(plugin, "_gateway", lambda: type(
+        "FakeGW", (), {"now": lambda self: NOW})())
+
+    result = plugin.Plugin()._show_summary({})
+    assert "10.0 days" in result["message"]
+
+
 def test_send_webhook_now_errors_without_a_url(plugin, tmp_path, monkeypatch):
     # send_webhook_now runs _build_report() first (to build the summary),
     # which writes real files via REPORT_DIR/CSV_DIR unless patched -- without
@@ -166,9 +187,6 @@ def test_build_report_task_is_registered_with_celery(plugin):
 
 
 def test_build_report_task_runs_and_returns_counts(plugin, tmp_path, monkeypatch):
-    import sys as _sys
-    gw_mod = _sys.modules["metricsarr_under_test.gateway"]
-
     class FakeGateway:
         def now(self):
             return NOW
@@ -184,18 +202,25 @@ def test_build_report_task_runs_and_returns_counts(plugin, tmp_path, monkeypatch
 
     counts = plugin.build_report_task()
     assert "never_watched" in counts
-    del gw_mod  # imported only to document the module is loaded; unused otherwise
 
 
-def test_build_report_task_never_raises_and_redacts_the_log(plugin, monkeypatch,
-                                                            caplog):
+def test_build_report_task_logs_redacted_and_reraises_so_celery_can_retry(
+        plugin, monkeypatch, caplog):
+    """Task-10 leftover: returning {"error": True} on failure made Celery's
+    result backend record the run as SUCCESS (a return value is a return
+    value, whatever its contents), so a failed scheduled report could never
+    be retried. The fix logs the redacted error and RE-RAISES it -- Celery
+    sees a real failure -- while still never leaking credentials into the
+    log or the exception text."""
     def boom():
         raise RuntimeError("http://host/live/topsecretuser/topsecretpass/x")
 
     monkeypatch.setattr(plugin, "_load_settings", boom)
     with caplog.at_level(logging.ERROR):
-        plugin.build_report_task()          # must not raise
+        with pytest.raises(RuntimeError) as exc_info:
+            plugin.build_report_task()
     assert "topsecretpass" not in caplog.text
+    assert "topsecretpass" not in str(exc_info.value)
 
 
 # ---- C2: Plugin.stop() ------------------------------------------------------
@@ -354,16 +379,14 @@ def test_run_redacts_exception_text_in_the_catch_all(plugin, monkeypatch):
     assert "secretpass" not in result["message"]
 
 
-# ---- I2: _validate must redact both its own messages ------------------------
-
-def test_validate_settings_redacts_scheduling_failure_message(plugin, monkeypatch):
-    def boom(settings):
-        raise RuntimeError("http://host/live/schedcredsuser/schedcredspass/x")
-
-    monkeypatch.setattr(plugin, "sync_schedule", boom)
-    result = plugin.Plugin()._validate({})
-    assert "schedcredspass" not in result["message"]
-
+# ---- I2: _validate must redact its own messages -----------------------------
+#
+# NOTE: _validate used to call sync_schedule() itself and redact ITS failure
+# too (test_validate_settings_redacts_scheduling_failure_message, removed) --
+# dropped once sync_schedule was made run()'s single arming site (see the
+# I3 tests below), since _validate calling it again just armed the schedule
+# twice per click for no benefit and nothing about its failure is surfaced
+# from _validate anymore (run()'s own call site silently swallows it, I3).
 
 def test_validate_settings_redacts_regex_compile_error_message(plugin, monkeypatch):
     import re as re_mod
