@@ -85,6 +85,34 @@ def test_html_includes_the_tuned_never_qualified_section(rp, gw):
     assert "Tuned but never qualified" in html
 
 
+def test_html_never_watched_heading_matches_its_table_and_excludes_too_new(rp, gw):
+    """R2: the 'Never watched' heading count must equal the row count in the
+    table beneath it, and a too_new channel (needs more time, not action)
+    must never appear under that heading -- it gets its own section."""
+    stale = [gw.ChannelRow(id=i, uuid=f"s{i}", name=f"STALE{i}", group="US: Movies",
+                           auto_created=False, created_at=NOW - 90 * 86400,
+                           proxying=True) for i in range(2)]
+    fresh = [gw.ChannelRow(id=100 + i, uuid=f"f{i}", name=f"FRESH{i}", group="US: Movies",
+                          auto_created=False, created_at=NOW - 3 * 86400,
+                          proxying=True) for i in range(3)]
+    usage = {"channels": {}, "meta": {"stats_since": NOW - 40 * 86400, "coverage": {}}}
+    settings = dict(SETTINGS, unused_threshold_days=30)
+    built = rp.build_model(stale + fresh, usage, settings, NOW)
+    assert built["counts"]["never_watched"] == 2
+    assert built["counts"]["too_new"] == 3
+
+    html = rp.render_html(built)
+    never_heading = html.index("Never watched (2)")
+    too_new_heading = html.index("Too new to judge (3)")
+    assert never_heading < too_new_heading
+
+    never_section = html[never_heading:too_new_heading]
+    for i in range(3):
+        assert f">FRESH{i}<" not in never_section
+    for i in range(2):
+        assert never_section.count(f">STALE{i}<") == 1
+
+
 def test_csv_has_one_row_per_channel_with_a_reason(rp, gw):
     text = rp.render_csv(model(rp, gw, n=5, watched=2))
     rows = list(csv.DictReader(io.StringIO(text)))

@@ -319,6 +319,37 @@ def test_top_n_zero_is_respected_not_defaulted(rp, gw):
     assert model["least_used"] == []
 
 
+def test_malformed_meta_stats_since_does_not_crash(rp, gw):
+    """R1: meta.stats_since is untrusted too -- a corrupt value used to raise
+    ValueError from float(stats_since) in both this module and gates.evaluate()."""
+    usage = {"channels": {}, "meta": {"stats_since": "abc", "coverage": {}}}
+    model = rp.build_model(rows(gw, 3), usage, SETTINGS, NOW)
+    assert model["total_channels"] == 3
+    assert model["stats_since"] is None
+
+
+def test_malformed_meta_coverage_bucket_does_not_crash(rp, gw):
+    """R1: a corrupt coverage bucket used to raise TypeError out of
+    gates.coverage_fraction (None/str compared against a float threshold).
+    The bucket key must fall inside the window gates.evaluate() actually
+    scans (anchored to NOW), or coverage_fraction never looks it up."""
+    bad_key = _time.strftime("%Y-%m-%dT%H", _time.gmtime(NOW))
+    usage = {"channels": {}, "meta": {
+        "stats_since": NOW - 40 * 86400,
+        "coverage": {bad_key: {"ticks": None, "max_gap_s": "abc"}}}}
+    model = rp.build_model(rows(gw, 3), usage, SETTINGS, NOW)
+    assert model["total_channels"] == 3
+
+
+def test_top_n_negative_is_clamped_to_zero(rp, gw):
+    """R3: top_n=-1 must not silently become `used[:-1]` (dropping the last
+    entry) -- clamp to >= 0, distinct from the explicit top_n=0 case (M3)."""
+    settings = dict(SETTINGS, top_n=-1)
+    model = rp.build_model(rows(gw, 5), watched(5), settings, NOW)
+    assert model["most_used"] == []
+    assert model["least_used"] == []
+
+
 def test_negative_watch_count_is_not_bucketed_as_watched(rp, gw):
     """M5: a negative watch_count (corrupt data) must not be truthy-bucketed
     into `used` with negative hours."""

@@ -6,9 +6,10 @@ the default, expected state, not an error. That is the plugin's entire purpose.
 
 `usage.json` is UNTRUSTED FILE INPUT: storage.load() validates only that the top
 level is a dict, never per-record field types. `_sanitize_usage()` coerces every
-per-channel field once, at the top of build_model, so neither this module's own
-reads nor gates.evaluate() (which is not None/str-tolerant) can be crashed by a
-malformed record.
+per-channel field AND every `meta` field (`stats_since`, `coverage[*]`) once, at
+the top of build_model, so neither this module's own reads nor gates.evaluate()
+(which is not None/str-tolerant) can be crashed by a malformed record or a
+malformed meta block.
 
 `too_new` is a PEER of `never_watched` in `counts` and in the gate/webhook never-
 watched number, NOT a sub-count of it -- a fresh M3U import must not inflate the
@@ -63,15 +64,45 @@ def _coerce_timestamp(value):
         return None
 
 
+def _sanitize_coverage_bucket(bucket):
+    bucket = bucket or {}
+    return {
+        "ticks": _coerce_int(bucket.get("ticks")),
+        "max_gap_s": _coerce_float(bucket.get("max_gap_s")),
+    }
+
+
+def _sanitize_meta(meta):
+    """Coerce untrusted usage.json `meta` fields (R1, the other half of I4).
+
+    `meta.stats_since` feeds `float(stats_since)` both here and in
+    gates.evaluate(); `meta.coverage[*]` feeds gates.coverage_fraction()'s
+    numeric comparisons (`bucket.get("ticks") < needed`,
+    `bucket.get("max_gap_s") > client_gap_grace_s`). Neither tolerates
+    None/string garbage -- coerce at the same trust boundary as the
+    per-channel records, so a malformed meta block degrades instead of
+    raising.
+    """
+    meta = meta or {}
+    raw_coverage = meta.get("coverage") or {}
+    coverage = {key: _sanitize_coverage_bucket(bucket)
+                for key, bucket in raw_coverage.items()}
+    return {
+        "stats_since": _coerce_timestamp(meta.get("stats_since")),
+        "coverage": coverage,
+    }
+
+
 def _sanitize_usage(usage):
-    """Coerce untrusted usage.json record fields (I4).
+    """Coerce untrusted usage.json record + meta fields (I4, R1).
 
     storage.load() only validates that the top level is a dict; per-record
-    values (watch_count, watch_seconds, timestamps, ...) are never coerced and
-    can arrive as None, strings, or otherwise malformed. Every downstream
-    reader in this module -- and gates.evaluate(), which is not None/str-
-    tolerant -- assumes numeric fields are numeric. Coerce once, here, so a
-    corrupt record degrades to zeros/None instead of raising.
+    values (watch_count, watch_seconds, timestamps, ...) and `meta` fields
+    are never coerced and can arrive as None, strings, or otherwise
+    malformed. Every downstream reader in this module -- and gates.evaluate(),
+    which is not None/str-tolerant -- assumes numeric fields are numeric.
+    Coerce once, here, so a corrupt record or meta block degrades to
+    zeros/None instead of raising.
     """
     usage = usage or {}
     raw_channels = usage.get("channels") or {}
@@ -86,7 +117,7 @@ def _sanitize_usage(usage):
             "last_tuned": _coerce_timestamp(record.get("last_tuned")),
             "first_seen": _coerce_timestamp(record.get("first_seen")),
         }
-    return {"channels": channels, "meta": usage.get("meta") or {}}
+    return {"channels": channels, "meta": _sanitize_meta(usage.get("meta"))}
 
 
 def _setting_number(settings, key, default, cast):
@@ -130,7 +161,12 @@ def build_model(rows, usage, settings, now):
     the `too_new`-is-a-peer design. `group_rollup[*]["total"]` is the group's
     TRUE ORM channel count (every row in that group, including excluded/
     unobservable ones), not just the rows that landed in never/used/tuned_only
-    (M2) -- so it can exceed `["never"] + <watched in that group>`.
+    (M2) -- so it can exceed `["never"] + <watched in that group>`. (R4) A
+    group only gets a `rollup` bucket at all if at least one of its rows
+    landed in never/used/tuned_only -- a group whose entire membership is
+    excluded/unobservable is ABSENT from `group_rollup`. Consequently
+    `sum(g["total"] for g in group_rollup)` is NOT `total_channels` and must
+    never be used as a denominator; use `model["total_channels"]` directly.
 
     A channel whose stream profile is non-proxying ("unobservable") but that
     nonetheless carries real watch history (profile was changed to non-
@@ -142,7 +178,10 @@ def build_model(rows, usage, settings, now):
     meta = usage["meta"]
     exclusions = gateway.parse_exclusions(settings)
 
-    top_n = _setting_number(settings, "top_n", 20, int)
+    # R3: a negative top_n (e.g. -1) must not silently become `used[:-1]`
+    # (Python slice semantics would drop the LAST entry) -- clamp to >= 0.
+    # An explicit top_n=0 ("show nothing") passes through unchanged (M3).
+    top_n = max(0, _setting_number(settings, "top_n", 20, int))
     threshold_days = _setting_number(settings, "unused_threshold_days", 30, float)
 
     never, tuned_only, used, excluded, unobservable = [], [], [], [], []
@@ -370,10 +409,16 @@ def render_html(model):
     Content order is a product decision, not decoration (see Task 9 brief):
     1. Never watched leads the page (with a per-group rollup first, because
        the user acts by GROUP, not channel by channel).
-    2. "Tuned but never qualified" is its own section with an explanation --
+    2. "Too new to judge" is its own section, never merged into "Never
+       watched" (R2) -- `model["never_watched"]` carries BOTH reasons so the
+       CSV export sees every row, but a channel too young to fairly call
+       unused (Task 8's `too_new`) is not dead weight and must not read as
+       if it were: the "Never watched (N)" heading's N must equal the row
+       count of the table directly beneath it.
+    3. "Tuned but never qualified" is its own section with an explanation --
        these are almost certainly BROKEN channels, not unused ones.
-    3. A data-confidence header (tracking since / days / coverage%).
-    4. A loud banner when gate.ok is False, listing every alert.
+    4. A data-confidence header (tracking since / days / coverage%).
+    5. A loud banner when gate.ok is False, listing every alert.
     """
     gate = model["gate"]
     banner = ""
@@ -389,6 +434,12 @@ def render_html(model):
         for g in model["group_rollup"])
 
     counts = model["counts"]
+    # R2: model['never_watched'] carries BOTH never_watched and too_new rows
+    # (Task 8 keeps too_new inside the list so the CSV sees it); the heading
+    # over each table must match the table it actually renders, so split here
+    # rather than let the heading count and the table's row count diverge.
+    never_only = [e for e in model["never_watched"] if e["reason"] != "too_new"]
+    too_new_only = [e for e in model["never_watched"] if e["reason"] == "too_new"]
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -417,7 +468,12 @@ def render_html(model):
     <tbody>{rollup_rows}</tbody>
   </table></div>
 </div>
-{_table(model['never_watched'])}
+{_table(never_only)}
+
+<h2>Too new to judge ({counts['too_new']})</h2>
+<p class="sub">Created less than the unused threshold ago -- not enough time
+has passed to fairly call these unused. Not dead weight; just wait.</p>
+{_table(too_new_only)}
 
 <h2>Tuned but never qualified ({counts['tuned_never_qualified']})</h2>
 <p class="sub">You tried to watch these and gave up quickly. They are probably
