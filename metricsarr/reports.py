@@ -20,6 +20,10 @@ Task 9 can render them there. `counts` sums to `total_channels`:
 """
 from __future__ import annotations
 
+import csv
+import html as html_mod
+import io
+import os
 import time
 
 try:
@@ -249,3 +253,249 @@ def summary_for_webhook(model, report_url):
         "report_url": report_url,
         "alerts": model["gate"]["alerts"],
     }
+
+
+# --------------------------------------------------------------------------
+# Renderers (Task 9).
+#
+# The report is written to nginx's already-unauthenticated static route
+# (/data/logos/** is served by Dispatcharr's nginx with no auth and correct
+# MIME types -- verified live) so it is one click away at
+# http://<host>:9191/logos/metricsarr/report.html, instead of trapped inside
+# a named Docker volume with no Windows path. The page must be fully
+# self-contained (inline CSS/JS, no external assets): it is served from a
+# plain static route with no build step and must render on a TV browser
+# with no network access to a CDN.
+#
+# Credential safety: only allowlisted per-channel fields are ever rendered
+# (name, uuid, group, counts, timestamps) -- never Stream.url or anything
+# that could carry provider credentials, which live in stream URLs in this
+# deployment.
+# --------------------------------------------------------------------------
+
+REPORT_HTML = "report.html"
+REPORT_URL_PATH = "/logos/metricsarr/report.html"
+
+_CSS = """
+:root { color-scheme: light dark; }
+body { font: 15px/1.5 system-ui, -apple-system, Segoe UI, sans-serif;
+       margin: 0; padding: 24px; background: #fbfbfd; color: #16181d; }
+@media (prefers-color-scheme: dark) {
+  body { background: #14161a; color: #e8eaed; }
+  th { background: #1e2127 !important; }
+  tr:nth-child(even) td { background: #191c21; }
+  .card { background: #1a1d22 !important; border-color: #2a2e35 !important; }
+}
+h1 { font-size: 22px; margin: 0 0 4px; }
+h2 { font-size: 17px; margin: 32px 0 8px; }
+.sub { opacity: .7; font-size: 13px; margin-bottom: 20px; }
+.card { background: #fff; border: 1px solid #e3e5ea; border-radius: 10px;
+        padding: 14px 16px; margin-bottom: 18px; }
+.banner { background: #fff4e5; border: 1px solid #ffb84d; border-radius: 10px;
+          padding: 12px 16px; margin-bottom: 18px; color: #7a4b00; }
+.banner ul { margin: 6px 0 0 18px; padding: 0; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+.scroll { overflow-x: auto; }
+th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #e6e8ec; }
+th { background: #f2f3f6; position: sticky; top: 0; cursor: pointer; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.pill { font-size: 12px; padding: 1px 7px; border-radius: 999px;
+        background: #eceef2; }
+"""
+
+# Inline, no external assets: click a header to sort its column ascending,
+# click again for descending. Works with no network access (TV browsers).
+_SORT_JS = """
+document.querySelectorAll('table').forEach(function (table) {
+  table.querySelectorAll('th').forEach(function (th, idx) {
+    th.addEventListener('click', function () {
+      var body = table.tBodies[0];
+      var rows = Array.prototype.slice.call(body.rows);
+      var asc = !(th.dataset.asc === 'true');
+      th.dataset.asc = asc;
+      rows.sort(function (a, b) {
+        var x = a.cells[idx].dataset.v || a.cells[idx].textContent;
+        var y = b.cells[idx].dataset.v || b.cells[idx].textContent;
+        var nx = parseFloat(x), ny = parseFloat(y);
+        if (!isNaN(nx) && !isNaN(ny)) { return asc ? nx - ny : ny - nx; }
+        return asc ? String(x).localeCompare(y) : String(y).localeCompare(x);
+      });
+      rows.forEach(function (r) { body.appendChild(r); });
+    });
+  });
+});
+"""
+
+# Allowlisted per-channel columns only -- see the credential-safety note above.
+_COLUMNS = [("name", "Channel"), ("group", "Group"), ("watch_count", "Watches"),
+            ("hours", "Hours"), ("tune_count", "Tunes"), ("age_days", "Age (d)"),
+            ("reason", "Reason")]
+
+
+def _esc(value):
+    return html_mod.escape("" if value is None else str(value))
+
+
+def _fmt_local(ts):
+    if not ts:
+        return "n/a"
+    try:
+        return time.strftime("%Y-%m-%d %H:%M %Z", time.localtime(float(ts)))
+    except (TypeError, ValueError, OSError):
+        return "n/a"
+
+
+def _table(entries):
+    if not entries:
+        return "<p class='sub'>None.</p>"
+    head = "".join(f"<th>{_esc(label)}</th>" for _, label in _COLUMNS)
+    body = []
+    for entry in entries:
+        cells = []
+        for key, _ in _COLUMNS:
+            value = entry.get(key)
+            numeric = isinstance(value, (int, float))
+            cls = " class='num'" if numeric else ""
+            # name/group/reason are provider- or user-controlled strings and
+            # get HTML-escaped like everything else routed through _esc().
+            cells.append(f"<td{cls} data-v='{_esc(value)}'>{_esc(value)}</td>")
+        body.append(f"<tr>{''.join(cells)}</tr>")
+    return (f"<div class='scroll'><table><thead><tr>{head}</tr></thead>"
+            f"<tbody>{''.join(body)}</tbody></table></div>")
+
+
+def render_html(model):
+    """A complete, self-contained HTML page -- see the module-level note.
+
+    Content order is a product decision, not decoration (see Task 9 brief):
+    1. Never watched leads the page (with a per-group rollup first, because
+       the user acts by GROUP, not channel by channel).
+    2. "Tuned but never qualified" is its own section with an explanation --
+       these are almost certainly BROKEN channels, not unused ones.
+    3. A data-confidence header (tracking since / days / coverage%).
+    4. A loud banner when gate.ok is False, listing every alert.
+    """
+    gate = model["gate"]
+    banner = ""
+    if not gate["ok"]:
+        items = "".join(f"<li>{_esc(a)}</li>" for a in gate["alerts"])
+        banner = (f"<div class='banner'><b>These numbers are not trustworthy yet"
+                  f" -- the collector may have been blind.</b><ul>{items}</ul></div>")
+
+    rollup_rows = "".join(
+        f"<tr><td>{_esc(g['group'])}</td>"
+        f"<td class='num' data-v='{g['never']}'>{g['never']}</td>"
+        f"<td class='num' data-v='{g['total']}'>{g['total']}</td></tr>"
+        for g in model["group_rollup"])
+
+    counts = model["counts"]
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Metricsarr - channel usage</title>
+<style>{_CSS}</style>
+</head>
+<body>
+<h1>Metricsarr - channel usage</h1>
+<div class="sub">
+  Tracking since {_esc(_fmt_local(model['stats_since']))} ·
+  {_esc(model['tracked_days'])} days ·
+  coverage {model['coverage']:.1%} ·
+  {model['total_channels']} channels ·
+  <span class="pill">{counts['never_watched']} never watched</span>
+  <span class="pill">{counts['watched']} watched</span>
+  <span class="pill">{counts['excluded']} excluded</span>
+</div>
+{banner}
+
+<h2>Never watched ({counts['never_watched']})</h2>
+<div class="card">
+  <div class="scroll"><table>
+    <thead><tr><th>Group</th><th>Never watched</th><th>Total</th></tr></thead>
+    <tbody>{rollup_rows}</tbody>
+  </table></div>
+</div>
+{_table(model['never_watched'])}
+
+<h2>Tuned but never qualified ({counts['tuned_never_qualified']})</h2>
+<p class="sub">You tried to watch these and gave up quickly. They are probably
+<b>broken</b> (dead source, black screen, provider kick), not unused.</p>
+{_table(model['tuned_never_qualified'])}
+
+<h2>Least used</h2>
+{_table(model['least_used'])}
+
+<h2>Most used</h2>
+{_table(model['most_used'])}
+
+<h2>Excluded ({counts['excluded']}) and unobservable ({counts['unobservable']})</h2>
+{_table(model['excluded'] + model['unobservable'])}
+
+<script>{_SORT_JS}</script>
+</body>
+</html>
+"""
+
+
+def render_csv(model):
+    """One row per channel across every section, deduplicated by uuid."""
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    writer.writerow([key for key, _ in _COLUMNS] + ["uuid", "last_watched",
+                                                    "last_tuned"])
+    sections = (model["never_watched"] + model["tuned_never_qualified"]
+                + model["most_used"] + model["least_used"] + model["excluded"]
+                + model["unobservable"])
+    seen = set()
+    for entry in sections:
+        if entry["uuid"] in seen:
+            continue
+        seen.add(entry["uuid"])
+        writer.writerow([entry.get(key) for key, _ in _COLUMNS]
+                        + [entry["uuid"], entry.get("last_watched"),
+                           entry.get("last_tuned")])
+    return buffer.getvalue()
+
+
+def _atomic_write(path, text):
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(text)
+    os.replace(tmp, path)          # same directory: cross-device rename fails
+
+
+def write_report(model, report_dir, csv_dir, now):
+    """Write the HTML report + CSV. Never raises (M-global: I/O must degrade).
+
+    The HTML report is the product; the CSV is a convenience export to a real
+    bind mount. If the CSV directory is unwritable, the HTML write must still
+    succeed and be returned -- only the CSV path degrades to None with an
+    "error" key explaining why.
+    """
+    stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(now))
+    out = {"html_path": None, "csv_path": None, "url": REPORT_URL_PATH}
+
+    try:
+        os.makedirs(report_dir, exist_ok=True)
+        html = render_html(model)
+        live = os.path.join(report_dir, REPORT_HTML)
+        _atomic_write(live, html)
+        # A stable filename always holds the latest run; archives sit alongside.
+        _atomic_write(os.path.join(report_dir, f"report-{stamp}.html"), html)
+        out["html_path"] = live
+    except OSError as exc:
+        out["error"] = f"html write failed: {exc}"
+        return out
+
+    try:
+        os.makedirs(csv_dir, exist_ok=True)
+        csv_path = os.path.join(csv_dir, f"report-{stamp}.csv")
+        _atomic_write(csv_path, render_csv(model))
+        out["csv_path"] = csv_path
+    except OSError as exc:
+        # The HTML report is the product; a failed CSV must degrade, not raise.
+        out["error"] = f"csv write failed: {exc}"
+
+    return out
