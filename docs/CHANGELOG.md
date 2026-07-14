@@ -1,6 +1,24 @@
 # Changelog
 
-## Unreleased
+## v1.26.1941407 — Phase 1 (July 14, 2026)
+
+First release. Merged to `master` and **deployed + verified live** on the
+production Dispatcharr container (0.27.2) on 2026-07-14: collector elected
+leader and renews its lease, `usage.json` written with `stats_since` and a
+clean self-health block (zero Redis errors), `build_report` runs end-to-end,
+the report is reachable at `http://<host>:9191/logos/metricsarr/report.html`,
+the Beat row `metricsarr_build_report` is registered, and the live channel
+count was byte-for-byte unchanged across the deploy (read-only confirmed on
+the real box, not just by the AST guard). 331 tests. Not yet released to the
+Dispatcharr Hub (no GitHub remote / tag / Hub PR).
+
+The **Fixed** and **Improved** sections below are pre-release hardening driven
+by adversarial per-task and whole-branch review during development — not
+changes to previously-shipped behavior. They are recorded because several were
+defects in the design/plan (a clock-jump test that forced watch-qualification
+onto raw wall-clock time and silently discarded genuine watches; a `shutdown()`
+path that let a non-leader wipe `usage.json`; a never-watched ceiling that was
+mathematically unreachable on a real lineup), and the history is worth keeping.
 
 ### Fixed
 
