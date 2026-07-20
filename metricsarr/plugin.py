@@ -34,7 +34,7 @@ except ImportError:                     # standalone (non-package) import path
 
 _LOGGER = logging.getLogger(__name__)
 
-PLUGIN_VERSION = "1.26.1941407"
+PLUGIN_VERSION = "1.26.2011347"
 
 DATA_DIR = "/data/metricsarr"           # plugin state (named volume)
 REPORT_DIR = "/data/logos/metricsarr"   # nginx serves /data/logos/** at /logos/**
@@ -336,7 +336,21 @@ def _build_report(settings):
     # of a bare path Discord renders as inert text.
     url = reports.full_report_url(thresholds.get("report_base_url"),
                                   written.get("url") or reports.REPORT_URL_PATH)
-    result = {"status": "ok", "message": message + f" Report: {url}",
+
+    # bug-078: the counts above are computed BEFORE the write, and write_report
+    # never raises (it degrades, by design), so a hardcoded "ok" here reported a
+    # perfectly healthy-looking summary for a run that published NOTHING -- the
+    # live symptom when /data/logos/metricsarr was root-owned and the Celery
+    # worker runs as `dispatch`. The only evidence was report.html's unmoved
+    # mtime. Status must reflect the PUBLISH, not the computation.
+    #
+    # write_report returns early on an HTML failure, so a falsy html_path is the
+    # reliable "nothing was published" signal. A CSV-only failure stays a
+    # degraded success on purpose: the nginx-served HTML report is the product,
+    # the CSV is a convenience export to a bind mount.
+    published = bool(written.get("html_path"))
+    result = {"status": "ok" if published else "error",
+              "message": message + f" Report: {url}",
               "file": written.get("html_path") or url}
     if written.get("error"):
         result["message"] += f" ({written['error']})"
@@ -386,14 +400,32 @@ def build_report_task():
     either: Python still sets `__context__` to the exception being handled
     (implicit chaining), which the traceback formatter also renders unless
     told not to. `from None` is the only form that suppresses BOTH.
+
+    bug-078 is the SAME shape one layer down, and needed its own fix: a failed
+    WRITE is never an exception at all (write_report degrades by design), and
+    the counts are computed before the write, so the first-ever scheduled run
+    returned SUCCESS with a full healthy-looking payload while publishing
+    nothing -- /data/logos/metricsarr was root-owned and this worker runs as
+    `dispatch`. A green Celery result does not prove a report exists; only a
+    non-empty html_path does. Hence the explicit raise below.
     """
     from django.db import close_old_connections
 
     try:
         close_old_connections()
         settings = _load_settings()
-        _, model, _ = _build_report(settings)
+        _, model, written = _build_report(settings)
+        if not written.get("html_path"):
+            # bug-078: nothing was published, so returning counts here would
+            # record SUCCESS for a run that wrote no files. Raised INSIDE the
+            # try so the except block below redacts it and re-raises `from
+            # None`, keeping both guarantees intact.
+            raise RuntimeError(
+                f"report not published: {written.get('error') or 'unknown write failure'}")
         if (settings.get("webhook_url") or "").strip():
+            # Only after a confirmed publish -- the webhook summary links to the
+            # report, and pointing subscribers at a file that was never written
+            # is worse than staying silent.
             _send_webhook(settings, model)
         return model["counts"]
     except Exception as exc:

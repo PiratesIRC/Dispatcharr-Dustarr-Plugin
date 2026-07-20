@@ -233,6 +233,66 @@ def test_build_report_task_runs_and_returns_counts(plugin, tmp_path, monkeypatch
     assert "never_watched" in counts
 
 
+# ---- bug-078: a green result must never outlive a failed publish -----------
+#
+# The report's counts are computed BEFORE the write, and write_report never
+# raises (it degrades, by design). So when /data/logos/metricsarr was owned by
+# root and the Celery worker runs as `dispatch`, the scheduled report returned
+# SUCCESS with a full set of counts while publishing NOTHING -- the failure was
+# visible only by noticing report.html's mtime never moved. Same shape as the
+# Task-10 leftover above (a return value is a return value), one layer down:
+# here nothing raises in the first place.
+
+def _fail_html_writes(plugin, monkeypatch, tmp_path, only_csv=False):
+    """Point the plugin at tmp dirs and make the real _atomic_write fail the
+    way an unwritable root-owned directory does (PermissionError IS an OSError,
+    so this takes write_report's genuine degradation path)."""
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(plugin, "REPORT_DIR", str(tmp_path / "logos"))
+    monkeypatch.setattr(plugin, "CSV_DIR", str(tmp_path / "config"))
+    monkeypatch.setattr(plugin, "_gateway", _fake_gateway_with_no_channels)
+
+    real = plugin.reports._atomic_write
+
+    def guarded(path, text):
+        if path.endswith(".csv") == only_csv:
+            raise PermissionError(13, "Permission denied", path)
+        return real(path, text)
+
+    monkeypatch.setattr(plugin.reports, "_atomic_write", guarded)
+
+
+def test_build_report_action_reports_error_when_the_html_write_fails(
+        plugin, tmp_path, monkeypatch):
+    _fail_html_writes(plugin, monkeypatch, tmp_path)
+    result = plugin.Plugin().run("build_report", {}, {"settings": {}})
+    assert result["status"] == "error"
+    assert "Permission denied" in result["message"]
+
+
+def test_build_report_task_raises_when_the_html_write_fails(
+        plugin, tmp_path, monkeypatch):
+    _fail_html_writes(plugin, monkeypatch, tmp_path)
+    monkeypatch.setattr(plugin, "_load_settings", lambda: {})
+    with pytest.raises(RuntimeError) as exc_info:
+        plugin.build_report_task()
+    assert "Permission denied" in str(exc_info.value)
+
+
+def test_build_report_still_succeeds_when_only_the_csv_write_fails(
+        plugin, tmp_path, monkeypatch):
+    """The HTML report served by nginx is the product; the CSV is a convenience
+    export to a bind mount. A CSV-only failure must stay a degraded success --
+    fixing bug-078 must not turn that deliberate degradation into a hard fail."""
+    _fail_html_writes(plugin, monkeypatch, tmp_path, only_csv=True)
+    monkeypatch.setattr(plugin, "_load_settings", lambda: {})
+
+    result = plugin.Plugin().run("build_report", {}, {"settings": {}})
+    assert result["status"] == "ok"
+    assert "csv write failed" in result["message"]
+    assert plugin.build_report_task()["never_watched"] is not None
+
+
 def test_build_report_task_logs_redacted_and_reraises_so_celery_can_retry(
         plugin, monkeypatch, caplog):
     """Task-10 leftover: returning {"error": True} on failure made Celery's

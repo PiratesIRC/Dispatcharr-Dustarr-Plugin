@@ -1,5 +1,42 @@
 # Changelog
 
+## v1.26.2011347 (July 20, 2026)
+
+Deployed + verified live on Dispatcharr 0.28.0 on 2026-07-20. 334 tests.
+
+### Fixed
+
+- **A green report run no longer outlives a failed publish (bug-078).** The
+  report's counts are computed *before* the write, and `write_report()` never
+  raises (it degrades by design, returning `html_path=None` plus an error
+  string) — but neither caller inspected that signal. `_build_report()`
+  hardcoded `status="ok"` and merely appended the error in parentheses, and
+  `build_report_task()` discarded the write result entirely and returned the
+  counts, which Celery records as SUCCESS like any other return value. The
+  first-ever scheduled run hit exactly this: `/data/logos/metricsarr` and
+  `/config/metricsarr` had been created `root:root` by an earlier `docker exec`
+  (which defaults to root) while the Celery worker runs as `dispatch`, so every
+  write raised `PermissionError` and the task reported a full, healthy-looking
+  set of counts while publishing nothing. The only evidence was `report.html`'s
+  mtime never moving.
+
+  The action's status now derives from whether the HTML was actually published,
+  and the scheduled task raises when it wasn't — inside the existing handler, so
+  the message is still redacted and re-raised `from None`, preserving both the
+  credential guarantee and Celery's failure/retry semantics. The webhook now
+  fires only after a confirmed publish, since its summary links to the report.
+
+  A CSV-only failure deliberately remains a degraded success: the
+  nginx-served HTML report is the product, the CSV is a convenience export to a
+  bind mount. A regression test pins that asymmetry so a future tightening
+  can't quietly turn it into a hard failure.
+
+  This is the same shape as the Task-10 leftover fixed in v1.26.1941407 (a
+  returned error value read as SUCCESS), one layer down: there an exception was
+  swallowed into a return value, here no exception was ever created. **The
+  general rule: a green Celery result proves the task returned, not that it
+  accomplished anything — assert on the artifact.**
+
 ## v1.26.1941407 — Phase 1 (July 14, 2026)
 
 First release. Merged to `master` and **deployed + verified live** on the
