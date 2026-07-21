@@ -611,6 +611,25 @@ def _atomic_write(path, text):
         raise
 
 
+ARCHIVE_KEEP = 8
+
+
+def _prune_archives(dirpath, prefix, suffix, keep=ARCHIVE_KEEP):
+    """Bound the report-<stamp>.* archive stream (unbounded since Phase 1;
+    spec F3). Filename sort IS chronological (stamp is %Y%m%d-%H%M%S).
+    Never raises; never matches the live report.html (prefix 'report-')."""
+    try:
+        names = sorted(n for n in os.listdir(dirpath)
+                       if n.startswith(prefix) and n.endswith(suffix))
+    except OSError:
+        return
+    for name in names[:-keep] if keep > 0 else names:
+        try:
+            os.remove(os.path.join(dirpath, name))
+        except OSError:
+            pass
+
+
 def write_report(model, report_dir, csv_dir, now):
     """Write the HTML report + CSV. Never raises (M-global: I/O must degrade).
 
@@ -620,7 +639,8 @@ def write_report(model, report_dir, csv_dir, now):
     "error" key explaining why.
     """
     stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(now))
-    out = {"html_path": None, "csv_path": None, "url": REPORT_URL_PATH}
+    out = {"html_path": None, "csv_path": None, "archive_path": None,
+           "url": REPORT_URL_PATH}
 
     try:
         os.makedirs(report_dir, exist_ok=True)
@@ -628,8 +648,11 @@ def write_report(model, report_dir, csv_dir, now):
         live = os.path.join(report_dir, REPORT_HTML)
         _atomic_write(live, html)
         # A stable filename always holds the latest run; archives sit alongside.
-        _atomic_write(os.path.join(report_dir, f"report-{stamp}.html"), html)
+        archive_path = os.path.join(report_dir, f"report-{stamp}.html")
+        _atomic_write(archive_path, html)
         out["html_path"] = live
+        out["archive_path"] = archive_path
+        _prune_archives(report_dir, "report-", ".html")
     except OSError as exc:
         out["error"] = f"html write failed: {exc}"
         return out
@@ -639,6 +662,7 @@ def write_report(model, report_dir, csv_dir, now):
         csv_path = os.path.join(csv_dir, f"report-{stamp}.csv")
         _atomic_write(csv_path, render_csv(model))
         out["csv_path"] = csv_path
+        _prune_archives(csv_dir, "report-", ".csv")
     except OSError as exc:
         # The HTML report is the product; a failed CSV must degrade, not raise.
         out["error"] = f"csv write failed: {exc}"
