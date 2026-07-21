@@ -96,7 +96,7 @@ def _load_from_path(module_name, file_name):
 
 
 def load_pure(name):
-    """Load a stdlib-only module (sessionizer/storage/collector/gates/webhook)."""
+    """Load a stdlib-only module (sessionizer/storage/collector/gates/redaction)."""
     key = f"{_PKG}_{name}"
     if key not in sys.modules:
         _load_from_path(key, f"{name}.py")
@@ -111,7 +111,8 @@ def load_plugin():
         pkg.__path__ = [str(PLUGIN_DIR)]
         sys.modules[_PKG] = pkg
     for mod in ("sessionizer", "storage", "collector", "gates", "gateway",
-                "webhook", "reports", "plugin"):
+                "redaction", "reports", "notify_client", "notify_report",
+                "plugin"):
         key = f"{_PKG}.{mod}"
         if key not in sys.modules and (PLUGIN_DIR / f"{mod}.py").exists():
             _load_from_path(key, f"{mod}.py")

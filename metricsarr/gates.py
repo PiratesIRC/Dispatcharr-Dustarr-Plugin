@@ -151,6 +151,14 @@ def evaluate(usage, rows_total, never_watched, now, thresholds, judged_total):
     ceiling structurally unreachable on a real lineup (see the module
     docstring). `reports.build_model` is the sole real caller and always has
     this count on hand.
+
+    The returned dict also carries `immature` (F1): whether the dataset is
+    still younger than `unused_threshold_days`, computed from the SAME
+    un-rounded `age_days` used for the warmup alert above. Callers deciding
+    whether a not-ok gate should page (notify_report.sensor_blind) must read
+    THIS field rather than re-deriving maturity from a rounded age -- that
+    rounding is exactly the seam that let a healthy, still-warming-up dataset
+    fire a false critical.
     """
     alerts = []
     usage = usage or {}
@@ -170,6 +178,13 @@ def evaluate(usage, rows_total, never_watched, now, thresholds, judged_total):
         if age_days < window_days:
             alerts.append(
                 f"only {int(age_days)} days of data (need {int(window_days)})")
+
+    # F1: computed from the SAME un-rounded age_days used for the alert above,
+    # not from a rounded `tracked_days` a caller might store -- notify_report's
+    # sensor_blind() used to compare against round(age_days, 1), which rounds
+    # 29.96 up to 30.0 and pages on a still-immature dataset. Callers must
+    # read maturity from THIS field, never re-derive it from a rounded age.
+    immature = (not stats_since) or age_days < window_days
 
     coverage = coverage_fraction(
         meta.get("coverage"), now,
@@ -214,7 +229,8 @@ def evaluate(usage, rows_total, never_watched, now, thresholds, judged_total):
                           f"channels exceeds the {ceiling:.0%} ceiling - this "
                           f"is a bug report, not a policy")
 
-    return {"ok": not alerts, "alerts": alerts, "coverage": coverage}
+    return {"ok": not alerts, "alerts": alerts, "coverage": coverage,
+            "immature": immature}
 
 
 def unobservable_alert(unobservable, judged_total):

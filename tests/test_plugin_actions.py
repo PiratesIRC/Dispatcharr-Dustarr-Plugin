@@ -1,4 +1,5 @@
 import logging
+import os
 import sys
 import threading
 import time
@@ -56,19 +57,60 @@ def test_coerce_settings_keeps_poll_interval_under_the_metadata_ttl(plugin):
     assert out["poll_interval_s"] <= 25
 
 
+# ---- Task 6: notify_enabled must coerce to a REAL bool ----------------------
+#
+# Settings arrive unvalidated (a form post or a raw API write), and
+# bool("false") is True in plain Python -- any non-empty string is truthy.
+# A later task's caller-guard depends on
+# `coerce_settings(settings).get("notify_enabled")` being a genuine bool, so a
+# string "false" silently turning the toggle back ON would be exactly this
+# codebase's signature failure mode (bug-139's shape, one field over).
+
+def test_coerce_settings_notify_enabled_defaults_to_false(plugin):
+    out = plugin.coerce_settings({})
+    assert out["notify_enabled"] is False
+
+
+def test_coerce_settings_notify_enabled_accepts_a_real_bool(plugin):
+    assert plugin.coerce_settings({"notify_enabled": True})["notify_enabled"] is True
+    assert plugin.coerce_settings({"notify_enabled": False})["notify_enabled"] is False
+
+
+def test_coerce_settings_notify_enabled_string_false_is_false(plugin):
+    """The trap: bool("false") is True. A form/API value of the literal
+    string "false" must still resolve to a real False, not be coerced to
+    truthy-because-non-empty."""
+    for falsy in ("false", "False", "FALSE", "0", "no", ""):
+        out = plugin.coerce_settings({"notify_enabled": falsy})
+        assert out["notify_enabled"] is False, falsy
+
+
+def test_coerce_settings_notify_enabled_string_true_is_true(plugin):
+    for truthy in ("true", "True", "TRUE", "1", "yes"):
+        out = plugin.coerce_settings({"notify_enabled": truthy})
+        assert out["notify_enabled"] is True, truthy
+
+
+def test_coerce_settings_boolean_fields_are_always_a_real_bool_type(plugin):
+    """Not just truthy/falsy -- `is True`/`is False` must hold, since a later
+    task's gate does `if not settings.get("notify_enabled"): return False`
+    and a non-bool truthy/falsy value would still work by luck. Pin the type
+    itself so a future refactor can't quietly reintroduce a stringly-typed
+    value that merely happens to behave right today."""
+    out = plugin.coerce_settings({"notify_enabled": "true",
+                                  "exclude_auto_created": "false"})
+    assert type(out["notify_enabled"]) is bool
+    assert type(out["exclude_auto_created"]) is bool
+
+
 def test_fields_include_every_setting_the_code_reads(plugin):
     ids = {f["id"] for f in plugin.FIELDS}
     required = {"poll_interval_s", "min_watch_seconds", "client_gap_grace_s",
                 "merge_gap_s", "top_n", "never_watched_ceiling",
                 "unused_threshold_days", "exclude_auto_created", "exclude_groups",
-                "exclude_name_regex", "webhook_url", "webhook_format",
+                "exclude_name_regex", "notify_enabled", "report_base_url",
                 "report_schedule"}
     assert required <= ids
-
-
-def test_webhook_url_field_is_masked(plugin):
-    field = next(f for f in plugin.FIELDS if f["id"] == "webhook_url")
-    assert field.get("input_type") == "password"
 
 
 def test_select_fields_use_string_option_values(plugin):
@@ -187,22 +229,9 @@ def test_show_summary_uses_the_gateway_clock_not_wall_clock(plugin, tmp_path,
     assert "10.0 days" in result["message"]
 
 
-def test_send_webhook_now_errors_without_a_url(plugin, tmp_path, monkeypatch):
-    # send_webhook_now runs _build_report() first (to build the summary),
-    # which writes real files via REPORT_DIR/CSV_DIR unless patched -- without
-    # this, the suite was writing to C:\data\logos\metricsarr and
-    # C:\config\metricsarr on the host (FIX 3).
-    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
-    monkeypatch.setattr(plugin, "REPORT_DIR", str(tmp_path / "logos"))
-    monkeypatch.setattr(plugin, "CSV_DIR", str(tmp_path / "config"))
-    result = plugin.Plugin().run("send_webhook_now", {}, {"settings": {}})
-    assert result["status"] == "error"
-    assert "webhook" in result["message"].lower()
-
-
 def test_actions_expose_the_expected_ids(plugin):
     ids = {a["id"] for a in plugin.ACTIONS}
-    assert {"build_report", "show_summary", "send_webhook_now",
+    assert {"build_report", "show_summary",
             "validate_settings"} <= ids
 
 
@@ -672,11 +701,6 @@ def test_coerce_settings_falls_back_to_default_for_invalid_report_schedule(plugi
     assert out["report_schedule"] == "weekly"       # field default
 
 
-def test_coerce_settings_falls_back_to_default_for_invalid_webhook_format(plugin):
-    out = plugin.coerce_settings({"webhook_format": "xml"})
-    assert out["webhook_format"] == "discord"        # field default
-
-
 def test_coerce_settings_keeps_a_valid_select_value(plugin):
     out = plugin.coerce_settings({"report_schedule": "daily"})
     assert out["report_schedule"] == "daily"
@@ -720,7 +744,7 @@ def test_coerce_settings_falls_back_to_default_on_negative_infinity(plugin):
     assert out["poll_interval_s"] == 15
 
 
-# ---- I4 (this fix wave): report_base_url turns the webhook link real -------
+# ---- I4 (this fix wave): report_base_url turns the report link real -------
 #
 # Not to be confused with the "I4" label above (select-value validation) --
 # that was a prior fix wave's finding, kept for its own history.
@@ -767,49 +791,6 @@ def test_build_report_message_uses_the_full_url_when_base_is_set(plugin, tmp_pat
     assert expected in result["message"]
 
 
-def test_send_webhook_now_uses_the_full_report_url_when_base_is_set(plugin, tmp_path,
-                                                                    monkeypatch):
-    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setattr(plugin, "REPORT_DIR", str(tmp_path / "logos"))
-    monkeypatch.setattr(plugin, "CSV_DIR", str(tmp_path / "config"))
-    monkeypatch.setattr(plugin, "_gateway", _fake_gateway_with_no_channels)
-
-    captured = {}
-
-    def fake_fire(url, summary, fmt, version, **kw):
-        captured["summary"] = summary
-        return {"status": "ok", "message": "sent"}
-
-    monkeypatch.setattr(plugin.webhook, "fire", fake_fire)
-
-    plugin.Plugin().run(
-        "send_webhook_now", {},
-        {"settings": {"webhook_url": "http://discord.example/hook",
-                      "report_base_url": "http://host:9191"}})
-    assert (captured["summary"]["report_url"]
-            == "http://host:9191" + plugin.reports.REPORT_URL_PATH)
-
-
-def test_send_webhook_now_uses_the_bare_path_when_base_url_is_unset(plugin, tmp_path,
-                                                                    monkeypatch):
-    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setattr(plugin, "REPORT_DIR", str(tmp_path / "logos"))
-    monkeypatch.setattr(plugin, "CSV_DIR", str(tmp_path / "config"))
-    monkeypatch.setattr(plugin, "_gateway", _fake_gateway_with_no_channels)
-
-    captured = {}
-
-    def fake_fire(url, summary, fmt, version, **kw):
-        captured["summary"] = summary
-        return {"status": "ok", "message": "sent"}
-
-    monkeypatch.setattr(plugin.webhook, "fire", fake_fire)
-
-    plugin.Plugin().run("send_webhook_now", {},
-                        {"settings": {"webhook_url": "http://discord.example/hook"}})
-    assert captured["summary"]["report_url"] == plugin.reports.REPORT_URL_PATH
-
-
 # ---- I5: the collector loop has NO observability on an escaping exception --
 
 def test_collector_loop_logs_on_a_persistent_failure(plugin, monkeypatch, caplog):
@@ -836,3 +817,194 @@ def test_collector_loop_logs_on_a_persistent_failure(plugin, monkeypatch, caplog
 
 
 # ---- I7 is covered in tests/test_no_mutations.py, not here ------------------
+
+
+# ---- Task 7: wire the Newsflasharr emits into build_report_task ------------
+#
+# _emit_notifications is called from build_report_task ONLY -- the interactive
+# build_report action deliberately does not emit (a single writer for the
+# honesty-gate state, one report per scheduled run rather than one per click).
+# It must never raise, must respect the notify_enabled toggle, and must only
+# ever run after a CONFIRMED publish (bug-078's lesson one layer up: a report
+# that failed to write must not still fire a notification about it).
+
+class _FakeNotifyClient:
+    """Stand-in for the vendored notify_client module -- exposes just the one
+    attribute (`notify`) that _notify_client()'s caller reaches for."""
+
+    def __init__(self, calls, raise_exc=None):
+        self._calls = calls
+        self._raise_exc = raise_exc
+
+    def notify(self, **kwargs):
+        if self._raise_exc is not None:
+            raise self._raise_exc
+        self._calls.append(kwargs)
+        return True
+
+
+def _minimal_model(ok, tracked_days, alerts=None, coverage=0.95,
+                   total_channels=1, immature=False):
+    """A hand-built report `model` dict carrying every key render_html/
+    write_report/summary_for_notify touch, so reports.build_model can be
+    monkeypatched wholesale to control gate.ok/tracked_days directly instead
+    of reverse-engineering real usage.json + ORM rows to hit gates.evaluate's
+    exact branches.
+
+    `immature` mirrors gates.evaluate()'s F1 field directly (default False:
+    every call site here uses tracked_days=45, a mature dataset) -- kept as
+    an explicit gate key rather than derived from tracked_days so this
+    helper can't reintroduce the rounding seam notify_report.sensor_blind
+    used to have.
+    """
+    return {
+        "generated_at": NOW,
+        "generated_at_local": "2023-11-14 00:00 UTC",
+        "stats_since": NOW - tracked_days * 86400,
+        "tracked_days": tracked_days,
+        "coverage": coverage,
+        "total_channels": total_channels,
+        "never_watched": [],
+        "tuned_never_qualified": [],
+        "most_used": [],
+        "least_used": [],
+        "excluded": [],
+        "unobservable": [],
+        "group_rollup": [],
+        "gate": {"ok": ok, "alerts": list(alerts or []), "coverage": coverage,
+                 "immature": immature},
+        "counts": {"never_watched": 0, "too_new": 0, "tuned_never_qualified": 0,
+                  "watched": 0, "excluded": 0, "unobservable": 0},
+    }
+
+
+def _patch_report_dirs(plugin, monkeypatch, tmp_path):
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(plugin, "REPORT_DIR", str(tmp_path / "logos"))
+    monkeypatch.setattr(plugin, "CSV_DIR", str(tmp_path / "config"))
+    monkeypatch.setattr(plugin, "_gateway", _fake_gateway_with_no_channels)
+
+
+def test_toggle_off_emits_nothing(plugin, tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(plugin, "_notify_client", lambda: _FakeNotifyClient(calls))
+    _patch_report_dirs(plugin, monkeypatch, tmp_path)
+    monkeypatch.setattr(plugin, "_load_settings",
+                        lambda: {"notify_enabled": False})
+
+    plugin.build_report_task()
+    assert calls == []
+
+
+def test_toggle_on_emits_report_and_ledgerable_event(plugin, tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(plugin, "_notify_client", lambda: _FakeNotifyClient(calls))
+    _patch_report_dirs(plugin, monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        plugin, "_load_settings",
+        lambda: {"notify_enabled": True,
+                 "report_base_url": "http://192.168.1.53:9191"})
+
+    plugin.build_report_task()
+    assert len(calls) == 1
+    kw = calls[0]
+    assert kw["source"] == "metricsarr"
+    assert kw["event"] == "usage_report"
+    assert kw["attachment"]                     # written["archive_path"]
+    assert kw["url"].startswith("http://192.168.1.53:9191")
+
+
+def test_a_raising_notify_never_fails_the_task(plugin, monkeypatch):
+    """`_notify_client()` itself raising -- e.g. Newsflasharr's vendored
+    notify_client.py missing entirely, per this function's own docstring
+    ("or Newsflasharr not being installed at all") -- reaches
+    _emit_notifications's own try/except directly, unlike a raising
+    notify_fn (already absorbed by notify_report.emit_report/emit_gate's own
+    internal try/except, proven by test_notify_report.py). This is the one
+    that actually exercises _emit_notifications's own wrapper."""
+    def boom():
+        raise ImportError("no module named notify_client")
+
+    monkeypatch.setattr(plugin, "_notify_client", boom)
+    model = _minimal_model(ok=True, tracked_days=45)
+    written = {"archive_path": "/tmp/report-1.html",
+              "html_path": "/tmp/report.html"}
+
+    # Must not raise -- a notify failure must never fail the report task.
+    plugin._emit_notifications({"notify_enabled": True}, model, written)
+
+
+def test_a_raising_notify_fn_never_fails_the_task_either(plugin, monkeypatch):
+    """Defense in depth, one layer further out: even though
+    notify_report.emit_report/emit_gate already swallow a raising notify_fn
+    internally, the integration through _emit_notifications must still never
+    surface it -- pins the contract at the boundary this task actually wires
+    together, not just within notify_report's own unit tests."""
+    monkeypatch.setattr(
+        plugin, "_notify_client",
+        lambda: _FakeNotifyClient([], raise_exc=RuntimeError(
+            "http://host/live/notifysecretuser/notifysecretpass/x")))
+    model = _minimal_model(ok=True, tracked_days=45)
+    written = {"archive_path": "/tmp/report-1.html",
+              "html_path": "/tmp/report.html"}
+
+    plugin._emit_notifications({"notify_enabled": True}, model, written)
+
+
+def test_the_interactive_action_does_not_emit(plugin, tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(plugin, "_notify_client", lambda: _FakeNotifyClient(calls))
+    _patch_report_dirs(plugin, monkeypatch, tmp_path)
+
+    result = plugin.Plugin().run(
+        "build_report", {}, {"settings": {"notify_enabled": True}})
+    assert result["status"] == "ok"
+    assert calls == []
+
+
+def test_gate_state_round_trips_through_the_task(plugin, tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(plugin, "_notify_client", lambda: _FakeNotifyClient(calls))
+    _patch_report_dirs(plugin, monkeypatch, tmp_path)
+    monkeypatch.setattr(plugin, "_load_settings",
+                        lambda: {"notify_enabled": True})
+    # DATA_DIR already exists in production by the time a scheduled report
+    # runs (the collector's very first tick creates it via Storage.write) --
+    # replicate that here so this test exercises the real round-trip rather
+    # than notify_state.json's own missing-directory degrade path (that
+    # degrade is covered separately by test_notify_report.py).
+    os.makedirs(str(tmp_path / "data"), exist_ok=True)
+
+    blind = _minimal_model(ok=False, tracked_days=45, alerts=["sensor blind"])
+    healthy = _minimal_model(ok=True, tracked_days=45)
+    models = iter([blind, healthy])
+    monkeypatch.setattr(plugin.reports, "build_model",
+                        lambda *a, **k: next(models))
+
+    state_path = os.path.join(str(tmp_path / "data"),
+                              plugin.notify_report.STATE_FILE)
+
+    plugin.build_report_task()
+    assert plugin.notify_report.load_prev_ok(state_path) is False
+    assert any(c.get("event") == "honesty_gate" and c.get("severity") == "critical"
+              for c in calls)
+
+    calls.clear()
+    plugin.build_report_task()
+    assert plugin.notify_report.load_prev_ok(state_path) is True
+    assert any(c.get("kind") == "resolve" for c in calls)
+
+
+def test_no_emit_when_the_publish_fails(plugin, tmp_path, monkeypatch):
+    """Mutation-proof (c): the emit call must sit AFTER bug-078's publish
+    check, never before it. If it moved earlier, this would start firing
+    notifications about reports that were never written."""
+    calls = []
+    monkeypatch.setattr(plugin, "_notify_client", lambda: _FakeNotifyClient(calls))
+    _fail_html_writes(plugin, monkeypatch, tmp_path)
+    monkeypatch.setattr(plugin, "_load_settings",
+                        lambda: {"notify_enabled": True})
+
+    with pytest.raises(RuntimeError):
+        plugin.build_report_task()
+    assert calls == []

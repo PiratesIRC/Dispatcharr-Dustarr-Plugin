@@ -12,7 +12,6 @@ codebase and would false-positive on legitimate, non-ORM code:
     collector.py:  self.r.delete(self.key)         -- Redis, not the ORM
     collector.py:  self.r.set(self.key, ...)        -- Redis, not the ORM
     sessionizer.py: merged.update(thresholds or {}) -- dict.update
-    webhook.py:     body.update(data)               -- dict.update
     reports.py:     seen.add(entry["uuid"])         -- set.add
     reports.py/storage.py: os.remove(tmp)           -- filesystem, not ORM
 
@@ -104,8 +103,9 @@ SAFE_DELETE_RECEIVERS = {"self.r"}
 FORBIDDEN_ORM_METHODS = AMBIGUOUS_ORM_METHODS | UNAMBIGUOUS_ORM_METHODS | {"delete"}
 
 # Anything that could reach the provider. One ffprobe kicks a live viewer.
-# `webhook.py`'s `urllib` POST to the user's OWN endpoint is untouched by
-# this list -- urllib is not subprocess, and it isn't provider I/O.
+# A `urllib` POST to a NON-provider endpoint (a notification delivery, e.g.)
+# is untouched by this list -- urllib is not subprocess, and it isn't provider
+# I/O.
 FORBIDDEN_IO_NAMES = {"ffprobe", "Popen", "check_output", "check_call", "system"}
 FORBIDDEN_IO_MODULES = ("subprocess",)
 
@@ -366,7 +366,7 @@ def test_collector_modules_are_stdlib_only():
     """The collector must import with no Django present: it runs in a thread that
     must never touch the ORM (spec S11.2)."""
     banned = ("django", "apps.", "celery")
-    for name in ("collector", "sessionizer", "storage", "gates", "webhook"):
+    for name in ("collector", "sessionizer", "storage", "gates", "redaction"):
         source = (PLUGIN_DIR / f"{name}.py").read_text(encoding="utf-8")
         tree = ast.parse(source)
         for node in ast.walk(tree):
@@ -537,7 +537,7 @@ LEGITIMATE_NON_ORM_PATTERNS = {
     "redis_set": "self.r.set(self.key, self.token, nx=True, ex=self.ttl)",
     "redis_pipeline_execute": "counts = pipe.execute()",
     "dict_update_sessionizer": "merged.update(thresholds or {})",
-    "dict_update_webhook": "body.update(data)",
+    "dict_update_payload": "body.update(data)",
     "set_add_reports": 'seen.add(entry["uuid"])',
     "os_remove": "os.remove(tmp)",
     # Generalizations of the same shapes, not literally shipped but the same
@@ -556,7 +556,7 @@ LEGITIMATE_NON_ORM_PATTERNS = {
     "beat_delete": 'delete_periodic_task("metricsarr_build_report")',
     # I7 re-verification checklist: os.replace/os.makedirs (already covered
     # for the I/O guard below, re-checked here against the ORM-write guard
-    # too) and webhook.py's urllib POST to the user's OWN endpoint.
+    # too) and a urllib POST to a non-provider endpoint.
     "os_replace_orm_guard": "os.replace(tmp, path)",
     "os_makedirs_orm_guard": "os.makedirs(data_dir, exist_ok=True)",
     "urllib_post_orm_guard": (
@@ -644,8 +644,8 @@ def test_io_guard_fires_on_true_positive_provider_io(snippet):
 
 
 LEGITIMATE_IO_PATTERNS = {
-    # webhook.py's actual pattern: POST to the USER'S OWN endpoint, not the
-    # provider. Must never be confused with provider I/O.
+    # A notification-delivery pattern: POST to the USER'S OWN endpoint, not
+    # the provider. Must never be confused with provider I/O.
     "urllib_post": (
         "urllib.request.urlopen(urllib.request.Request(url, data=payload, "
         "method='POST'))"),

@@ -1,5 +1,6 @@
 import csv
 import io
+import os
 import time
 
 import pytest
@@ -327,3 +328,30 @@ def test_write_report_survives_a_replace_failure_with_no_stale_tmp(rp, gw, tmp_p
     assert "error" in out
     assert not list(report_dir.glob("*.tmp"))
     assert not list(csv_dir.glob("*.tmp"))
+
+
+# -- archive path returned + both archive streams bounded (keep 8) ----------
+
+def test_write_report_returns_the_archive_path(rp, gw, tmp_path):
+    out = rp.write_report(model(rp, gw), str(tmp_path / "r"), str(tmp_path / "c"),
+                          1_752_770_000.0)
+    assert out["archive_path"] and out["archive_path"] != out["html_path"]
+    assert os.path.basename(out["archive_path"]).startswith("report-")
+    assert os.path.exists(out["archive_path"])
+
+
+def test_archives_are_pruned_to_the_bound(rp, gw, tmp_path):
+    rdir, cdir = str(tmp_path / "r"), str(tmp_path / "c")
+    for i in range(rp.ARCHIVE_KEEP + 3):
+        rp.write_report(model(rp, gw), rdir, cdir, 1_752_770_000.0 + i * 60)
+    html = [n for n in os.listdir(rdir) if n.startswith("report-")]
+    csvs = [n for n in os.listdir(cdir) if n.startswith("report-")]
+    assert len(html) == rp.ARCHIVE_KEEP
+    assert len(csvs) == rp.ARCHIVE_KEEP
+    assert os.path.exists(os.path.join(rdir, "report.html"))  # live survives
+
+
+def test_prune_never_touches_the_live_report(rp, gw, tmp_path):
+    rdir = str(tmp_path / "r")
+    rp.write_report(model(rp, gw), rdir, str(tmp_path / "c"), 1_752_770_000.0)
+    assert "report.html" in os.listdir(rdir)

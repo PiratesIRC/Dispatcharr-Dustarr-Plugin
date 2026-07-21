@@ -155,9 +155,9 @@ def test_gate_result_is_attached_to_the_model(rp, gw):
     assert model["gate"]["alerts"]
 
 
-def test_summary_for_webhook_is_allowlisted(rp, gw):
+def test_summary_for_notify_is_allowlisted(rp, gw):
     model = rp.build_model(rows(gw, 10), watched(6), SETTINGS, NOW)
-    summary = rp.summary_for_webhook(model, "http://x/report.html")
+    summary = rp.summary_for_notify(model, "http://x/report.html")
     assert set(summary) <= {"tracked_days", "coverage", "total_channels",
                             "never_watched", "tuned_never_qualified", "top",
                             "report_url", "alerts"}
@@ -166,7 +166,7 @@ def test_summary_for_webhook_is_allowlisted(rp, gw):
     # I2: the per-entry shape of `top` is unprotected by the top-level check
     # above -- lock it down explicitly so uuid/group/last_watched/tune_count/
     # reason (which could carry provider-adjacent identifiers) can never leak
-    # into the webhook payload via a careless refactor of the comprehension.
+    # into the notify payload via a careless refactor of the comprehension.
     assert summary["top"], "expected at least one top entry for this fixture"
     assert set(summary["top"][0]) == {"name", "watch_count", "hours"}
 
@@ -253,7 +253,7 @@ def test_malformed_watch_seconds_string_degrades_to_zero_hours(rp, gw):
 def test_too_new_is_a_peer_count_excluded_from_never_watched(rp, gw):
     """I5: too_new entries stay inside the never_watched LIST (Task 9 renders
     them there with their own reason) but must not inflate the headline
-    never_watched COUNT or the webhook payload."""
+    never_watched COUNT or the notify payload."""
     fresh = rows(gw, 5, created_at=NOW - 3 * 86400)                # too_new
     stale = [r._replace(uuid=f"s{i}") for i, r in
              enumerate(rows(gw, 2, created_at=NOW - 90 * 86400))]  # true never_watched
@@ -266,7 +266,7 @@ def test_too_new_is_a_peer_count_excluded_from_never_watched(rp, gw):
             + model["counts"]["tuned_never_qualified"] + model["counts"]["watched"]
             + model["counts"]["excluded"] + model["counts"]["unobservable"]) == 7
 
-    summary = rp.summary_for_webhook(model, "http://x/report.html")
+    summary = rp.summary_for_notify(model, "http://x/report.html")
     assert summary["never_watched"] == 2
 
 
