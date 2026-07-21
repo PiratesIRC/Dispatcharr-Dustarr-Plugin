@@ -111,7 +111,8 @@ def load_plugin():
         pkg.__path__ = [str(PLUGIN_DIR)]
         sys.modules[_PKG] = pkg
     for mod in ("sessionizer", "storage", "collector", "gates", "gateway",
-                "redaction", "reports", "plugin"):
+                "redaction", "reports", "notify_client", "notify_report",
+                "plugin"):
         key = f"{_PKG}.{mod}"
         if key not in sys.modules and (PLUGIN_DIR / f"{mod}.py").exists():
             _load_from_path(key, f"{mod}.py")

@@ -22,11 +22,12 @@ from celery import shared_task
 
 try:
     from . import collector as collector_mod
-    from . import gates, gateway, redaction, reports, sessionizer, storage
+    from . import gates, gateway, notify_report, redaction, reports, sessionizer, storage
 except ImportError:                     # standalone (non-package) import path
     import collector as collector_mod
     import gates
     import gateway
+    import notify_report
     import redaction
     import reports
     import sessionizer
@@ -34,7 +35,7 @@ except ImportError:                     # standalone (non-package) import path
 
 _LOGGER = logging.getLogger(__name__)
 
-PLUGIN_VERSION = "1.26.2011347"
+PLUGIN_VERSION = "1.26.2021844"
 
 DATA_DIR = "/data/metricsarr"           # plugin state (named volume)
 REPORT_DIR = "/data/logos/metricsarr"   # nginx serves /data/logos/** at /logos/**
@@ -123,7 +124,8 @@ FIELDS = [
 
 ACTIONS = [
     {"id": "build_report", "label": "Build report",
-     "description": "Write the HTML report and CSV now.",
+     "description": "Write the HTML report and CSV now. Does not send "
+                    "notifications - the scheduled report does.",
      "button_label": "Build"},
     {"id": "show_summary", "label": "Show summary",
      "description": "Tracking window, coverage, never-watched count.",
@@ -361,6 +363,57 @@ def _build_report(settings):
     return result, model, written
 
 
+def _notify_client():
+    """The vendored Newsflasharr caller client -- lazy-imported (module scope
+    would break the loader the same way a top-level Django import does) and
+    resolved via a helper so tests can monkeypatch it in one place."""
+    try:
+        from . import notify_client
+        return notify_client
+    except ImportError:
+        import notify_client
+        return notify_client
+
+
+def _emit_notifications(settings, model, written):
+    """Newsflasharr emits. Called from build_report_task ONLY -- it is the
+    single writer for the honesty-gate state (notify_state.json), and the
+    interactive build_report action deliberately does not emit (one report
+    per scheduled run, not one per click).
+
+    Never raises: a notify failure -- or Newsflasharr not being installed at
+    all -- must never fail the report task. Must run AFTER the caller has
+    confirmed written["html_path"] is truthy (bug-078's lesson one layer up:
+    a report that was never published must not still trigger a notification
+    about it)."""
+    try:
+        thresholds = coerce_settings(settings)
+        if not thresholds.get("notify_enabled"):
+            return
+        nc = _notify_client()
+        base = (thresholds.get("report_base_url") or "").strip()
+        archive = written.get("archive_path")
+        url = None
+        if base and archive:
+            url = base.rstrip("/") + "/logos/metricsarr/" + os.path.basename(archive)
+        summary = reports.summary_for_notify(
+            model, reports.full_report_url(base, reports.REPORT_URL_PATH))
+        notify_report.emit_report(nc.notify, summary, url, archive)
+
+        state_path = os.path.join(DATA_DIR, notify_report.STATE_FILE)
+        prev_ok = notify_report.load_prev_ok(state_path)
+        new_ok, _action = notify_report.emit_gate(
+            nc.notify, model, thresholds, prev_ok)
+        # Avoid a pointless rewrite every single build when the gate state
+        # hasn't actually changed -- only persist on a real transition, or
+        # when the state file doesn't exist yet at all.
+        save_needed = new_ok != prev_ok or not os.path.exists(state_path)
+        if save_needed:
+            notify_report.save_prev_ok(state_path, new_ok)
+    except Exception:
+        _LOGGER.warning("metricsarr notify emit failed (suppressed)")
+
+
 @shared_task
 def build_report_task():
     """Celery entry point. Runs on the PREFORK queue -- real processes, no gevent,
@@ -413,6 +466,7 @@ def build_report_task():
             # None`, keeping both guarantees intact.
             raise RuntimeError(
                 f"report not published: {written.get('error') or 'unknown write failure'}")
+        _emit_notifications(settings, model, written)
         return model["counts"]
     except Exception as exc:
         redacted = redaction.redact(str(exc))
