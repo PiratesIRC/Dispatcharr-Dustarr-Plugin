@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **Removed the built-in Discord/generic-JSON webhook** (`webhook.py`,
+  `webhook_url`/`webhook_format` settings, the `send_webhook_now` action).
+  Replaced with a single **`notify_enabled`** toggle that hands the report
+  summary and honesty-gate alerts to the Newsflasharr plugin, if installed and
+  enabled, keyed on the source name `metricsarr`. Routing (which channel, by
+  what severity, quiet hours, storm dedup) now lives entirely in Newsflasharr's
+  own settings rather than in a plugin-specific webhook URL/format pair — see
+  the README's "Notifications via Newsflasharr" section. The three
+  credential-scrubbing regexes and `redact()` moved out of `webhook.py` into
+  their own module, `redaction.py`, unchanged in behavior. `reports.
+  summary_for_webhook()` is renamed `summary_for_notify()` (same shape).
+  Operators who relied on the built-in webhook need to install Newsflasharr and
+  add a routing rule pointed at their preferred channel; `report_base_url` is
+  unchanged and still makes the report link in that notification clickable.
+
 ## v1.26.2011347 (July 20, 2026)
 
 Deployed + verified live on Dispatcharr 0.28.0 on 2026-07-20. 334 tests.

@@ -28,7 +28,7 @@ separate scheduled task, not inline with the collector.
 |---|---|
 | `http://<your-dispatcharr-host>:9191/logos/metricsarr/report.html` | The report. Self-contained, sortable HTML — one click from any browser, including a phone or a Shield/Fire TV. Served on the **same host and port as the Dispatcharr UI you already have open** (Dispatcharr's own nginx, the `/logos/` static route) — no extra container, no extra port to open, no new address to remember. If you can reach Dispatcharr, you can reach the report. |
 | `/config/metricsarr/report-<timestamp>.csv` | The same data as CSV. `/config` is Dispatcharr's existing bind mount, so this file lands somewhere on your host you can double-click straight into Excel or LibreOffice. |
-| A webhook (Discord or generic JSON) | A short message with the headline numbers and a link to the full report, sent on whatever schedule you configure. |
+| Newsflasharr (optional) | A short message with the headline numbers and a link to the full report, sent on whatever schedule you configure. See "Notifications via Newsflasharr" below. |
 
 ## The three lists that matter
 
@@ -91,7 +91,7 @@ it's reported separately as **unobservable**, not folded into never-watched.
   a single probe consumes one of your provider connections and kicks whoever is
   currently watching.
 - **Credentials are redacted.** Provider credentials live inside stream URLs in a
-  typical Dispatcharr setup, so every string that can reach a webhook payload or a
+  typical Dispatcharr setup, so every string that can reach a notification or a
   logged error is passed through a redactor first, and the report only ever renders
   an allowlisted set of fields (channel name, group, counts, timestamps) — never a
   stream URL.
@@ -143,12 +143,32 @@ Everything lives in the plugin's settings card in the Dispatcharr UI:
   a normal household can show 80–90% never-watched among the channels it was
   ever asked to judge, so this only fires on the mass-casualty shape where
   essentially *every* judged channel looks dead.
-- **Webhook URL / format** — Discord or generic JSON.
+- **Send notifications to Newsflasharr** — off by default. See "Notifications via
+  Newsflasharr" below.
 - **Report base URL** — the base URL of your Dispatcharr UI (e.g.
-  `http://192.168.1.53:9191`). Set this so the webhook's "link to the full
-  report" is an actual clickable link — without it, Discord renders the bare
-  report path as inert text.
+  `http://192.168.1.53:9191`). Set this so the report link sent to Newsflasharr
+  is an actual clickable link — without it, some notification channels render a
+  bare path as inert text.
 - **Scheduled report** — off / daily / weekly / monthly, run by Celery Beat.
+
+## Notifications via Newsflasharr
+
+Metricsarr no longer talks to Discord (or any webhook) directly. Instead it has
+one setting, **Send notifications to Newsflasharr** (off by default), that hands
+its report summary and any honesty-gate alerts to the
+[Newsflasharr](https://github.com/PiratesIRC/Dispatcharr_Newsflasharr) plugin if
+it's installed and enabled.
+
+Turning the toggle on is the whole caller-side setup. Everything else —
+**which channel(s) it goes to (Discord, ntfy, email, a generic webhook, ...),
+whether it's routed differently by severity, quiet hours, storm dedup** — lives
+entirely in Newsflasharr's own routing rules, keyed on the source name
+`metricsarr`. See the Newsflasharr plugin's own docs for how to add a routing
+rule and pick a destination channel; nothing on Metricsarr's side needs to
+change to redirect where its notifications land.
+
+If Newsflasharr isn't installed or isn't enabled, turning this setting on is
+harmless — Metricsarr degrades safely and simply doesn't spool anything.
 
 ## Install / upgrade
 

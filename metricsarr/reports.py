@@ -11,7 +11,7 @@ the top of build_model, so neither this module's own reads nor gates.evaluate()
 (which is not None/str-tolerant) can be crashed by a malformed record or a
 malformed meta block.
 
-`too_new` is a PEER of `never_watched` in `counts` and in the gate/webhook never-
+`too_new` is a PEER of `never_watched` in `counts` and in the gate/notify never-
 watched number, NOT a sub-count of it -- a fresh M3U import must not inflate the
 one actionable headline number or spuriously trip the >60% ceiling gate. Its
 entries still live inside the `never_watched` LIST (with reason="too_new") so
@@ -167,7 +167,7 @@ def _entry(row, record, reason, now):
 def build_model(rows, usage, settings, now):
     """Join the ORM channel universe (`rows`) against the sparse usage overlay.
 
-    Returns the model dict consumed by `summary_for_webhook` and by Task 9's
+    Returns the model dict consumed by `summary_for_notify` and by Task 9's
     renderers -- see the module docstring for the `counts` sum invariant and
     the `too_new`-is-a-peer design. `group_rollup[*]["total"]` is the group's
     TRUE ORM channel count (every row in that group, including excluded/
@@ -297,7 +297,7 @@ def build_model(rows, usage, settings, now):
     }
 
 
-def summary_for_webhook(model, report_url):
+def summary_for_notify(model, report_url):
     return {
         "tracked_days": model["tracked_days"],
         "coverage": model["coverage"],
@@ -334,8 +334,8 @@ REPORT_URL_PATH = "/logos/metricsarr/report.html"
 
 
 def full_report_url(base_url, path=REPORT_URL_PATH):
-    """I4: REPORT_URL_PATH is a bare path -- inert text in a Discord embed, so
-    the webhook's whole "link to the full report" nudge couldn't actually
+    """I4: REPORT_URL_PATH is a bare path -- inert text in many notification
+    channels, so the "link to the full report" nudge couldn't actually
     link anywhere. `base_url` is the plugin's optional `report_base_url`
     setting (the Dispatcharr UI's own base URL, e.g.
     "http://192.168.1.53:9191"); when unset, degrade to the bare path

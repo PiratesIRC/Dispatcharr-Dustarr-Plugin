@@ -56,19 +56,60 @@ def test_coerce_settings_keeps_poll_interval_under_the_metadata_ttl(plugin):
     assert out["poll_interval_s"] <= 25
 
 
+# ---- Task 6: notify_enabled must coerce to a REAL bool ----------------------
+#
+# Settings arrive unvalidated (a form post or a raw API write), and
+# bool("false") is True in plain Python -- any non-empty string is truthy.
+# A later task's caller-guard depends on
+# `coerce_settings(settings).get("notify_enabled")` being a genuine bool, so a
+# string "false" silently turning the toggle back ON would be exactly this
+# codebase's signature failure mode (bug-139's shape, one field over).
+
+def test_coerce_settings_notify_enabled_defaults_to_false(plugin):
+    out = plugin.coerce_settings({})
+    assert out["notify_enabled"] is False
+
+
+def test_coerce_settings_notify_enabled_accepts_a_real_bool(plugin):
+    assert plugin.coerce_settings({"notify_enabled": True})["notify_enabled"] is True
+    assert plugin.coerce_settings({"notify_enabled": False})["notify_enabled"] is False
+
+
+def test_coerce_settings_notify_enabled_string_false_is_false(plugin):
+    """The trap: bool("false") is True. A form/API value of the literal
+    string "false" must still resolve to a real False, not be coerced to
+    truthy-because-non-empty."""
+    for falsy in ("false", "False", "FALSE", "0", "no", ""):
+        out = plugin.coerce_settings({"notify_enabled": falsy})
+        assert out["notify_enabled"] is False, falsy
+
+
+def test_coerce_settings_notify_enabled_string_true_is_true(plugin):
+    for truthy in ("true", "True", "TRUE", "1", "yes"):
+        out = plugin.coerce_settings({"notify_enabled": truthy})
+        assert out["notify_enabled"] is True, truthy
+
+
+def test_coerce_settings_boolean_fields_are_always_a_real_bool_type(plugin):
+    """Not just truthy/falsy -- `is True`/`is False` must hold, since a later
+    task's gate does `if not settings.get("notify_enabled"): return False`
+    and a non-bool truthy/falsy value would still work by luck. Pin the type
+    itself so a future refactor can't quietly reintroduce a stringly-typed
+    value that merely happens to behave right today."""
+    out = plugin.coerce_settings({"notify_enabled": "true",
+                                  "exclude_auto_created": "false"})
+    assert type(out["notify_enabled"]) is bool
+    assert type(out["exclude_auto_created"]) is bool
+
+
 def test_fields_include_every_setting_the_code_reads(plugin):
     ids = {f["id"] for f in plugin.FIELDS}
     required = {"poll_interval_s", "min_watch_seconds", "client_gap_grace_s",
                 "merge_gap_s", "top_n", "never_watched_ceiling",
                 "unused_threshold_days", "exclude_auto_created", "exclude_groups",
-                "exclude_name_regex", "webhook_url", "webhook_format",
+                "exclude_name_regex", "notify_enabled", "report_base_url",
                 "report_schedule"}
     assert required <= ids
-
-
-def test_webhook_url_field_is_masked(plugin):
-    field = next(f for f in plugin.FIELDS if f["id"] == "webhook_url")
-    assert field.get("input_type") == "password"
 
 
 def test_select_fields_use_string_option_values(plugin):
@@ -187,22 +228,9 @@ def test_show_summary_uses_the_gateway_clock_not_wall_clock(plugin, tmp_path,
     assert "10.0 days" in result["message"]
 
 
-def test_send_webhook_now_errors_without_a_url(plugin, tmp_path, monkeypatch):
-    # send_webhook_now runs _build_report() first (to build the summary),
-    # which writes real files via REPORT_DIR/CSV_DIR unless patched -- without
-    # this, the suite was writing to C:\data\logos\metricsarr and
-    # C:\config\metricsarr on the host (FIX 3).
-    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
-    monkeypatch.setattr(plugin, "REPORT_DIR", str(tmp_path / "logos"))
-    monkeypatch.setattr(plugin, "CSV_DIR", str(tmp_path / "config"))
-    result = plugin.Plugin().run("send_webhook_now", {}, {"settings": {}})
-    assert result["status"] == "error"
-    assert "webhook" in result["message"].lower()
-
-
 def test_actions_expose_the_expected_ids(plugin):
     ids = {a["id"] for a in plugin.ACTIONS}
-    assert {"build_report", "show_summary", "send_webhook_now",
+    assert {"build_report", "show_summary",
             "validate_settings"} <= ids
 
 
@@ -672,11 +700,6 @@ def test_coerce_settings_falls_back_to_default_for_invalid_report_schedule(plugi
     assert out["report_schedule"] == "weekly"       # field default
 
 
-def test_coerce_settings_falls_back_to_default_for_invalid_webhook_format(plugin):
-    out = plugin.coerce_settings({"webhook_format": "xml"})
-    assert out["webhook_format"] == "discord"        # field default
-
-
 def test_coerce_settings_keeps_a_valid_select_value(plugin):
     out = plugin.coerce_settings({"report_schedule": "daily"})
     assert out["report_schedule"] == "daily"
@@ -720,7 +743,7 @@ def test_coerce_settings_falls_back_to_default_on_negative_infinity(plugin):
     assert out["poll_interval_s"] == 15
 
 
-# ---- I4 (this fix wave): report_base_url turns the webhook link real -------
+# ---- I4 (this fix wave): report_base_url turns the report link real -------
 #
 # Not to be confused with the "I4" label above (select-value validation) --
 # that was a prior fix wave's finding, kept for its own history.
@@ -765,49 +788,6 @@ def test_build_report_message_uses_the_full_url_when_base_is_set(plugin, tmp_pat
         {"settings": {"report_base_url": "http://192.168.1.53:9191"}})
     expected = "http://192.168.1.53:9191" + plugin.reports.REPORT_URL_PATH
     assert expected in result["message"]
-
-
-def test_send_webhook_now_uses_the_full_report_url_when_base_is_set(plugin, tmp_path,
-                                                                    monkeypatch):
-    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setattr(plugin, "REPORT_DIR", str(tmp_path / "logos"))
-    monkeypatch.setattr(plugin, "CSV_DIR", str(tmp_path / "config"))
-    monkeypatch.setattr(plugin, "_gateway", _fake_gateway_with_no_channels)
-
-    captured = {}
-
-    def fake_fire(url, summary, fmt, version, **kw):
-        captured["summary"] = summary
-        return {"status": "ok", "message": "sent"}
-
-    monkeypatch.setattr(plugin.webhook, "fire", fake_fire)
-
-    plugin.Plugin().run(
-        "send_webhook_now", {},
-        {"settings": {"webhook_url": "http://discord.example/hook",
-                      "report_base_url": "http://host:9191"}})
-    assert (captured["summary"]["report_url"]
-            == "http://host:9191" + plugin.reports.REPORT_URL_PATH)
-
-
-def test_send_webhook_now_uses_the_bare_path_when_base_url_is_unset(plugin, tmp_path,
-                                                                    monkeypatch):
-    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setattr(plugin, "REPORT_DIR", str(tmp_path / "logos"))
-    monkeypatch.setattr(plugin, "CSV_DIR", str(tmp_path / "config"))
-    monkeypatch.setattr(plugin, "_gateway", _fake_gateway_with_no_channels)
-
-    captured = {}
-
-    def fake_fire(url, summary, fmt, version, **kw):
-        captured["summary"] = summary
-        return {"status": "ok", "message": "sent"}
-
-    monkeypatch.setattr(plugin.webhook, "fire", fake_fire)
-
-    plugin.Plugin().run("send_webhook_now", {},
-                        {"settings": {"webhook_url": "http://discord.example/hook"}})
-    assert captured["summary"]["report_url"] == plugin.reports.REPORT_URL_PATH
 
 
 # ---- I5: the collector loop has NO observability on an escaping exception --

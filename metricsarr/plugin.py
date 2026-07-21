@@ -22,15 +22,15 @@ from celery import shared_task
 
 try:
     from . import collector as collector_mod
-    from . import gates, gateway, reports, sessionizer, storage, webhook
+    from . import gates, gateway, redaction, reports, sessionizer, storage
 except ImportError:                     # standalone (non-package) import path
     import collector as collector_mod
     import gates
     import gateway
+    import redaction
     import reports
     import sessionizer
     import storage
-    import webhook
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -101,21 +101,18 @@ FIELDS = [
                     "sports has a legitimate off-season."},
     {"id": "exclude_name_regex", "label": "Excluded name regex", "type": "string",
      "default": gateway.DEFAULT_EXCLUDE_NAME_RE},
-    {"id": "webhook_url", "label": "Webhook URL", "type": "string", "default": "",
-     "input_type": "password",
-     "description": "Discord or any JSON endpoint. Gets a short nudge with a link "
-                    "to the full report."},
+    {"id": "notify_enabled", "label": "Send notifications to Newsflasharr",
+     "type": "boolean", "default": False,
+     "help_text": "Requires the Newsflasharr plugin. What routes where is "
+                  "configured in Newsflasharr's routing rules, keyed on this "
+                  "plugin's name."},
     {"id": "report_base_url", "label": "Report base URL", "type": "string",
      "default": "",
      "description": "Base URL of your Dispatcharr UI, e.g. "
-                    "http://192.168.1.53:9191. When set, the webhook/toast "
-                    "link to the full report becomes a real clickable URL "
-                    "instead of a bare path (Discord renders a bare path as "
-                    "inert text). Leave blank to keep the bare path."},
-    {"id": "webhook_format", "label": "Webhook format", "type": "select",
-     "default": "discord",
-     "options": [{"value": "discord", "label": "Discord"},
-                 {"value": "generic", "label": "Generic JSON"}]},
+                    "http://192.168.1.53:9191. When set, the report link "
+                    "becomes a real clickable URL instead of a bare path "
+                    "(some notification channels render a bare path as inert "
+                    "text). Leave blank to keep the bare path."},
     {"id": "report_schedule", "label": "Scheduled report", "type": "select",
      "default": "weekly",
      "options": [{"value": "off", "label": "Off"},
@@ -131,9 +128,6 @@ ACTIONS = [
     {"id": "show_summary", "label": "Show summary",
      "description": "Tracking window, coverage, never-watched count.",
      "button_label": "Summary"},
-    {"id": "send_webhook_now", "label": "Send webhook",
-     "description": "Fire the webhook nudge immediately (tests your URL).",
-     "button_label": "Send"},
     {"id": "validate_settings", "label": "Validate settings",
      "description": "Check every setting parses.", "button_label": "Validate"},
 ]
@@ -176,7 +170,17 @@ def coerce_settings(settings):
             elif fid == "poll_interval_s" and value == int(value):
                 value = int(value)
         elif field["type"] == "boolean":
-            value = bool(value)
+            # Settings arrive UNVALIDATED (module docstring above): a boolean
+            # field can reach here as the string "false" from a form post or
+            # an API client, and bool("false") is True (any non-empty string
+            # is truthy) -- exactly the silent-toggle-never-works shape this
+            # plugin's own history keeps producing. notify_enabled in
+            # particular must resolve to a REAL bool for a later task's
+            # `coerce_settings(settings).get("notify_enabled")` gate to work.
+            if isinstance(value, str):
+                value = value.strip().lower() not in ("", "false", "0", "no")
+            else:
+                value = bool(value)
         elif field["type"] == "select":
             options = {opt["value"] for opt in field.get("options", [])}
             if value not in options:
@@ -331,9 +335,9 @@ def _build_report(settings):
         message += f" NOT TRUSTWORTHY: {model['gate']['alerts'][0]}"
 
     # I4: written["url"] is always the bare REPORT_URL_PATH -- combine it with
-    # the optional report_base_url setting so the toast (and, via _send_webhook,
-    # the Discord/generic-JSON payload) can carry a REAL clickable link instead
-    # of a bare path Discord renders as inert text.
+    # the optional report_base_url setting so the toast (and, once notify_enabled
+    # is wired up, the Newsflasharr notification) can carry a REAL clickable link
+    # instead of a bare path some notification channels render as inert text.
     url = reports.full_report_url(thresholds.get("report_base_url"),
                                   written.get("url") or reports.REPORT_URL_PATH)
 
@@ -355,19 +359,6 @@ def _build_report(settings):
     if written.get("error"):
         result["message"] += f" ({written['error']})"
     return result, model, written
-
-
-def _send_webhook(settings, model):
-    thresholds = coerce_settings(settings)
-    url = (thresholds.get("webhook_url") or "").strip()
-    if not url:
-        return {"status": "error",
-                "message": "No webhook URL configured in plugin settings."}
-    report_url = reports.full_report_url(thresholds.get("report_base_url"),
-                                         reports.REPORT_URL_PATH)
-    summary = reports.summary_for_webhook(model, report_url)
-    return webhook.fire(url, summary, thresholds.get("webhook_format", "discord"),
-                        PLUGIN_VERSION)
 
 
 @shared_task
@@ -422,14 +413,9 @@ def build_report_task():
             # None`, keeping both guarantees intact.
             raise RuntimeError(
                 f"report not published: {written.get('error') or 'unknown write failure'}")
-        if (settings.get("webhook_url") or "").strip():
-            # Only after a confirmed publish -- the webhook summary links to the
-            # report, and pointing subscribers at a file that was never written
-            # is worse than staying silent.
-            _send_webhook(settings, model)
         return model["counts"]
     except Exception as exc:
-        redacted = webhook.redact(str(exc))
+        redacted = redaction.redact(str(exc))
         _LOGGER.error("metricsarr build_report_task failed: %s", redacted)
         raise RuntimeError(redacted) from None
 
@@ -542,13 +528,10 @@ class Plugin:
                 return result
             if action == "show_summary":
                 return self._show_summary(settings)
-            if action == "send_webhook_now":
-                _, model, _ = _build_report(settings)
-                return _send_webhook(settings, model)
             if action == "validate_settings":
                 return self._validate(settings)
         except Exception as exc:
-            return {"status": "error", "message": webhook.redact(f"{exc}")}
+            return {"status": "error", "message": redaction.redact(f"{exc}")}
 
         return {"status": "error", "message": f"Unknown action: {action}"}
 
@@ -586,13 +569,8 @@ class Plugin:
                 re.compile(str(raw_re))
             except re.error as exc:
                 return {"status": "error",
-                        "message": webhook.redact(
+                        "message": redaction.redact(
                             f"Excluded name regex does not compile: {exc}")}
-
-        url = (thresholds.get("webhook_url") or "").strip()
-        if url and not url.startswith(("http://", "https://")):
-            return {"status": "error",
-                    "message": "Webhook URL must start with http:// or https://"}
 
         base_url = (thresholds.get("report_base_url") or "").strip()
         if base_url and not base_url.startswith(("http://", "https://")):

@@ -2,8 +2,7 @@
 
 Consumes the report `model` dict (`model["gate"]["ok"|"alerts"]`,
 `model["tracked_days"]`, `model["counts"]`, `model["coverage"]`,
-`model["total_channels"]`) and a `summary` dict (Task 6's
-`summary_for_notify` -- same keys as today's `summary_for_webhook`:
+`model["total_channels"]`) and a `summary` dict (`reports.summary_for_notify`:
 tracked_days, coverage, total_channels, never_watched,
 tuned_never_qualified, top, report_url, alerts). Produces the two builder
 functions a later task wires into the Celery report task, plus tiny

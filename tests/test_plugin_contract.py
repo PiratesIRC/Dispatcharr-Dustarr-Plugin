@@ -40,3 +40,16 @@ def test_plugin_instantiates_without_side_effects():
     inst = plugin.Plugin()
     assert inst.name and inst.version == plugin.PLUGIN_VERSION
     assert isinstance(inst.fields, list) and isinstance(inst.actions, list)
+
+
+def test_webhook_surface_is_gone_and_notify_toggle_present():
+    plugin = load_plugin()
+    field_ids = [f["id"] for f in plugin.FIELDS]
+    assert "notify_enabled" in field_ids
+    assert "webhook_url" not in field_ids
+    assert "webhook_format" not in field_ids
+    assert "report_base_url" in field_ids          # kept: the notify url uses it
+    action_ids = [a["id"] for a in plugin.ACTIONS]
+    assert "send_webhook_now" not in action_ids
+    nf = next(f for f in plugin.FIELDS if f["id"] == "notify_enabled")
+    assert nf["type"] == "boolean" and nf["default"] is False
