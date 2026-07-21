@@ -34,11 +34,27 @@ broken, or that the HOUSEHOLD is idle?":
 Because the immature case is the only one that self-resolves with time and
 every other case does not, classifying by AGE rather than by matching alert
 TEXT is both simpler and more robust (new alert strings never need to be
-added to a matcher): `sensor_blind = (not gate.ok) and tracked_days >=
-window`. A dataset that is still young and not-ok is exactly the F1
-warmup case and must never trigger a critical; once it crosses the window,
-any remaining not-ok state can only be sensor/mass-casualty shaped, because
-the warmup alert would have cleared by then.
+added to a matcher). A dataset that is still young and not-ok is exactly the
+F1 warmup case and must never trigger a critical; once it crosses the
+window, any remaining not-ok state can only be sensor/mass-casualty shaped,
+because the warmup alert would have cleared by then.
+
+FINAL-REVIEW FIX (F1 rounding seam): this used to be
+`sensor_blind = (not gate.ok) and tracked_days >= window`, comparing against
+`model["tracked_days"]`, which `reports.build_model` stores as
+`round(age_days, 1)`. For a raw age in [~29.955, 30.0), rounding pushes
+`tracked_days` up to exactly the window while the dataset is still, in
+reality, immature -- so a healthy household mid-warmup got paged with a
+false CRITICAL "usage sensor not trustworthy". Maturity is now read
+straight from `gate["immature"]`, which `gates.evaluate()` computes from its
+own UN-ROUNDED `age_days` (the same value that drives the warmup alert
+text), so the two can never disagree. `sensor_blind` no longer touches
+`tracked_days` or `thresholds` at all; `thresholds` stays a parameter only
+for call-site signature compatibility. An absent `immature` key (a
+malformed/legacy model, or one built by a caller that predates this fix)
+reads as immature -- never page -- because a false critical is exactly the
+failure this fix exists to remove, so the unknown case must fail toward
+silence, not toward paging.
 """
 from __future__ import annotations
 
@@ -50,15 +66,19 @@ _DEDUP_KEY = "honesty_gate:report"
 
 
 def sensor_blind(model, thresholds):
+    """`thresholds` is accepted for call-site signature compatibility only
+    and is otherwise unused: the maturity decision moved to the gate's own
+    un-rounded `immature` field (see the FINAL-REVIEW FIX note above), which
+    already incorporates `unused_threshold_days` -- re-deriving it here from
+    `thresholds` + `model["tracked_days"]` is exactly the rounding seam that
+    fix removes.
+    """
     gate = (model or {}).get("gate") or {}
     if gate.get("ok", True):
         return False
-    window = float((thresholds or {}).get("unused_threshold_days", 30))
-    try:
-        tracked = float(model.get("tracked_days") or 0)
-    except (TypeError, ValueError):
-        return False          # unreadable age reads as immature: never page
-    return tracked >= window
+    # Absent `immature` (malformed/legacy model) reads as immature: never
+    # page. A false critical is the worse failure -- this is F1's thesis.
+    return not gate.get("immature", True)
 
 
 def load_prev_ok(path):

@@ -844,12 +844,19 @@ class _FakeNotifyClient:
 
 
 def _minimal_model(ok, tracked_days, alerts=None, coverage=0.95,
-                   total_channels=1):
+                   total_channels=1, immature=False):
     """A hand-built report `model` dict carrying every key render_html/
     write_report/summary_for_notify touch, so reports.build_model can be
     monkeypatched wholesale to control gate.ok/tracked_days directly instead
     of reverse-engineering real usage.json + ORM rows to hit gates.evaluate's
-    exact branches."""
+    exact branches.
+
+    `immature` mirrors gates.evaluate()'s F1 field directly (default False:
+    every call site here uses tracked_days=45, a mature dataset) -- kept as
+    an explicit gate key rather than derived from tracked_days so this
+    helper can't reintroduce the rounding seam notify_report.sensor_blind
+    used to have.
+    """
     return {
         "generated_at": NOW,
         "generated_at_local": "2023-11-14 00:00 UTC",
@@ -864,7 +871,8 @@ def _minimal_model(ok, tracked_days, alerts=None, coverage=0.95,
         "excluded": [],
         "unobservable": [],
         "group_rollup": [],
-        "gate": {"ok": ok, "alerts": list(alerts or []), "coverage": coverage},
+        "gate": {"ok": ok, "alerts": list(alerts or []), "coverage": coverage,
+                 "immature": immature},
         "counts": {"never_watched": 0, "too_new": 0, "tuned_never_qualified": 0,
                   "watched": 0, "excluded": 0, "unobservable": 0},
     }

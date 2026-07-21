@@ -1,3 +1,5 @@
+import time as _time
+
 import pytest
 from conftest import load_pure
 
@@ -7,8 +9,13 @@ def nr():
     return load_pure("notify_report")
 
 
-def _model(ok=True, alerts=(), tracked=45):
-    return {"gate": {"ok": ok, "alerts": list(alerts)},
+@pytest.fixture()
+def gates_mod():
+    return load_pure("gates")
+
+
+def _model(ok=True, alerts=(), tracked=45, immature=False):
+    return {"gate": {"ok": ok, "alerts": list(alerts), "immature": immature},
             "tracked_days": tracked, "coverage": 0.97,
             "total_channels": 1440,
             "counts": {"never_watched": 400, "tuned_never_qualified": 20}}
@@ -17,25 +24,86 @@ def _model(ok=True, alerts=(), tracked=45):
 TH = {"unused_threshold_days": 30}
 
 
+def _buckets(now, hours, ticks, max_gap=15.0):
+    out = {}
+    for i in range(hours):
+        key = _time.strftime("%Y-%m-%dT%H", _time.gmtime(now - i * 3600))
+        out[key] = {"ticks": ticks, "max_gap_s": max_gap}
+    return out
+
+
+def _usage_with(now, watched_channels, stats_since, poll_interval_s=15.0):
+    channels = {}
+    for i in range(watched_channels):
+        channels[f"u{i}"] = {"watch_count": 3, "watch_seconds": 3600.0,
+                             "tune_count": 3, "last_watched": now - 3600,
+                             "last_tuned": now - 3600, "first_seen": now - 86400}
+    needed_ticks = int(3600.0 / poll_interval_s) + 5
+    return {"channels": channels,
+            "meta": {"stats_since": stats_since,
+                     "coverage": _buckets(now, 24 * 30, needed_ticks)}}
+
+
 def test_a_young_dataset_never_pages(nr):
     # F1 regression lock: warmup not-ok is BY DESIGN, never a critical.
-    m = _model(ok=False, alerts=["only 7 days of data (need 30)"], tracked=7)
+    m = _model(ok=False, alerts=["only 7 days of data (need 30)"], tracked=7,
+               immature=True)
     assert nr.sensor_blind(m, TH) is False
 
 
 def test_a_mature_not_ok_gate_pages(nr):
     m = _model(ok=False, alerts=["no qualified watches in the last 7 days"],
-                tracked=45)
+                tracked=45, immature=False)
     assert nr.sensor_blind(m, TH) is True
 
 
 def test_a_mature_ok_gate_does_not_page(nr):
-    assert nr.sensor_blind(_model(ok=True, tracked=45), TH) is False
+    assert nr.sensor_blind(_model(ok=True, tracked=45, immature=False), TH) is False
 
 
 def test_exactly_at_the_window_pages(nr):   # gates convention: pass AT threshold
-    m = _model(ok=False, alerts=["x"], tracked=30)
+    # Exactly at the window means age_days == window_days, which is NOT
+    # < window_days -- so gates.evaluate() reports immature=False here (the
+    # not-ok comes from some OTHER alert), and it still pages.
+    m = _model(ok=False, alerts=["x"], tracked=30, immature=False)
     assert nr.sensor_blind(m, TH) is True
+
+
+def test_absent_immature_key_never_pages(nr):
+    """Fail-toward-silence lock: a malformed/legacy model with no `immature`
+    key at all (e.g. built by code that predates this fix) must read as
+    immature and never page -- a false critical is the worse failure, which
+    is F1's whole thesis."""
+    m = {"gate": {"ok": False, "alerts": ["x"]}, "tracked_days": 45}
+    assert nr.sensor_blind(m, TH) is False
+
+
+def test_seam_regression_borderline_age_never_pages(nr, gates_mod):
+    """F1 rounding seam, the finding this fix closes.
+
+    Raw age of 29.96 days against a 30-day window rounds UP to
+    `tracked_days == 30.0` (reports.build_model stores round(age_days, 1)),
+    but the dataset genuinely IS still immature (29.96 < 30). The old
+    `sensor_blind` compared the ROUNDED tracked_days against the window and
+    paged; the fix reads gates.evaluate()'s own un-rounded `immature` field
+    instead, so the two can never disagree.
+    """
+    now = 1_700_000_000.0
+    window_days = 30
+    age_days = 29.96
+    stats_since = now - age_days * 86400.0
+    usage = _usage_with(now, watched_channels=10, stats_since=stats_since)
+    thresholds = {"poll_interval_s": 15.0, "client_gap_grace_s": 90.0,
+                  "unused_threshold_days": window_days,
+                  "never_watched_ceiling": 0.98}
+    gate = gates_mod.evaluate(usage, rows_total=1440, never_watched=400,
+                              now=now, thresholds=thresholds, judged_total=410)
+    assert gate["ok"] is False               # the still-immature alert fired
+    assert gate["immature"] is True           # the un-rounded truth
+
+    model = {"gate": gate, "tracked_days": round(age_days, 1)}
+    assert model["tracked_days"] == 30.0      # the rounding seam itself
+    assert nr.sensor_blind(model, TH) is False
 
 
 def test_emit_gate_alert_then_resolve_pairing(nr):
