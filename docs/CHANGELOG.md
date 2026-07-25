@@ -23,6 +23,30 @@
   so a refusal retries on the next run.
 - `_emit_notifications` no longer discards `emit_report`'s bool; it returns
   `{"enabled", "report_emitted", "error"}`, error redacted.
+- **Every failure now sets `error`.** Dispatcharr's plugin card renders `.file`,
+  `.error` (red, persistent) and `message` (a transient GREEN toast) -- `status`
+  renders nowhere -- so metricsarr's failures, including the pre-existing bug-078
+  publish guard, were pixel-identical to success.
+- **`_atomic_write` uses a process-unique temp name.** A fixed `{path}.tmp` let
+  two concurrent writers interleave and both `os.replace` it, publishing a torn
+  report while `html_path` came back truthy.
+
+### Added
+
+- **`last_scheduled_run_ts`** (`scheduled_run.json`), written by
+  `build_report_task` ONLY and only after the publish guard. Neither Beat's
+  `total_run_count` (it counts messages SENT, not executed) nor Newsflasharr's
+  `last_attachment_delivered_ts` (provenance-blind -- a manual send satisfies it
+  identically) can answer "did the schedule run".
+  **On first deploy this reports "the scheduled report has never run" until the
+  first scheduled run lands**, since there is no prior record. That is accurate
+  here and self-clears.
+- `validate_settings` reports schedule health (missing / disabled / wrong queue /
+  never ran) and, when `notify_enabled` is on, a Newsflasharr collector that has
+  stopped ticking -- `notify()` CREATES the spool directory it writes into, so it
+  returns True even when nothing will ever collect the event.
+- ACTION contract tests (metricsarr pinned fields only, and its single action
+  assertion was a SUBSET check, so a dropped or renamed action passed).
 
 ### Changed
 
