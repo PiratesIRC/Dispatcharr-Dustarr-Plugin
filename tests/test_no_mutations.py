@@ -100,6 +100,21 @@ UNAMBIGUOUS_ORM_METHODS = {"save", "bulk_create", "bulk_update",
 # codebase is the Redis client `collector.py` stores as `self.r`.
 SAFE_DELETE_RECEIVERS = {"self.r"}
 
+# NARROW, NAMED allowance (2026-07-25). Keyed on (file, receiver name) so it
+# cannot widen: a bare `.update()` stays flagged everywhere else, in every file,
+# including a differently-named receiver in this same file.
+#
+# Why this one is legitimate: the invariant is "Phase 1 mutates nothing in
+# DISPATCHARR". `sync_schedule` writes `queue` on METRICSARR'S OWN Celery Beat
+# row -- the same row this module already creates and deletes through
+# `create_or_update_periodic_task` / `delete_periodic_task`, which pass this
+# guard only because they are bare Name calls, NOT because Beat-schedule writes
+# are forbidden (see the module docstring). The write is required because that
+# helper has no `queue` parameter while `run()` re-arms the schedule on every
+# action click -- which silently dropped the queue and left the scheduled report
+# dead and unrunnable (bug-075; live outage found 2026-07-25).
+SAFE_UPDATE_RECEIVERS = {("plugin.py", "_schedule_row")}
+
 FORBIDDEN_ORM_METHODS = AMBIGUOUS_ORM_METHODS | UNAMBIGUOUS_ORM_METHODS | {"delete"}
 
 # Anything that could reach the provider. One ffprobe kicks a live viewer.
@@ -301,6 +316,11 @@ def _orm_write_offenders(source, filename="<test>"):
             if _is_cursor_receiver(func.value, cursor_names, cursor_dotted):
                 offenders.append(f"{filename}:{call.lineno} .{attr}() [raw SQL]")
         elif attr in AMBIGUOUS_ORM_METHODS and _is_orm_receiver(func.value, orm_names, orm_dotted):
+            # Proof of SAFETY is required to pass, exactly as for `.delete()`:
+            # the pair must match both the file AND the bound receiver name.
+            if (attr == "update"
+                    and (filename, _dotted(func.value)) in SAFE_UPDATE_RECEIVERS):
+                continue
             offenders.append(f"{filename}:{call.lineno} .{attr}()")
     return offenders
 
@@ -660,3 +680,51 @@ def test_io_guard_does_not_fire_on_legitimate_io(snippet):
     offenders = _io_offenders(snippet, "<synthetic>")
     assert not offenders, (
         f"I/O guard false-positived: {snippet!r} -> " + ", ".join(offenders))
+
+
+# -- the SAFE_UPDATE_RECEIVERS allowance must not widen -----------------------
+
+# The helper's DEFINITION must be present. The guard proves ORM-ness through
+# assignment provenance (`return PeriodicTask.objects`), so a fixture without it
+# is not flagged AT ALL and every counter-test below would pass for the wrong
+# reason -- which is exactly what happened on the first attempt at these.
+_BEAT_QS_DEF = ("def _periodic_task_qs():\n"
+                "    return PeriodicTask.objects\n")
+
+_BEAT_QUEUE_WRITE = (
+    _BEAT_QS_DEF
+    + "_schedule_row = _periodic_task_qs().filter(name=TASK_NAME)\n"
+      "_schedule_row.update(queue=SCHEDULE_QUEUE)\n")
+
+
+def test_the_beat_queue_write_is_allowed_in_plugin_py():
+    assert _orm_write_offenders(_BEAT_QUEUE_WRITE, "plugin.py") == []
+
+
+def test_the_same_write_is_still_flagged_in_any_other_file():
+    """The allowance is keyed on the FILE as well as the name."""
+    assert _orm_write_offenders(_BEAT_QUEUE_WRITE, "collector.py")
+
+
+def test_a_differently_named_receiver_is_still_flagged_in_plugin_py():
+    """And on the receiver name, so it cannot be reused for another queryset."""
+    src = ("rows = Channel.objects.filter(id=1)\n"
+           "rows.update(name='x')\n")
+    assert _orm_write_offenders(src, "plugin.py")
+
+
+def test_a_plain_channel_update_is_still_flagged_in_plugin_py():
+    """The canonical Dispatcharr mutation must never be laundered by the
+    allowance, even in the one file that carries it."""
+    src = "Channel.objects.filter(id=1).update(name='x')\n"
+    assert _orm_write_offenders(src, "plugin.py")
+
+
+def test_the_allowance_does_not_cover_other_write_methods():
+    """`update` only -- not save/delete/create on the same receiver."""
+    for call in ("_schedule_row.delete()", "_schedule_row.save()",
+                 "_schedule_row.create(name='x')"):
+        src = (_BEAT_QS_DEF
+               + "_schedule_row = _periodic_task_qs().filter(name=TASK_NAME)\n"
+               + call + "\n")
+        assert _orm_write_offenders(src, "plugin.py"), call

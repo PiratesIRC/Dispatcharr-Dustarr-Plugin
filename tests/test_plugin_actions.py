@@ -1066,3 +1066,59 @@ def test_emit_notifications_reports_an_import_failure(plugin, monkeypatch):
     out = plugin._emit_notifications({"notify_enabled": True}, model, written)
     assert out["report_emitted"] is False
     assert out["error"]                      # named, not silent
+
+
+# -- the schedule's queue is load-bearing and must be RE-ASSERTED -------------
+
+def test_sync_schedule_reasserts_the_dvr_queue(plugin, monkeypatch):
+    """THE LIVE OUTAGE (2026-07-25). create_or_update_periodic_task has no
+    queue parameter, and run() calls sync_schedule on EVERY action click, so a
+    hand-applied queue='dvr' was destroyed by the next Validate/Build/Summary
+    press -- leaving the row on the default queue, where plugin @shared_tasks
+    are never registered and every dispatch is rejected (bug-075). Found live
+    at queue=None, runs=0, last_run_at=None."""
+    seen = {}
+    row = type("Row", (), {"queue": None})()
+
+    class _QS:
+        def filter(self, **kw):
+            seen["filter"] = kw
+            return self
+
+        def update(self, **kw):
+            seen["update"] = kw
+            row.queue = kw.get("queue")
+            return 1
+
+    monkeypatch.setattr(plugin, "_periodic_task_qs", lambda: _QS())
+    monkeypatch.setattr(plugin, "_create_or_update_periodic_task", lambda *a, **k: None)
+
+    plugin.sync_schedule({"report_schedule": "weekly"})
+
+    assert seen["filter"] == {"name": plugin.TASK_NAME}
+    assert seen["update"] == {"queue": "dvr"}
+    assert row.queue == "dvr"
+
+
+def test_sync_schedule_does_not_requeue_when_removing_the_schedule(plugin, monkeypatch):
+    """An unknown schedule deletes the row; there is nothing to re-queue."""
+    called = {"update": False, "delete": False}
+
+    class _QS:
+        def filter(self, **kw):
+            return self
+
+        def update(self, **kw):
+            called["update"] = True
+            return 0
+
+    monkeypatch.setattr(plugin, "_periodic_task_qs", lambda: _QS())
+    monkeypatch.setattr(plugin, "_delete_periodic_task",
+                        lambda *a, **k: called.__setitem__("delete", True))
+    monkeypatch.setattr(plugin, "_create_or_update_periodic_task", lambda *a, **k: None)
+
+    # "off" is a real option and is deliberately absent from CRON_BY_SCHEDULE.
+    plugin.sync_schedule({"report_schedule": "off"})
+
+    assert called["delete"] is True
+    assert called["update"] is False

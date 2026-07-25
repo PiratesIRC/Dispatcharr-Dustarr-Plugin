@@ -43,6 +43,9 @@ CSV_DIR = "/config/metricsarr"          # bind mount -> <config-mount>
 
 THREAD_NAME = "metricsarr-collector"
 TASK_NAME = "metricsarr_build_report"
+# bug-075: plugin @shared_tasks register ONLY on the threads `dvr` worker,
+# never on the prefork `celery` worker. A row without this queue is rejected.
+SCHEDULE_QUEUE = "dvr"
 RESTART_BOUND = 5
 RESTART_WINDOW_S = 3600.0
 
@@ -500,21 +503,53 @@ CRON_BY_SCHEDULE = {"daily": "0 3 * * *", "weekly": "0 3 * * 1",
                     "monthly": "0 3 1 * *"}
 
 
+def _create_or_update_periodic_task(*args, **kwargs):
+    """Seam over core.scheduling -- Django must not be imported at module scope
+    (it breaks the loader), and tests need to drive this without a DB."""
+    from core.scheduling import create_or_update_periodic_task
+    return create_or_update_periodic_task(*args, **kwargs)
+
+
+def _delete_periodic_task(*args, **kwargs):
+    from core.scheduling import delete_periodic_task
+    return delete_periodic_task(*args, **kwargs)
+
+
+def _periodic_task_qs():
+    """The Beat row manager for metricsarr's OWN schedule row."""
+    from django_celery_beat.models import PeriodicTask
+    return PeriodicTask.objects
+
+
 def sync_schedule(settings):
     """Register (or remove) the Beat entry. Beat owns the clock, the timezone, and
-    catch-up -- there is no hand-rolled scheduler (fact-check #11)."""
-    from core.scheduling import create_or_update_periodic_task, delete_periodic_task
+    catch-up -- there is no hand-rolled scheduler (fact-check #11).
 
+    THE QUEUE IS LOAD-BEARING AND IS RE-ASSERTED HERE (2026-07-25 outage).
+    Plugin `@shared_task`s never register on Dispatcharr's PREFORK `celery`
+    worker -- only on the `--pool=threads` `dvr` worker (bug-075), confirmed by
+    `celery -A dispatcharr inspect registered`. `create_or_update_periodic_task`
+    has NO `queue` parameter, and `run()` calls this function on EVERY action
+    click, so a hand-applied `queue='dvr'` was silently destroyed by the next
+    Validate/Build/Summary press. The row was found live at `queue=None`,
+    `total_run_count=0`, `last_run_at=None` -- the scheduled report had never
+    run at all, and nothing anywhere said so.
+    """
     schedule = (coerce_settings(settings).get("report_schedule") or "weekly")
     cron = CRON_BY_SCHEDULE.get(schedule)
     if not cron:
-        delete_periodic_task(TASK_NAME)
+        _delete_periodic_task(TASK_NAME)
         return
-    create_or_update_periodic_task(
+    _create_or_update_periodic_task(
         TASK_NAME,
         "_dispatcharr_plugin_metricsarr.plugin.build_report_task",
         cron_expression=cron,
         enabled=True)
+    # Writes metricsarr's OWN schedule row, never Dispatcharr content. Bound to
+    # a name so the AST guard can key its narrow allowance on the receiver --
+    # see SAFE_UPDATE_RECEIVERS in tests/test_no_mutations.py.
+    _schedule_row = _periodic_task_qs().filter(name=TASK_NAME)
+    _schedule_row.update(queue=SCHEDULE_QUEUE)
 
 
 class Plugin:

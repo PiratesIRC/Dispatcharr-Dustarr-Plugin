@@ -42,12 +42,21 @@ def _install_runtime_stubs():
     # function-local import inside gateway.py resolves in tests.
     core_models = types.ModuleType("core.models")
     core_models.CoreSettings = MagicMock(name="CoreSettings")
+    # sync_schedule re-asserts `queue='dvr'` on metricsarr's OWN Beat row
+    # (bug-075; the 2026-07-25 outage), reaching django_celery_beat through
+    # plugin._periodic_task_qs(). Stubbed here rather than monkeypatched per
+    # test, so the REAL code path runs under test instead of being bypassed.
+    dcb = types.ModuleType("django_celery_beat")
+    dcb.__path__ = []
+    dcb_models = types.ModuleType("django_celery_beat.models")
+    dcb_models.PeriodicTask = MagicMock(name="PeriodicTask")
     sys.modules.update({
         "apps": apps, "apps.channels": apps_channels,
         "apps.channels.models": models,
         "django": django, "django.db": django_db,
         "core": core, "core.utils": core_utils, "core.scheduling": core_sched,
         "core.models": core_models,
+        "django_celery_beat": dcb, "django_celery_beat.models": dcb_models,
     })
 
     # celery is imported at MODULE scope in plugin.py (the C1 fix -- the
