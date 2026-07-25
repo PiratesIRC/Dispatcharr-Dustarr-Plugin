@@ -160,3 +160,50 @@ def test_emit_report_carries_the_attachment_and_never_raises(nr):
         raise RuntimeError("x")
 
     assert nr.emit_report(boom, summary, None, None) is False  # never raises
+
+
+# -- a refused emit must not advance the gate state ---------------------------
+# notify() NEVER RAISES -- it returns False (spool full, refused, redaction
+# failure). emit_gate ignored that return, so a critical that was never spooled
+# still recorded prev_ok=False ("alert outstanding"). If the gate then recovered,
+# the operator got "usage sensor trustworthy again" for a problem they were never
+# told about -- and nothing anywhere said the critical had been dropped.
+
+def test_a_refused_alert_does_not_record_an_outstanding_alert(nr):
+    calls = []
+
+    def refused(**kw):
+        calls.append(kw)
+        return False                      # spool refused it; notify never raises
+
+    blind = _model(ok=False, alerts=["the sensor is blind"], tracked=45)
+    prev, action = nr.emit_gate(refused, blind, TH, prev_ok=True)
+    assert calls, "it must still have tried"
+    assert (prev, action) == (True, None), (
+        "a critical that was never spooled must not be recorded as outstanding")
+
+
+def test_a_refused_alert_is_retried_on_the_next_run(nr):
+    sent = []
+
+    def flaky(**kw):
+        sent.append(kw)
+        return len(sent) > 1              # fails once, then succeeds
+
+    blind = _model(ok=False, alerts=["blind"], tracked=45)
+    prev, _ = nr.emit_gate(flaky, blind, TH, prev_ok=True)
+    assert prev is True                   # not recorded
+    prev, action = nr.emit_gate(flaky, blind, TH, prev_ok=prev)
+    assert (prev, action) == (False, "alert")
+    assert len(sent) == 2
+
+
+def test_a_refused_resolve_keeps_the_alert_outstanding(nr):
+    def refused(**kw):
+        return False
+
+    ok = _model(ok=True, tracked=45)
+    prev, action = nr.emit_gate(refused, ok, TH, prev_ok=False)
+    assert (prev, action) == (False, None), (
+        "a resolve that was never spooled must leave the alert outstanding "
+        "so the next run retries it")

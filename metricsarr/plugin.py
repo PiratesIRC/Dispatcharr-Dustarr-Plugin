@@ -376,20 +376,29 @@ def _notify_client():
 
 
 def _emit_notifications(settings, model, written):
-    """Newsflasharr emits. Called from build_report_task ONLY -- it is the
-    single writer for the honesty-gate state (notify_state.json), and the
-    interactive build_report action deliberately does not emit (one report
-    per scheduled run, not one per click).
+    """Newsflasharr emits. The single writer for the honesty-gate state
+    (notify_state.json). The interactive `build_report` action deliberately
+    does NOT emit (one report per run, not one per click).
 
     Never raises: a notify failure -- or Newsflasharr not being installed at
     all -- must never fail the report task. Must run AFTER the caller has
     confirmed written["html_path"] is truthy (bug-078's lesson one layer up:
     a report that was never published must not still trigger a notification
-    about it)."""
+    about it).
+
+    Returns `{"enabled": bool, "report_emitted": bool, "error": str|None}`.
+    It used to return None and discard `emit_report`'s bool, so a REFUSED
+    spool write -- `notify()` never raises, it returns False -- left the run
+    reporting green with no trace anywhere. The dead-signal shape this
+    codebase keeps producing. `error` carries a redacted reason, never a raw
+    exception: provider credentials live inside stream URLs here.
+    """
+    result = {"enabled": False, "report_emitted": False, "error": None}
     try:
         thresholds = coerce_settings(settings)
         if not thresholds.get("notify_enabled"):
-            return
+            return result
+        result["enabled"] = True
         nc = _notify_client()
         base = (thresholds.get("report_base_url") or "").strip()
         archive = written.get("archive_path")
@@ -398,7 +407,8 @@ def _emit_notifications(settings, model, written):
             url = base.rstrip("/") + "/logos/metricsarr/" + os.path.basename(archive)
         summary = reports.summary_for_notify(
             model, reports.full_report_url(base, reports.REPORT_URL_PATH))
-        notify_report.emit_report(nc.notify, summary, url, archive)
+        result["report_emitted"] = bool(
+            notify_report.emit_report(nc.notify, summary, url, archive))
 
         state_path = os.path.join(DATA_DIR, notify_report.STATE_FILE)
         prev_ok = notify_report.load_prev_ok(state_path)
@@ -410,8 +420,10 @@ def _emit_notifications(settings, model, written):
         save_needed = new_ok != prev_ok or not os.path.exists(state_path)
         if save_needed:
             notify_report.save_prev_ok(state_path, new_ok)
-    except Exception:
+    except Exception as exc:
+        result["error"] = redaction.redact(f"{exc}")
         _LOGGER.warning("metricsarr notify emit failed (suppressed)")
+    return result
 
 
 @shared_task

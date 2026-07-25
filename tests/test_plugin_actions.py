@@ -1008,3 +1008,61 @@ def test_no_emit_when_the_publish_fails(plugin, tmp_path, monkeypatch):
     with pytest.raises(RuntimeError):
         plugin.build_report_task()
     assert calls == []
+
+
+# -- _emit_notifications must report what it did ------------------------------
+# It discarded emit_report's bool, so a refused spool write (notify() returns
+# False, it never raises) left the scheduled run reporting green with no trace.
+# The new on-demand button cannot be honest without this signal either.
+
+def test_emit_notifications_reports_a_successful_emit(plugin, monkeypatch):
+    monkeypatch.setattr(plugin, "_notify_client", lambda: _FakeNotifyClient([]))
+    model = _minimal_model(ok=True, tracked_days=45)
+    written = {"archive_path": "/tmp/report-1.html", "html_path": "/tmp/report.html"}
+    out = plugin._emit_notifications({"notify_enabled": True}, model, written)
+    assert out["enabled"] is True
+    assert out["report_emitted"] is True
+    assert out["error"] is None
+
+
+def test_emit_notifications_distinguishes_refused_from_successful(plugin, monkeypatch):
+    """DIFFERENTIAL on purpose. Asserting only `report_emitted is False` for a
+    refusal is HOLLOW -- False is ALSO the initialised default, so deleting the
+    assignment entirely still passes it (proven by mutation). Only the contrast
+    between the two outcomes pins that the bool is genuinely read."""
+    model = _minimal_model(ok=True, tracked_days=45)
+    written = {"archive_path": "/tmp/report-1.html", "html_path": "/tmp/report.html"}
+
+    class _Refuse:
+        @staticmethod
+        def notify(**kw):
+            return False                    # spool refused; notify never raises
+
+    monkeypatch.setattr(plugin, "_notify_client", lambda: _Refuse)
+    refused = plugin._emit_notifications({"notify_enabled": True}, model, written)
+
+    monkeypatch.setattr(plugin, "_notify_client", lambda: _FakeNotifyClient([]))
+    accepted = plugin._emit_notifications({"notify_enabled": True}, model, written)
+
+    assert refused["report_emitted"] is False
+    assert accepted["report_emitted"] is True
+    assert refused["report_emitted"] != accepted["report_emitted"]
+
+
+def test_emit_notifications_reports_that_notifications_are_off(plugin):
+    model = _minimal_model(ok=True, tracked_days=45)
+    written = {"archive_path": "/tmp/report-1.html", "html_path": "/tmp/report.html"}
+    out = plugin._emit_notifications({"notify_enabled": False}, model, written)
+    assert out["enabled"] is False
+    assert out["report_emitted"] is False
+
+
+def test_emit_notifications_reports_an_import_failure(plugin, monkeypatch):
+    def boom():
+        raise ImportError("no module named notify_client")
+    monkeypatch.setattr(plugin, "_notify_client", boom)
+    model = _minimal_model(ok=True, tracked_days=45)
+    written = {"archive_path": "/tmp/report-1.html", "html_path": "/tmp/report.html"}
+    out = plugin._emit_notifications({"notify_enabled": True}, model, written)
+    assert out["report_emitted"] is False
+    assert out["error"]                      # named, not silent

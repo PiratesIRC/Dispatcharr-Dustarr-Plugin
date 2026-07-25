@@ -130,18 +130,30 @@ def emit_gate(notify_fn, model, thresholds, prev_ok):
     try:
         if sensor_blind(model, thresholds):
             alerts = ((model or {}).get("gate") or {}).get("alerts") or []
-            notify_fn(source="metricsarr", event="honesty_gate",
-                      severity="critical", kind="event",
-                      dedup_key=_DEDUP_KEY,
-                      title="Metricsarr: usage sensor not trustworthy",
-                      body="\n".join(str(a) for a in alerts))
+            sent = notify_fn(source="metricsarr", event="honesty_gate",
+                             severity="critical", kind="event",
+                             dedup_key=_DEDUP_KEY,
+                             title="Metricsarr: usage sensor not trustworthy",
+                             body="\n".join(str(a) for a in alerts))
+            # notify() NEVER RAISES -- it RETURNS False when the spool refuses
+            # it (spool full, redaction failure, Newsflasharr not installed).
+            # Recording an alert that was never spooled is worse than a
+            # duplicate: the state then says "outstanding", so a later recovery
+            # emits a RESOLVE for a critical the operator never received.
+            # Leaving prev_ok untouched retries on the next scheduled run.
+            if not sent:
+                return bool(prev_ok), None
             return False, "alert"
         if not prev_ok:
-            notify_fn(source="metricsarr", event="honesty_gate",
-                      severity="info", kind="resolve",
-                      dedup_key=_DEDUP_KEY,
-                      title="Metricsarr: usage sensor trustworthy again",
-                      body="honesty gate passing again")
+            sent = notify_fn(source="metricsarr", event="honesty_gate",
+                             severity="info", kind="resolve",
+                             dedup_key=_DEDUP_KEY,
+                             title="Metricsarr: usage sensor trustworthy again",
+                             body="honesty gate passing again")
+            # Same rule the other way round: a resolve that never landed must
+            # leave the alert OUTSTANDING, or the pairing is lost in silence.
+            if not sent:
+                return False, None
             return True, "resolve"
         return True, None
     except Exception:
