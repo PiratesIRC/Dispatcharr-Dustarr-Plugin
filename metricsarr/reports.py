@@ -598,7 +598,12 @@ def render_csv(model):
 
 
 def _atomic_write(path, text):
-    tmp = f"{path}.tmp"
+    # PROCESS-UNIQUE temp name. A fixed "{path}.tmp" lets two concurrent writers
+    # -- the scheduled Celery run and an interactive build, or two fast clicks --
+    # interleave into the SAME file and both os.replace it, publishing a TORN
+    # report while `html_path` still comes back truthy, so the publish guard
+    # reports it as a success.
+    tmp = f"{path}.{os.getpid()}.tmp"
     with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(text)
     try:

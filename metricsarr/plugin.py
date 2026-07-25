@@ -12,6 +12,7 @@ runtime, same as every sibling plugin's Celery task.
 """
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
@@ -363,6 +364,12 @@ def _build_report(settings):
               "file": written.get("html_path") or url}
     if written.get("error"):
         result["message"] += f" ({written['error']})"
+    if not published:
+        # bug-078 shipped this guard reporting only `status`, which the plugin
+        # card does not render -- so "nothing was published" looked identical to
+        # success. `error` is the only persistent, red surface.
+        result["error"] = (f"Report was NOT published: "
+                           f"{written.get('error') or 'unknown write failure'}")
     return result, model, written
 
 
@@ -482,6 +489,9 @@ def build_report_task():
             raise RuntimeError(
                 f"report not published: {written.get('error') or 'unknown write failure'}")
         _emit_notifications(settings, model, written)
+        # AFTER the publish guard above, so a run that published nothing is
+        # never recorded as a healthy scheduled run (bug-078's lesson).
+        _write_scheduled_run_ts(time.time())
         return model["counts"]
     except Exception as exc:
         redacted = redaction.redact(str(exc))
@@ -501,6 +511,93 @@ def _load_settings():
 
 CRON_BY_SCHEDULE = {"daily": "0 3 * * *", "weekly": "0 3 * * 1",
                     "monthly": "0 3 1 * *"}
+
+
+SCHEDULED_RUN_FILE = "scheduled_run.json"
+
+
+def _scheduled_run_path():
+    return os.path.join(DATA_DIR, SCHEDULED_RUN_FILE)
+
+
+def _write_scheduled_run_ts(now):
+    """Record that the SCHEDULE ran. Written by build_report_task ONLY.
+
+    Nothing else can answer the question. Beat's `total_run_count` counts
+    messages SENT, not executed, so it reads healthy for a task the worker
+    rejects -- which is exactly the outage found on 2026-07-25. And
+    Newsflasharr's `last_attachment_delivered_ts` is provenance-blind: it
+    stamps on ANY successful smtp send carrying a file, so a manual send
+    satisfies it identically and would mask a dead scheduler indefinitely.
+
+    Never raises: a health signal must not break the run it reports on.
+    """
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp = _scheduled_run_path() + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"last_scheduled_run_ts": float(now)}, fh)
+        os.replace(tmp, _scheduled_run_path())
+    except Exception:
+        _LOGGER.warning("metricsarr could not record the scheduled run")
+
+
+def _read_scheduled_run_ts():
+    """-> float, or None for never/unreadable/corrupt.
+
+    Degrades to "never ran", which is the SAFE direction: this file exists to
+    REPORT a problem, so an unreadable one must not hide one.
+    """
+    try:
+        with open(_scheduled_run_path(), encoding="utf-8") as fh:
+            value = json.load(fh).get("last_scheduled_run_ts")
+        return float(value) if value is not None else None
+    except Exception:
+        return None
+
+
+def _notifier_alive():
+    """Is Newsflasharr's collector ticking?
+
+    `notify()` returns True for a successful SPOOL WRITE and CREATES the spool
+    directory itself, so it says True with Newsflasharr absent, disabled, or its
+    collector dead -- the event then rots in a directory nobody reads. This is
+    the one thing between spooling and the inbox the operator can act on, and
+    `notifier_alive` already existed in the vendored client, uncalled.
+    """
+    try:
+        return bool(_notify_client().notifier_alive())
+    except Exception:
+        return False
+
+
+def _schedule_health():
+    """Facts about metricsarr's OWN Beat row plus the last real scheduled run.
+
+    `total_run_count` is deliberately NOT consulted: Beat counts messages SENT,
+    not executed, so it reads healthy for a task the worker rejects -- which is
+    precisely the outage this function exists to surface.
+    """
+    out = {"exists": False, "enabled": False, "queue": None,
+           "last_run_ts": _read_scheduled_run_ts(), "problems": []}
+    try:
+        row = _periodic_task_qs().filter(name=TASK_NAME).first()
+    except Exception:
+        out["problems"].append("could not read the report schedule")
+        return out
+    if row is None:
+        out["problems"].append("no report schedule is registered")
+        return out
+    out.update(exists=True, enabled=bool(row.enabled), queue=row.queue)
+    if not row.enabled:
+        out["problems"].append("the report schedule is disabled")
+    if row.queue != SCHEDULE_QUEUE:
+        out["problems"].append(
+            f"schedule queue is {row.queue!r}, not {SCHEDULE_QUEUE!r} -- the "
+            f"scheduled report will be rejected and never run")
+    if out["last_run_ts"] is None:
+        out["problems"].append("the scheduled report has never run")
+    return out
 
 
 def _create_or_update_periodic_task(*args, **kwargs):
@@ -669,19 +766,41 @@ class Plugin:
             try:
                 re.compile(str(raw_re))
             except re.error as exc:
-                return {"status": "error",
-                        "message": redaction.redact(
-                            f"Excluded name regex does not compile: {exc}")}
+                # `error` as well as `status`: the plugin card renders `.error`
+                # (red, persistent) and `message` (a transient GREEN toast), but
+                # `status` NOWHERE -- so a failure without `error` looks exactly
+                # like a success.
+                msg = redaction.redact(
+                    f"Excluded name regex does not compile: {exc}")
+                return {"status": "error", "message": msg, "error": msg}
 
         base_url = (thresholds.get("report_base_url") or "").strip()
         if base_url and not base_url.startswith(("http://", "https://")):
-            return {"status": "error",
-                    "message": "Report base URL must start with http:// or https://"}
+            msg = "Report base URL must start with http:// or https://"
+            return {"status": "error", "message": msg, "error": msg}
 
         # sync_schedule already ran once in run() before dispatch (I3) -- that
         # is the single arming site. Calling it again here would just arm the
         # schedule twice per click for no benefit.
+        health = _schedule_health()
+        problems = list(health["problems"])
+        # Only meaningful when notifications are ON -- flagging a dead collector
+        # for an operator who is not using it is a false alarm, which is its own
+        # defect.
+        if thresholds.get("notify_enabled") and not _notifier_alive():
+            problems.append(
+                "Newsflasharr's collector has not ticked recently -- report "
+                "emails will be spooled but never sent")
+        if problems:
+            return {"status": "error", "message": problems[0],
+                    "error": "; ".join(problems)}
+
+        if health["last_run_ts"] is not None:
+            age_d = (time.time() - health["last_run_ts"]) / 86400.0
+            ran = f" Scheduled report last ran {age_d:.1f} days ago."
+        else:
+            ran = ""
         return {"status": "ok",
                 "message": (f"Settings OK. Poll {thresholds['poll_interval_s']}s, "
                             f"min watch {thresholds['min_watch_seconds']:.0f}s, "
-                            f"report {thresholds['report_schedule']}.")}
+                            f"report {thresholds['report_schedule']}.{ran}")}

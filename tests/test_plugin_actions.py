@@ -132,7 +132,8 @@ def test_validate_settings_reports_a_broken_regex(plugin):
     assert "regex" in result["message"].lower()
 
 
-def test_validate_settings_passes_on_defaults(plugin):
+def test_validate_settings_passes_on_defaults(plugin, monkeypatch):
+    _stub_health(plugin, monkeypatch)   # this test is about settings parsing
     result = plugin.Plugin().run("validate_settings", {}, {"settings": {}})
     assert result["status"] == "ok"
 
@@ -145,13 +146,15 @@ def test_validate_settings_rejects_report_base_url_without_scheme(plugin):
     assert "http" in result["message"].lower()
 
 
-def test_validate_settings_accepts_report_base_url_with_http_scheme(plugin):
+def test_validate_settings_accepts_report_base_url_with_http_scheme(plugin, monkeypatch):
+    _stub_health(plugin, monkeypatch)
     result = plugin.Plugin().run("validate_settings", {},
                                  {"settings": {"report_base_url": "http://192.168.1.53:9191"}})
     assert result["status"] == "ok"
 
 
-def test_validate_settings_accepts_report_base_url_with_https_scheme(plugin):
+def test_validate_settings_accepts_report_base_url_with_https_scheme(plugin, monkeypatch):
+    _stub_health(plugin, monkeypatch)
     result = plugin.Plugin().run("validate_settings", {},
                                  {"settings": {"report_base_url": "https://example.com"}})
     assert result["status"] == "ok"
@@ -231,8 +234,9 @@ def test_show_summary_uses_the_gateway_clock_not_wall_clock(plugin, tmp_path,
 
 def test_actions_expose_the_expected_ids(plugin):
     ids = {a["id"] for a in plugin.ACTIONS}
-    assert {"build_report", "show_summary",
-            "validate_settings"} <= ids
+    # EQUALITY, not a subset: a subset check passes when an action is dropped,
+    # renamed or silently rejected by Dispatcharr's serializer.
+    assert ids == {"build_report", "show_summary", "validate_settings"}
 
 
 # ---- C1: build_report_task must actually register with Celery --------------
@@ -1122,3 +1126,225 @@ def test_sync_schedule_does_not_requeue_when_removing_the_schedule(plugin, monke
 
     assert called["delete"] is True
     assert called["update"] is False
+
+
+# -- proving the SCHEDULE ran, which no existing signal can ------------------
+# Beat's total_run_count counts messages SENT, not executed, so it reads healthy
+# for a task the worker rejects. Newsflasharr's last_attachment_delivered_ts is
+# provenance-blind -- it stamps on ANY smtp send carrying a file, so a manual
+# send satisfies it identically. Neither can answer "did the schedule fire".
+
+def test_scheduled_run_ts_round_trips(plugin, monkeypatch, tmp_path):
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
+    assert plugin._read_scheduled_run_ts() is None
+    plugin._write_scheduled_run_ts(1_700_000_000.0)
+    assert plugin._read_scheduled_run_ts() == 1_700_000_000.0
+
+
+def test_a_corrupt_scheduled_run_file_reads_as_never(plugin, monkeypatch, tmp_path):
+    """Degrade to 'never ran' -- the SAFE direction. This file exists to REPORT
+    a problem, so it must never become one, and it must not hide one either."""
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
+    (tmp_path / "scheduled_run.json").write_text("{not json", encoding="utf-8")
+    assert plugin._read_scheduled_run_ts() is None
+
+
+def test_an_unwritable_scheduled_run_file_never_breaks_the_run(plugin, monkeypatch):
+    monkeypatch.setattr(plugin, "DATA_DIR", "/nonexistent\x00/bad")
+    plugin._write_scheduled_run_ts(1.0)      # must not raise
+
+
+def _stub_a_successful_build(plugin, monkeypatch):
+    monkeypatch.setattr(plugin, "_build_report", lambda s: (
+        {"status": "ok", "message": "built"},
+        _minimal_model(ok=True, tracked_days=45),
+        {"html_path": "/tmp/report.html", "archive_path": "/tmp/report-1.html"}))
+    monkeypatch.setattr(plugin, "_emit_notifications", lambda *a, **k: {
+        "enabled": False, "report_emitted": False, "error": None})
+    monkeypatch.setattr(plugin, "_load_settings", lambda: {})
+
+
+def test_only_the_scheduled_task_stamps_the_schedule(plugin, monkeypatch, tmp_path):
+    """DIFFERENTIAL and the whole point: the interactive action must NOT stamp
+    it, or a button press would mask a dead scheduler exactly as the
+    attachment timestamp already does."""
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
+    _stub_a_successful_build(plugin, monkeypatch)
+
+    plugin.Plugin().run("build_report", {}, {"settings": {}})
+    assert plugin._read_scheduled_run_ts() is None, "an action must NOT stamp it"
+
+    plugin.build_report_task()
+    assert plugin._read_scheduled_run_ts() is not None, "the task MUST stamp it"
+
+
+def test_a_failed_publish_does_not_record_a_scheduled_run(plugin, monkeypatch, tmp_path):
+    """bug-078's lesson: a run that published nothing is not a healthy run."""
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(plugin, "_build_report", lambda s: (
+        {"status": "error"}, _minimal_model(ok=True, tracked_days=45),
+        {"html_path": None, "error": "Permission denied"}))
+    monkeypatch.setattr(plugin, "_load_settings", lambda: {})
+    with pytest.raises(RuntimeError):
+        plugin.build_report_task()
+    assert plugin._read_scheduled_run_ts() is None
+
+
+# -- failures must reach the surface that actually RENDERS --------------------
+# Dispatcharr's plugin card renders `.file`, `.error` (red, persistent) and
+# `message` (a TRANSIENT, hardcoded-GREEN toast). `status` renders NOWHERE.
+# metricsarr set `error` nowhere at all, so its existing bug-078 publish
+# failure was already pixel-identical to success.
+
+_HEALTHY = {"exists": True, "enabled": True, "queue": "dvr",
+            "last_run_ts": 1_700_000_000.0, "problems": []}
+
+
+def _stub_health(plugin, monkeypatch, **over):
+    h = dict(_HEALTHY)
+    h.update(over)
+    monkeypatch.setattr(plugin, "_schedule_health", lambda: h)
+    monkeypatch.setattr(plugin, "_notifier_alive", lambda: True)
+
+
+def test_validate_is_clean_when_everything_is_healthy(plugin, monkeypatch):
+    """DIFFERENTIAL anchor: without this, an implementation that ALWAYS sets
+    `error` would pass every negative test below."""
+    _stub_health(plugin, monkeypatch)
+    r = plugin.Plugin().run("validate_settings", {}, {"settings": {}})
+    assert r["status"] == "ok"
+    assert not r.get("error")
+
+
+def test_validate_reports_a_lost_queue(plugin, monkeypatch):
+    """The 2026-07-25 outage, as a regression test on the reporting side."""
+    _stub_health(plugin, monkeypatch, queue=None,
+                 problems=["schedule queue is None, not 'dvr'"])
+    r = plugin.Plugin().run("validate_settings", {}, {"settings": {}})
+    assert r["status"] == "error"
+    assert r.get("error") and "dvr" in r["error"]
+
+
+def test_validate_reports_a_schedule_that_never_ran(plugin, monkeypatch):
+    _stub_health(plugin, monkeypatch, last_run_ts=None,
+                 problems=["the scheduled report has never run"])
+    r = plugin.Plugin().run("validate_settings", {}, {"settings": {}})
+    assert r.get("error") and "never run" in r["error"]
+
+
+def test_validate_reports_a_dead_newsflasharr_collector(plugin, monkeypatch):
+    """notify() CREATES the spool directory it writes into, so it returns True
+    even when nothing will ever collect the event."""
+    _stub_health(plugin, monkeypatch)
+    monkeypatch.setattr(plugin, "_notifier_alive", lambda: False)
+    r = plugin.Plugin().run("validate_settings", {},
+                            {"settings": {"notify_enabled": True}})
+    assert r.get("error") and "collector" in r["error"].lower()
+
+
+def test_a_dead_collector_is_not_reported_when_notify_is_off(plugin, monkeypatch):
+    """DIFFERENTIAL: a false alarm is its own defect. With notifications off,
+    the collector's state is irrelevant."""
+    _stub_health(plugin, monkeypatch)
+    monkeypatch.setattr(plugin, "_notifier_alive", lambda: False)
+    r = plugin.Plugin().run("validate_settings", {},
+                            {"settings": {"notify_enabled": False}})
+    assert r["status"] == "ok"
+    assert not r.get("error")
+
+
+def test_the_existing_regex_error_now_sets_the_error_key(plugin, monkeypatch):
+    _stub_health(plugin, monkeypatch)
+    r = plugin.Plugin().run("validate_settings", {},
+                            {"settings": {"exclude_name_regex": "((("}})
+    assert r["status"] == "error"
+    assert r.get("error"), "a failure with no `error` key renders GREEN"
+
+
+def test_the_existing_base_url_error_now_sets_the_error_key(plugin, monkeypatch):
+    _stub_health(plugin, monkeypatch)
+    r = plugin.Plugin().run("validate_settings", {},
+                            {"settings": {"report_base_url": "192.168.1.1:9191"}})
+    assert r["status"] == "error"
+    assert r.get("error")
+
+
+def test_a_failed_publish_sets_the_error_key(plugin, monkeypatch, tmp_path):
+    _fail_html_writes(plugin, monkeypatch, tmp_path)
+    result, _, _ = plugin._build_report({})
+    assert result["status"] == "error"
+    assert result.get("error"), "bug-078's guard renders GREEN without this"
+
+
+# -- _schedule_health itself, not just how _validate renders it --------------
+# The tests above stub _schedule_health wholesale, so its own logic needs
+# direct cover: a mutation deleting the queue check survived them.
+
+def _fake_row(queue="dvr", enabled=True):
+    return type("Row", (), {"queue": queue, "enabled": enabled})()
+
+
+def _stub_row(plugin, monkeypatch, row):
+    class _QS:
+        def filter(self, **kw):
+            return self
+
+        def first(self):
+            if isinstance(row, Exception):
+                raise row
+            return row
+
+    monkeypatch.setattr(plugin, "_periodic_task_qs", lambda: _QS())
+
+
+def test_schedule_health_is_clean_for_a_healthy_row(plugin, monkeypatch, tmp_path):
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
+    plugin._write_scheduled_run_ts(1_700_000_000.0)
+    _stub_row(plugin, monkeypatch, _fake_row())
+    h = plugin._schedule_health()
+    assert h["problems"] == []
+    assert h["queue"] == "dvr" and h["exists"] and h["enabled"]
+
+
+def test_schedule_health_flags_a_lost_queue(plugin, monkeypatch, tmp_path):
+    """THE OUTAGE: queue=None routes to the default worker, which never
+    registers plugin tasks, so every dispatch is rejected."""
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
+    plugin._write_scheduled_run_ts(1_700_000_000.0)
+    _stub_row(plugin, monkeypatch, _fake_row(queue=None))
+    problems = plugin._schedule_health()["problems"]
+    assert any("dvr" in p for p in problems), problems
+
+
+def test_schedule_health_flags_a_wrong_queue_too(plugin, monkeypatch, tmp_path):
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
+    plugin._write_scheduled_run_ts(1_700_000_000.0)
+    _stub_row(plugin, monkeypatch, _fake_row(queue="celery"))
+    assert plugin._schedule_health()["problems"]
+
+
+def test_schedule_health_flags_a_disabled_row(plugin, monkeypatch, tmp_path):
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
+    plugin._write_scheduled_run_ts(1_700_000_000.0)
+    _stub_row(plugin, monkeypatch, _fake_row(enabled=False))
+    assert any("disabled" in p for p in plugin._schedule_health()["problems"])
+
+
+def test_schedule_health_flags_a_missing_row(plugin, monkeypatch, tmp_path):
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
+    _stub_row(plugin, monkeypatch, None)
+    h = plugin._schedule_health()
+    assert h["exists"] is False
+    assert any("no report schedule" in p for p in h["problems"])
+
+
+def test_schedule_health_flags_a_never_run_schedule(plugin, monkeypatch, tmp_path):
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))   # no stamp written
+    _stub_row(plugin, monkeypatch, _fake_row())
+    assert any("never run" in p for p in plugin._schedule_health()["problems"])
+
+
+def test_schedule_health_never_raises_on_a_db_error(plugin, monkeypatch, tmp_path):
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
+    _stub_row(plugin, monkeypatch, RuntimeError("db down"))
+    assert plugin._schedule_health()["problems"]

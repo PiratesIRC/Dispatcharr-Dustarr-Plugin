@@ -360,3 +360,25 @@ def test_negative_watch_count_is_not_bucketed_as_watched(rp, gw):
     model = rp.build_model(rows(gw, 1), usage, SETTINGS, NOW)
     assert model["counts"]["watched"] == 0
     assert model["most_used"] == []
+
+
+def test_atomic_write_uses_a_process_unique_temp_name(rp, tmp_path, monkeypatch):
+    """A FIXED "{path}.tmp" lets two concurrent writers -- the scheduled Celery
+    run and an interactive build -- interleave into the same temp file and both
+    os.replace it, publishing a TORN report while html_path comes back truthy,
+    so the publish guard reports success."""
+    import os
+    seen = []
+    real_open = open
+
+    def spy(p, *a, **k):
+        seen.append(str(p))
+        return real_open(p, *a, **k)
+
+    monkeypatch.setattr("builtins.open", spy)
+    rp._atomic_write(str(tmp_path / "r.html"), "x")
+
+    tmps = [s for s in seen if s.endswith(".tmp")]
+    assert tmps, "no temp file was used"
+    assert all(str(os.getpid()) in t for t in tmps), tmps
+    assert (tmp_path / "r.html").read_text(encoding="utf-8") == "x"
