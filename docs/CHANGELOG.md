@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Fixed
+
+- **The scheduled report never ran, and every action click re-broke it.**
+  `metricsarr_build_report` was found with `queue=None`, `total_run_count=0`,
+  `last_run_at=None`. `build_report_task` registers on the `dvr` worker ONLY, so a
+  row with no queue routes to the default worker, which rejects every dispatch
+  (bug-075). The cause: `run()` calls `sync_schedule` on EVERY action, and
+  `create_or_update_periodic_task` has no `queue` parameter, so the hand-applied
+  `queue='dvr'` was destroyed by the next Validate/Build/Summary press.
+  `sync_schedule` now re-asserts the queue, and self-heals from `queue=None` on the
+  next click. The AST mutation guard was NOT loosened -- it gained a narrow
+  `(file, receiver-name)` allowance plus five counter-fixtures proving it cannot
+  widen.
+- **A refused notify was recorded as if it had been delivered.** `emit_gate`
+  ignored `notify_fn`'s return, and `notify()` never raises -- it returns False. So
+  a critical "usage sensor not trustworthy" that was never spooled still recorded
+  `prev_ok=False`, and a later recovery emitted "trustworthy again" for a problem
+  the operator was never told about. State now advances only when the emit landed,
+  so a refusal retries on the next run.
+- `_emit_notifications` no longer discards `emit_report`'s bool; it returns
+  `{"enabled", "report_emitted", "error"}`, error redacted.
+
 ### Changed
 
 - **Removed the built-in Discord/generic-JSON webhook** (`webhook.py`,
