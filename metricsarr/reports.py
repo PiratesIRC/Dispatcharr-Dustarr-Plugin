@@ -491,6 +491,50 @@ def _svg_split_bar(segments, width=900):
     return svg, f'<ul class="legend">{"".join(legend)}</ul>'
 
 
+METER_H = 14
+GATE_PCT = 0.90     # gates.py's MIN_COVERAGE floor -- ticked so distance is visible
+
+
+def _svg_meter(fraction, gate_ok, width=280):
+    """Sampling DENSITY, not confidence. Returns (svg, chip_html).
+
+    Coverage attests to sampling density, never to data validity -- so length
+    encodes coverage in ONE neutral hue and the gate verdict rides on a
+    separate chip. Encoding the verdict as the bar's colour would paint a full
+    green bar for a blind-but-ticking collector, which is this plugin's
+    documented worst input.
+
+    TOTAL over its inputs (see _svg_split_bar's note on the missing net):
+    NaN, both infinities, None, non-numeric strings and unexpected types all
+    degrade to a sane default (0.0) rather than raising.
+    """
+    try:
+        value = float(fraction)
+    except (TypeError, ValueError):
+        value = 0.0
+    if value != value or value in (float("inf"), float("-inf")):   # NaN / inf
+        value = 0.0
+    value = min(1.0, max(0.0, value))
+
+    fill_w = width * value
+    tick_x = width * GATE_PCT
+    svg = (f'<svg class="meter" role="img"'
+           f' aria-label="Sampling density {value:.1%}"'
+           f' viewBox="0 0 {width} {METER_H}" preserveAspectRatio="none">'
+           f'<rect class="track" x="0" y="3" width="{width}" height="8" rx="4"/>'
+           f'<rect class="fill" x="0" y="3" width="{fill_w:.2f}" height="8" rx="4"/>'
+           f'<rect class="tick" x="{tick_x:.2f}" y="0" width="1.5"'
+           f' height="{METER_H}"/>'
+           f'<title>Sampling density {value:.1%} (gate at {GATE_PCT:.0%})</title>'
+           f'</svg>')
+
+    if gate_ok:
+        chip = '<span class="chip chip-ok"><b>&#10003;</b> sampling OK</span>'
+    else:
+        chip = '<span class="chip chip-bad"><b>&#9888;</b> not trustworthy</span>'
+    return svg, chip
+
+
 _CSS = """
 :root {
   color-scheme: light dark;
@@ -546,6 +590,19 @@ _CSS += """
 .swatch.seg-toonew { background: var(--toonew); }
 .swatch.seg-tuned { background: var(--tuned); }
 .caption { font-size: 13px; opacity: .7; margin: 2px 0 18px; }
+"""
+
+_CSS += """
+.meter { width: 280px; max-width: 100%; height: 14px; vertical-align: middle; }
+.meter .track { fill: var(--track); }
+.meter .fill { fill: var(--never); }
+.meter .tick { fill: var(--bad); opacity: .55; }
+.meterrow { display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+            margin: 12px 0 16px; font-size: 13px; }
+.chip { font-size: 12px; padding: 2px 9px; border-radius: 999px;
+        border: 1px solid; }
+.chip-ok { color: var(--ok); border-color: var(--ok); }
+.chip-bad { color: var(--bad); border-color: var(--bad); }
 """
 
 _CSS += """
@@ -702,6 +759,12 @@ def render_html(model):
                f"not judged: {counts['excluded']} excluded, "
                f"{counts['unobservable']} unobservable")
 
+    meter_svg, meter_chip = _svg_meter(model["coverage"], gate["ok"])
+    meter_row = (f'<div class="meterrow">{meter_svg}'
+                 f'<span>sampling density {model["coverage"]:.1%}</span>'
+                 f'<span>{_esc(model["tracked_days"])} days tracked</span>'
+                 f'{meter_chip}</div>')
+
     never_body = (
         "<div class='card'><div class='scroll'><table>"
         "<thead><tr><th>Group</th><th>Never watched</th><th>Total</th></tr></thead>"
@@ -751,6 +814,7 @@ def render_html(model):
 {bar_svg}
 {bar_legend}
 <div class="caption">{caption}</div>
+{meter_row}
 {banner}
 {sections}
 

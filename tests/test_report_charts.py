@@ -89,6 +89,52 @@ def test_zero_count_segments_are_dropped_entirely(rp):
     assert abs(sum(_rect_widths(svg)) - (900 - rp.GAP_PX)) <= 1.0
 
 
+GATE_PCT = 0.90
+
+
+def test_meter_clamps_out_of_range_fractions(rp):
+    """`coverage` is a FRACTION, not a percentage. Clamp to [0.0, 1.0] --
+    clamping to [0,100] would let 1.4 through as a 1.4%-full bar."""
+    for bad in (1.4, -0.2, float("inf")):
+        svg, _ = rp._svg_meter(bad, True, width=280)
+        assert "NaN" not in svg
+        fills = [float(w) for w in
+                 re.findall(r'<rect[^>]*class="fill"[^>]*width="([0-9.]+)"', svg)]
+        assert fills and 0.0 <= fills[0] <= 280.0
+
+
+def test_meter_length_is_coverage_and_colour_is_not_the_gate(rp):
+    """Length = sampling density; the gate verdict rides on a SEPARATE chip.
+    A full green bar would read `trustworthy` -- exactly the picture a
+    blind-but-ticking collector produces."""
+    ok_svg, ok_chip = rp._svg_meter(0.96, True, width=280)
+    bad_svg, bad_chip = rp._svg_meter(0.96, False, width=280)
+    assert ok_svg == bad_svg, "the meter must not encode the gate verdict"
+    assert ok_chip != bad_chip
+
+
+def test_meter_chip_carries_words_never_colour_alone(rp):
+    _, ok_chip = rp._svg_meter(0.96, True)
+    _, bad_chip = rp._svg_meter(0.4, False)
+    assert "sampling OK" in ok_chip
+    assert "not trustworthy" in bad_chip
+
+
+def test_meter_marks_the_gate_threshold(rp):
+    """Without a tick, 89% and 4% both render as `red` and distance-to-gate
+    is lost."""
+    svg, _ = rp._svg_meter(0.5, False, width=280)
+    ticks = re.findall(r'class="tick"[^>]*x="([0-9.]+)"', svg)
+    assert ticks, "no gate tick"
+    assert abs(float(ticks[0]) - 280 * GATE_PCT) < 1.0
+
+
+def test_meter_emits_no_colour_presentation_attributes(rp):
+    svg, _ = rp._svg_meter(0.5, True)
+    assert "fill=" not in svg
+    assert "stroke=" not in svg
+
+
 def test_tiny_nonzero_segment_is_floored_to_stay_visible(rp):
     segs = [("big", 1439, "seg-never"), ("tiny", 1, "seg-tuned")]
     svg, _ = rp._svg_split_bar(segs, width=900)
