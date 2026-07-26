@@ -33,6 +33,23 @@
 
 ### Added
 
+- **"Email report now" action** (`email_report_now`). Runs the SAME three steps as
+  the scheduled task -- build, verify it published, emit -- so a manual send is a
+  real report, not a re-send of an old file. It deliberately does **not** write
+  `last_scheduled_run_ts`: only the scheduled task may, or the button would mask a
+  dead scheduler exactly as Newsflasharr's provenance-blind
+  `last_attachment_delivered_ts` already does.
+  Success says **"queued for delivery"**, never "sent" -- `notify()` returning True
+  means durably spooled, and delivery happens later on Newsflasharr's retry ladder.
+  Failure rows are ordered and all set `error`: nothing published / emit error /
+  notifications off / not accepted / collector not ticking. The message also
+  discloses that the honesty-gate check ran, since the button can fire a critical
+  page as a side effect.
+  **It does NOT prove the SCHEDULE works** -- it runs in the web worker and reads
+  the current form state, while the schedule runs on a Celery worker from stored
+  settings. That is what `last_scheduled_run_ts` is for.
+- `notify_report.emit_report_result` -> `(ok, reason)`. `emit_report` keeps its
+  bool contract.
 - **`last_scheduled_run_ts`** (`scheduled_run.json`), written by
   `build_report_task` ONLY and only after the publish guard. Neither Beat's
   `total_run_count` (it counts messages SENT, not executed) nor Newsflasharr's
