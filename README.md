@@ -26,9 +26,43 @@ separate scheduled task, not inline with the collector.
 
 | Where | What |
 |---|---|
-| `http://<your-dispatcharr-host>:9191/logos/metricsarr/report.html` | The report. Self-contained, sortable HTML — one click from any browser, including a phone or a Shield/Fire TV. Served on the **same host and port as the Dispatcharr UI you already have open** (Dispatcharr's own nginx, the `/logos/` static route) — no extra container, no extra port to open, no new address to remember. If you can reach Dispatcharr, you can reach the report. |
+| `http://<your-dispatcharr-host>:9191/logos/metricsarr/report.html` | The report. Self-contained, sortable HTML with collapsible sections and inline charts — one click from any browser, including a phone or a Shield/Fire TV. Served on the **same host and port as the Dispatcharr UI you already have open** (Dispatcharr's own nginx, the `/logos/` static route) — no extra container, no extra port to open, no new address to remember. If you can reach Dispatcharr, you can reach the report. |
 | `/config/metricsarr/report-<timestamp>.csv` | The same data as CSV. `/config` is Dispatcharr's existing bind mount, so this file lands somewhere on your host you can double-click straight into Excel or LibreOffice. |
 | Newsflasharr (optional) | A short message with the headline numbers and a link to the full report, sent on whatever schedule you configure. See "Notifications via Newsflasharr" below. |
+
+## Reading the report
+
+The page opens on the three sections you can act on — **Never watched**, **Tuned
+but never qualified**, and **Most used**. **Too new to judge**, **Least used**
+and **Excluded and unobservable** start collapsed; click a heading to open one.
+(That last section is usually the biggest by far, and it is the one you least
+often need.) Collapsing is plain HTML, so it works with JavaScript off — and if
+a browser doesn't support it, everything simply renders expanded. One caveat
+worth knowing: on some browsers find-in-page won't reach text inside a
+*collapsed* section, so expand a section before searching it.
+
+Three charts, all drawn inline — nothing is fetched from the internet, so the
+report renders the same offline, on a TV, or as an email attachment:
+
+- **The bar across the top** splits the channels the plugin is willing to judge
+  into never watched / watched / too new / tuned-but-never-qualified. It
+  deliberately leaves out the excluded channels, because they'd otherwise swamp
+  it — the caption underneath tells you how many were set aside and why. Every
+  number in the bar is repeated in the legend below it, so you never have to
+  squint at a colour to read a value.
+- **The meter** shows how densely the collector actually sampled, with a tick at
+  the 90% mark it needs to clear. The verdict on whether the data can be trusted
+  is the separate chip beside it — **not** the meter's colour. That separation is
+  intentional: a collector can tick along perfectly while seeing nothing, and a
+  green bar would make that look reassuring.
+- **The small bars in the group table** show what share of each group's *judged*
+  channels have never been watched — judged, not total, so a group that's mostly
+  excluded doesn't draw a misleadingly short bar. Click that column header to
+  sort by share.
+
+Every column in every table sorts — click a header once for ascending, again for
+descending. Colour is used only to mean something, never for decoration, and the
+page follows your system's light or dark theme.
 
 ## The three lists that matter
 
