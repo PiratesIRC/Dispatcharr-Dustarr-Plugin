@@ -346,6 +346,80 @@ def full_report_url(base_url, path=REPORT_URL_PATH):
         return path
     return base_url.rstrip("/") + path
 
+GAP_PX = 2          # surface gap between adjacent segments
+MIN_SEG_PX = 2      # a real category must never vanish sub-pixel
+BAR_H = 22          # mark spec: bars <= 24px thick
+CHAR_PX = 8         # per-digit width estimate for label-fit measurement
+PAD_PX = 6
+
+# (legend label, counts key, css class). Order is for READING -- the palette
+# was validated all-pairs, so no order is unsafe. See spec section 6.
+_SEGMENT_ORDER = (
+    ("Never watched", "never_watched", "seg-never"),
+    ("Watched", "watched", "seg-watched"),
+    ("Too new", "too_new", "seg-toonew"),
+    ("Tuned, never qualified", "tuned_never_qualified", "seg-tuned"),
+)
+
+
+def _svg_split_bar(segments, width=900):
+    """A 100%-stacked bar over the JUDGED population.
+
+    `segments` is [(label, count, css_class)]. Returns (svg, legend_html).
+
+    Denominated on the judged population, NOT the ORM universe: over all 1440
+    channels this bar spent ~70% of its ink on `excluded` -- the category
+    explicitly outside judgment -- while the broken-channels list rendered as
+    an unlabeled sliver.
+
+    Zero-count segments are dropped ENTIRELY (no rect, no gap, no legend
+    entry). That is why the palette is validated all-pairs rather than
+    adjacent-only: any two segments can become neighbours.
+
+    TOTAL over its inputs. `write_report` catches only OSError, so a raise
+    here escapes to run()'s catch-all -- there is no net under this function.
+    """
+    live = [(label, int(count or 0), css) for label, count, css in segments
+            if int(count or 0) > 0]
+    total = sum(count for _, count, _ in live)
+    if not live or total <= 0:
+        return (f'<svg class="chart" role="img" aria-label="Nothing judged yet"'
+                f' viewBox="0 0 {width} {BAR_H}" preserveAspectRatio="none">'
+                f'<rect class="track" x="0" y="0" width="{width}"'
+                f' height="{BAR_H}" rx="4"/>'
+                f'<title>Nothing judged yet</title></svg>', "")
+
+    track = width - GAP_PX * (len(live) - 1)
+    raw = [track * count / total for _, count, _ in live]
+    # Floor tiny-but-real segments, taking the debt from the largest.
+    widths = [max(value, MIN_SEG_PX) for value in raw]
+    debt = sum(widths) - track
+    if debt > 0:
+        biggest = max(range(len(widths)), key=lambda i: widths[i])
+        widths[biggest] = max(MIN_SEG_PX, widths[biggest] - debt)
+
+    parts, legend, x = [], [], 0.0
+    for (label, count, css), seg_w in zip(live, widths):
+        parts.append(f'<rect class="seg {css}" x="{x:.2f}" y="0"'
+                     f' width="{seg_w:.2f}" height="{BAR_H}" rx="4"/>')
+        text = str(count)
+        # MEASURE, do not use a share threshold: 6% is 54px at width 900 but
+        # only 19px at 320, while "1010" needs ~28px.
+        if seg_w >= len(text) * CHAR_PX + 2 * PAD_PX:
+            parts.append(f'<text class="seglabel" x="{x + seg_w / 2:.2f}"'
+                         f' y="{BAR_H / 2 + 4:.0f}"'
+                         f' text-anchor="middle">{_esc(text)}</text>')
+        legend.append(f'<li><span class="swatch {_esc(css)}"></span>'
+                      f'{_esc(label)} <b>{count}</b></li>')
+        x += seg_w + GAP_PX
+
+    aria = ", ".join(f"{label} {count}" for label, count, _ in live)
+    svg = (f'<svg class="chart" role="img" aria-label="Judged population: {_esc(aria)}"'
+           f' viewBox="0 0 {width} {BAR_H}" preserveAspectRatio="none">'
+           f'{"".join(parts)}<title>{_esc(aria)}</title></svg>')
+    return svg, f'<ul class="legend">{"".join(legend)}</ul>'
+
+
 _CSS = """
 :root {
   color-scheme: light dark;
@@ -377,8 +451,30 @@ table { border-collapse: collapse; width: 100%; font-size: 14px; }
 th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #e6e8ec; }
 th { background: #f2f3f6; position: sticky; top: 0; cursor: pointer; }
 td.num { text-align: right; font-variant-numeric: tabular-nums; }
-.pill { font-size: 12px; padding: 1px 7px; border-radius: 999px;
-        background: #eceef2; }
+"""
+
+_CSS += """
+.chart { width: 100%; height: 22px; display: block; }
+.track { fill: var(--track); }
+.seg-never { fill: var(--never); }
+.seg-watched { fill: var(--watched); }
+.seg-toonew { fill: var(--toonew); }
+.seg-tuned { fill: var(--tuned); }
+/* Gaps come from the x-offsets computed in _svg_split_bar, not from a
+   stroke -- do not add a stroke rule here, it would double-count. */
+/* White label. On --never (#2a78d6) this measures 4.42:1, just under the
+   4.5 normal-text bar; the relief rule already covers it (every count is
+   also in the legend and in a table on the same page). */
+.seglabel { fill: #fff; font: 600 12px system-ui, sans-serif; }
+.legend { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 18px;
+          margin: 10px 0 4px; padding: 0; font-size: 13px; }
+.swatch { display: inline-block; width: 11px; height: 11px; border-radius: 3px;
+          margin-right: 6px; vertical-align: -1px; }
+.swatch.seg-never { background: var(--never); }
+.swatch.seg-watched { background: var(--watched); }
+.swatch.seg-toonew { background: var(--toonew); }
+.swatch.seg-tuned { background: var(--tuned); }
+.caption { font-size: 13px; opacity: .7; margin: 2px 0 18px; }
 """
 
 _CSS += """
@@ -528,6 +624,13 @@ def render_html(model):
         least_used_note = ("<p class='sub'>All watched channels are listed "
                            "above.</p>")
 
+    judged = sum(counts[key] for _, key, _ in _SEGMENT_ORDER)
+    bar_svg, bar_legend = _svg_split_bar(
+        [(label, counts[key], css) for label, key, css in _SEGMENT_ORDER])
+    caption = (f"{model['total_channels']} channels · {judged} judged · "
+               f"not judged: {counts['excluded']} excluded, "
+               f"{counts['unobservable']} unobservable")
+
     never_body = (
         "<div class='card'><div class='scroll'><table>"
         "<thead><tr><th>Group</th><th>Never watched</th><th>Total</th></tr></thead>"
@@ -572,11 +675,11 @@ def render_html(model):
   Tracking since {_esc(_fmt_local(model['stats_since']))} ·
   {_esc(model['tracked_days'])} days ·
   coverage {model['coverage']:.1%} ·
-  {model['total_channels']} channels ·
-  <span class="pill">{counts['never_watched']} never watched</span>
-  <span class="pill">{counts['watched']} watched</span>
-  <span class="pill">{counts['excluded']} excluded</span>
+  {model['total_channels']} channels
 </div>
+{bar_svg}
+{bar_legend}
+<div class="caption">{caption}</div>
 {banner}
 {sections}
 
