@@ -347,10 +347,18 @@ def full_report_url(base_url, path=REPORT_URL_PATH):
     return base_url.rstrip("/") + path
 
 _CSS = """
-:root { color-scheme: light dark; }
+:root {
+  color-scheme: light dark;
+  --never: #2a78d6; --watched: #1baf7a; --tuned: #e34948; --toonew: #898781;
+  --track: #e1e0d9; --gap: #ffffff; --ok: #0ca30c; --bad: #d03b3b;
+}
 body { font: 15px/1.5 system-ui, -apple-system, Segoe UI, sans-serif;
        margin: 0; padding: 24px; background: #fbfbfd; color: #16181d; }
 @media (prefers-color-scheme: dark) {
+  :root {
+    --never: #3987e5; --watched: #199e70; --tuned: #e66767; --toonew: #898781;
+    --track: #2c2c2a; --gap: #1a1d22; --ok: #0ca30c; --bad: #d03b3b;
+  }
   body { background: #14161a; color: #e8eaed; }
   th { background: #1e2127 !important; }
   tr:nth-child(even) td { background: #191c21; }
