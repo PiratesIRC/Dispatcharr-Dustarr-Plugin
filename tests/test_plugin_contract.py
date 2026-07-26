@@ -63,7 +63,8 @@ def test_webhook_surface_is_gone_and_notify_toggle_present():
 
 VALID_ACTION_KEYS = {"id", "label", "description", "confirm", "button_label",
                      "button_variant", "button_color", "events"}
-ACTION_IDS = {"build_report", "show_summary", "validate_settings"}
+ACTION_IDS = {"build_report", "email_report_now", "show_summary",
+              "validate_settings"}
 
 
 def test_action_ids_match_spec():

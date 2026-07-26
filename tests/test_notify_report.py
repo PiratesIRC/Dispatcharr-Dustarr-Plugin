@@ -207,3 +207,39 @@ def test_a_refused_resolve_keeps_the_alert_outstanding(nr):
     assert (prev, action) == (False, None), (
         "a resolve that was never spooled must leave the alert outstanding "
         "so the next run retries it")
+
+
+# -- a refusal must carry a REASON -------------------------------------------
+# `_emit_notifications`'s `error` is set only by its OWN except clause, but the
+# False return comes from emit_report's blanket except and from notify()
+# returning bare False. So in every realistic refusal the reason was None and
+# the operator got "not emitted" with no cause.
+
+def test_emit_report_reports_why_the_spool_declined(nr):
+    def refused(**kw):
+        return False
+
+    ok, reason = nr.emit_report_result(refused, {}, None, None)
+    assert ok is False
+    assert reason and "declin" in reason.lower()
+
+
+def test_emit_report_reports_an_exception_by_TYPE_only(nr):
+    def boom(**kw):
+        raise RuntimeError("http://host/live/secretuser/secretpass/x")
+
+    ok, reason = nr.emit_report_result(boom, {}, None, None)
+    assert ok is False
+    assert "RuntimeError" in reason
+    assert "secretpass" not in reason, "never put str(exc) in a reason"
+
+
+def test_emit_report_result_has_no_reason_on_success(nr):
+    ok, reason = nr.emit_report_result(lambda **kw: True, {}, None, None)
+    assert ok is True and reason is None
+
+
+def test_emit_report_keeps_its_bool_contract(nr):
+    """The existing callers and tests keep working: emit_report stays a bool."""
+    assert nr.emit_report(lambda **kw: True, {}, None, None) is True
+    assert nr.emit_report(lambda **kw: False, {}, None, None) is False

@@ -100,6 +100,22 @@ def save_prev_ok(path, ok):
 
 
 def emit_report(notify_fn, summary, url, attachment_path):
+    """Bool-only wrapper, kept so existing callers and their tests are
+    unchanged. New code wanting the failure REASON calls emit_report_result."""
+    return emit_report_result(notify_fn, summary, url, attachment_path)[0]
+
+
+def emit_report_result(notify_fn, summary, url, attachment_path):
+    """-> (ok, reason_or_None).
+
+    The reason matters because `notify()` NEVER RAISES -- it returns False when
+    the spool refuses the event -- so without this the operator is told "not
+    emitted" with no cause, which is only half of the silence closed.
+
+    The reason carries an exception's TYPE NAME only, never `str(exc)`:
+    provider credentials live inside stream URLs in this deployment, and this
+    string is rendered to the operator.
+    """
     try:
         s = summary or {}
         lines = [
@@ -121,9 +137,12 @@ def emit_report(notify_fn, summary, url, attachment_path):
             kwargs["url"] = url
         if attachment_path:
             kwargs["attachment"] = attachment_path
-        return bool(notify_fn(**kwargs))
-    except Exception:
-        return False
+        if notify_fn(**kwargs):
+            return True, None
+        return False, ("Newsflasharr declined the event (spool full, or the "
+                       "spool could not be written)")
+    except Exception as exc:
+        return False, f"emit failed: {type(exc).__name__}"
 
 
 def emit_gate(notify_fn, model, thresholds, prev_ok):

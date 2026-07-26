@@ -131,6 +131,12 @@ ACTIONS = [
      "description": "Write the HTML report and CSV now. Does not send "
                     "notifications - the scheduled report does.",
      "button_label": "Build"},
+    {"id": "email_report_now", "label": "Email report now",
+     "description": "Build the report now and email it with the file attached "
+                    "- the same job the schedule runs. Does NOT prove the "
+                    "SCHEDULE works: this runs in the web worker, the schedule "
+                    "runs on a Celery worker.",
+     "button_label": "Email now"},
     {"id": "show_summary", "label": "Show summary",
      "description": "Tracking window, coverage, never-watched count.",
      "button_label": "Summary"},
@@ -417,8 +423,14 @@ def _emit_notifications(settings, model, written):
             url = base.rstrip("/") + "/logos/metricsarr/" + os.path.basename(archive)
         summary = reports.summary_for_notify(
             model, reports.full_report_url(base, reports.REPORT_URL_PATH))
-        result["report_emitted"] = bool(
-            notify_report.emit_report(nc.notify, summary, url, archive))
+        emitted, why = notify_report.emit_report_result(
+            nc.notify, summary, url, archive)
+        result["report_emitted"] = bool(emitted)
+        if not emitted:
+            # `error` was previously set ONLY by this function's own except,
+            # while the False return comes from notify() returning bare False --
+            # so a realistic refusal carried no cause at all.
+            result["error"] = why
 
         state_path = os.path.join(DATA_DIR, notify_report.STATE_FILE)
         prev_ok = notify_report.load_prev_ok(state_path)
@@ -726,12 +738,68 @@ class Plugin:
                 return result
             if action == "show_summary":
                 return self._show_summary(settings)
+            if action == "email_report_now":
+                return self._email_report_now(settings)
             if action == "validate_settings":
                 return self._validate(settings)
         except Exception as exc:
             return {"status": "error", "message": redaction.redact(f"{exc}")}
 
         return {"status": "error", "message": f"Unknown action: {action}"}
+
+    def _email_report_now(self, settings):
+        """The scheduled job, on demand: build -> verify it published -> emit.
+
+        Deliberately the SAME three steps as build_report_task, so a manual send
+        is a REAL report rather than a re-send of an old file. It does NOT write
+        `last_scheduled_run_ts` -- only the scheduled task may, or this button
+        would mask a dead scheduler exactly as Newsflasharr's provenance-blind
+        `last_attachment_delivered_ts` already does.
+
+        The result rows are evaluated IN ORDER and are not mutually exclusive:
+        `report_emitted=True` with `error` set is reachable (the report emit
+        succeeds, then the gate/state block raises), so `error` outranks it.
+        """
+        result, model, written = _build_report(settings)
+
+        # bug-078: never notify about a report that does not exist.
+        if not written.get("html_path"):
+            reason = written.get("error") or "unknown write failure"
+            return {"status": "error",
+                    "message": f"Report was NOT published: {reason}",
+                    "error": f"Report was NOT published: {reason}. Nothing was "
+                             f"emailed."}
+
+        emit = _emit_notifications(settings, model, written) or {}
+
+        if emit.get("error"):
+            msg = f"Report built, but the notification failed: {emit['error']}"
+            return {"status": "error", "message": msg, "error": msg,
+                    "file": written.get("html_path")}
+        if not emit.get("enabled"):
+            msg = ("Report built and published, but notifications are off -- "
+                   "nothing was emailed. Turn on 'Send notifications to "
+                   "Newsflasharr'.")
+            return {"status": "error", "message": msg, "error": msg,
+                    "file": written.get("html_path")}
+        if not emit.get("report_emitted"):
+            msg = "Report built, but Newsflasharr did not accept the event."
+            return {"status": "error", "message": msg, "error": msg,
+                    "file": written.get("html_path")}
+        if not _notifier_alive():
+            msg = ("Report spooled, but Newsflasharr's collector has not ticked "
+                   "recently -- nothing will send it.")
+            return {"status": "error", "message": msg, "error": msg,
+                    "file": written.get("html_path")}
+
+        # QUEUED, never "sent": notify() returning True means durably spooled;
+        # Newsflasharr's collector delivers later on its own retry ladder, and
+        # an SMTP 250 is acceptance for relay, not delivery.
+        return {"status": "ok",
+                "message": ("Report built and queued for delivery to "
+                            "Newsflasharr. The honesty-gate check ran too, as "
+                            "it does on the schedule."),
+                "file": written.get("html_path")}
 
     def _show_summary(self, settings):
         thresholds = coerce_settings(settings)

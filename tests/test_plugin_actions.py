@@ -236,7 +236,8 @@ def test_actions_expose_the_expected_ids(plugin):
     ids = {a["id"] for a in plugin.ACTIONS}
     # EQUALITY, not a subset: a subset check passes when an action is dropped,
     # renamed or silently rejected by Dispatcharr's serializer.
-    assert ids == {"build_report", "show_summary", "validate_settings"}
+    assert ids == {"build_report", "email_report_now", "show_summary",
+                   "validate_settings"}
 
 
 # ---- C1: build_report_task must actually register with Celery --------------
@@ -1348,3 +1349,135 @@ def test_schedule_health_never_raises_on_a_db_error(plugin, monkeypatch, tmp_pat
     monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
     _stub_row(plugin, monkeypatch, RuntimeError("db down"))
     assert plugin._schedule_health()["problems"]
+
+
+# -- Phase B: the on-demand report button ------------------------------------
+
+def test_a_refused_emit_now_carries_a_reason(plugin, monkeypatch):
+    """§4.2: `error` was set only by _emit_notifications' OWN except, but the
+    False return comes from notify() returning bare False -- so the cause was
+    always None."""
+    class _Refuse:
+        @staticmethod
+        def notify(**kw):
+            return False
+
+    monkeypatch.setattr(plugin, "_notify_client", lambda: _Refuse)
+    out = plugin._emit_notifications(
+        {"notify_enabled": True}, _minimal_model(ok=True, tracked_days=45),
+        {"html_path": "/tmp/r.html", "archive_path": "/tmp/r-1.html"})
+    assert out["report_emitted"] is False
+    assert out["error"], "a refusal with no reason is only half the silence closed"
+
+
+def _stub_build(plugin, monkeypatch, html_path="/tmp/report.html", err=None):
+    written = {"html_path": html_path, "archive_path": "/tmp/report-1.html"}
+    if err:
+        written["error"] = err
+    monkeypatch.setattr(plugin, "_build_report", lambda s: (
+        {"status": "ok" if html_path else "error", "message": "built",
+         "file": html_path},
+        _minimal_model(ok=True, tracked_days=45), written))
+
+
+def test_email_report_now_runs_the_job_and_says_queued(plugin, monkeypatch, tmp_path):
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
+    _stub_build(plugin, monkeypatch)
+    monkeypatch.setattr(plugin, "_emit_notifications", lambda *a, **k: {
+        "enabled": True, "report_emitted": True, "error": None})
+    monkeypatch.setattr(plugin, "_notifier_alive", lambda: True)
+
+    r = plugin.Plugin().run("email_report_now", {}, {"settings": {}})
+    assert r["status"] == "ok"
+    assert not r.get("error")
+    import re as _re
+    assert _re.search(r"\bqueued\b", r["message"], _re.I), r["message"]
+    assert not _re.search(r"\b(sent|delivered|emailed)\b", r["message"], _re.I), \
+        "notify() means SPOOLED, not delivered -- claiming 'sent' is the lie"
+
+
+def test_email_report_now_does_not_stamp_the_schedule(plugin, monkeypatch, tmp_path):
+    """The button must never satisfy the schedule-health signal, or it masks a
+    dead scheduler exactly as the attachment timestamp already does."""
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
+    _stub_build(plugin, monkeypatch)
+    monkeypatch.setattr(plugin, "_emit_notifications", lambda *a, **k: {
+        "enabled": True, "report_emitted": True, "error": None})
+    monkeypatch.setattr(plugin, "_notifier_alive", lambda: True)
+    plugin.Plugin().run("email_report_now", {}, {"settings": {}})
+    assert plugin._read_scheduled_run_ts() is None
+
+
+def test_email_report_now_refuses_to_emit_when_nothing_was_published(
+        plugin, monkeypatch, tmp_path):
+    """bug-078: never notify about a report that does not exist."""
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
+    _stub_build(plugin, monkeypatch, html_path=None, err="Permission denied")
+    calls = []
+    monkeypatch.setattr(plugin, "_emit_notifications",
+                        lambda *a, **k: calls.append(a) or {})
+    r = plugin.Plugin().run("email_report_now", {}, {"settings": {}})
+    assert calls == [], "it must NOT emit when nothing was published"
+    assert r["status"] == "error"
+    assert r.get("error") and "Permission denied" in r["error"]
+
+
+def test_email_report_now_reports_that_notifications_are_off(plugin, monkeypatch, tmp_path):
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
+    _stub_build(plugin, monkeypatch)
+    monkeypatch.setattr(plugin, "_emit_notifications", lambda *a, **k: {
+        "enabled": False, "report_emitted": False, "error": None})
+    r = plugin.Plugin().run("email_report_now", {}, {"settings": {}})
+    assert r["status"] == "error"
+    assert "notifications are off" in r["error"].lower()
+
+
+def test_email_report_now_reports_a_refusal_with_its_reason(plugin, monkeypatch, tmp_path):
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
+    _stub_build(plugin, monkeypatch)
+    monkeypatch.setattr(plugin, "_emit_notifications", lambda *a, **k: {
+        "enabled": True, "report_emitted": False, "error": "spool full"})
+    r = plugin.Plugin().run("email_report_now", {}, {"settings": {}})
+    assert r["status"] == "error"
+    assert "spool full" in r["error"]
+
+
+def test_email_report_now_reports_a_dead_collector(plugin, monkeypatch, tmp_path):
+    """Spooled is not queued if nothing will ever collect it."""
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
+    _stub_build(plugin, monkeypatch)
+    monkeypatch.setattr(plugin, "_emit_notifications", lambda *a, **k: {
+        "enabled": True, "report_emitted": True, "error": None})
+    monkeypatch.setattr(plugin, "_notifier_alive", lambda: False)
+    r = plugin.Plugin().run("email_report_now", {}, {"settings": {}})
+    assert r["status"] == "error"
+    assert "collector" in r["error"].lower()
+
+
+def test_email_report_now_never_raises(plugin, monkeypatch, tmp_path):
+    """Through run(), so the catch-all's redaction is what is asserted."""
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
+
+    def boom(_settings):
+        raise RuntimeError("http://host/live/secretuser/secretpass/x")
+
+    monkeypatch.setattr(plugin, "_build_report", boom)
+    r = plugin.Plugin().run("email_report_now", {}, {"settings": {}})
+    assert r["status"] == "error"
+    assert "secretpass" not in r["message"]
+
+
+def test_email_report_now_still_errors_on_a_refusal_with_NO_reason(plugin, monkeypatch, tmp_path):
+    """The `report_emitted` row is a BACKSTOP: today every refusal carries a
+    reason, so the `error` row above catches it first (a mutation deleting this
+    branch survived until this test existed). It guards the shape where a future
+    emit path returns False with no cause -- which must still never render as a
+    success."""
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
+    _stub_build(plugin, monkeypatch)
+    monkeypatch.setattr(plugin, "_emit_notifications", lambda *a, **k: {
+        "enabled": True, "report_emitted": False, "error": None})
+    monkeypatch.setattr(plugin, "_notifier_alive", lambda: True)
+    r = plugin.Plugin().run("email_report_now", {}, {"settings": {}})
+    assert r["status"] == "error"
+    assert r.get("error") and "did not accept" in r["error"]
