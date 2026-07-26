@@ -36,7 +36,7 @@ except ImportError:                     # standalone (non-package) import path
 
 _LOGGER = logging.getLogger(__name__)
 
-PLUGIN_VERSION = "1.26.2071652"
+PLUGIN_VERSION = "1.26.2071742"
 
 DATA_DIR = "/data/metricsarr"           # plugin state (named volume)
 REPORT_DIR = "/data/logos/metricsarr"   # nginx serves /data/logos/** at /logos/**
@@ -62,6 +62,22 @@ _restart_times = []
 _spawn_lock = threading.Lock()
 
 FIELDS = [
+    # Orientation panel, FIRST field (operator decision 2026-07-26). Mirrors
+    # EPG-Janitor's `_section_quickstart`. Deliberately ONE flowing paragraph
+    # with the steps inline: the reference implementation does not risk
+    # multi-line layout in an info body, and the action `message` toast is
+    # known to collapse newlines. No em dashes, per operator instruction.
+    {"id": "_section_quickstart", "type": "info", "label": "Quick Start",
+     "description": "New here? Typical workflow: 1) Validate settings checks "
+                    "your config, the collector and the schedule. 2) Show "
+                    "summary prints the headline numbers without writing "
+                    "anything. 3) Build report writes the HTML report plus the "
+                    "CSV export. 4) Email report now sends that report through "
+                    "Newsflasharr if you have notifications turned on. Expect a "
+                    "'not trustworthy' banner for the first 30 days: the "
+                    "dataset has to be older than the unused threshold before "
+                    "anything can fairly be called unused, so that banner is "
+                    "the age gate working, not a fault."},
     {"id": "info", "type": "info", "label": "Metricsarr is read-only",
      "description": "It records which channels are watched and reports the dead "
                     "weight. It never changes a channel."},

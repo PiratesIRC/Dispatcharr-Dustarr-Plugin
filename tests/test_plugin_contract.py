@@ -35,6 +35,47 @@ def test_fields_use_only_supported_types_and_have_defaults():
                 assert isinstance(opt["value"], str), field["id"]
 
 
+def test_quick_start_is_the_very_first_field():
+    """Operator decision 2026-07-26: Quick Start sits at the VERY top, above
+    the read-only box, which stays as the second field. Ordering is the whole
+    point of an orientation panel, so pin it."""
+    plugin = load_plugin()
+    assert plugin.FIELDS[0]["id"] == "_section_quickstart"
+    assert plugin.FIELDS[0]["type"] == "info"
+    assert plugin.FIELDS[0]["label"] == "Quick Start"
+    # The read-only box is NOT folded in or dropped.
+    assert plugin.FIELDS[1]["id"] == "info"
+
+
+def test_quick_start_names_every_action_by_its_real_button_label():
+    """A quick start that names a button the UI does not have is worse than
+    none. Bind the copy to the ACTIONS list rather than to a hardcoded string."""
+    plugin = load_plugin()
+    body = plugin.FIELDS[0]["description"]
+    for action in plugin.ACTIONS:
+        assert action["label"] in body, action["label"]
+
+
+def test_quick_start_uses_no_em_dashes_and_is_one_paragraph():
+    """Operator instruction: no em dashes anywhere in the copy. And the info
+    body renders as one flowing paragraph (EPG-Janitor's reference
+    implementation does not risk multi-line layout), so no embedded newlines."""
+    plugin = load_plugin()
+    body = plugin.FIELDS[0]["description"]
+    assert "—" not in body, "em dash in Quick Start copy"
+    assert "–" not in body, "en dash in Quick Start copy"
+    assert "\n" not in body, "Quick Start must be a single paragraph"
+
+
+def test_quick_start_warns_about_the_30_day_warmup():
+    """The 'not trustworthy' banner is the single most likely thing to be
+    mistaken for a bug, so orientation copy must pre-empt it."""
+    plugin = load_plugin()
+    body = plugin.FIELDS[0]["description"].lower()
+    assert "not trustworthy" in body
+    assert "30 days" in body
+
+
 def test_plugin_instantiates_without_side_effects():
     plugin = load_plugin()
     inst = plugin.Plugin()
