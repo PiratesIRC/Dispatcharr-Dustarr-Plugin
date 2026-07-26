@@ -4,42 +4,9 @@ import os
 import time
 
 import pytest
-from conftest import load_plugin
+from conftest import NOW, SETTINGS, load_plugin, model
 
 load_plugin()
-
-NOW = 1_700_000_000.0
-
-
-@pytest.fixture()
-def rp():
-    import sys
-    return sys.modules["metricsarr_under_test.reports"]
-
-
-@pytest.fixture()
-def gw():
-    import sys
-    return sys.modules["metricsarr_under_test.gateway"]
-
-
-SETTINGS = {"exclude_groups": "", "exclude_name_regex": "",
-            "exclude_auto_created": False, "top_n": 5,
-            "unused_threshold_days": 30, "never_watched_ceiling": 0.99,
-            "poll_interval_s": 15.0, "client_gap_grace_s": 90.0}
-
-
-def model(rp, gw, n=5, watched=2):
-    rows = [gw.ChannelRow(id=i, uuid=f"u{i}", name=f"CH{i}", group="US: Movies",
-                          auto_created=False, created_at=NOW - 90 * 86400,
-                          proxying=True) for i in range(n)]
-    channels = {f"u{i}": {"watch_count": 3, "watch_seconds": 7200.0,
-                          "tune_count": 3, "last_watched": NOW - 3600,
-                          "last_tuned": NOW - 3600, "first_seen": NOW - 80 * 86400}
-                for i in range(watched)}
-    usage = {"channels": channels,
-             "meta": {"stats_since": NOW - 40 * 86400, "coverage": {}}}
-    return rp.build_model(rows, usage, SETTINGS, NOW)
 
 
 def test_html_is_self_contained(rp, gw):
@@ -104,11 +71,13 @@ def test_html_never_watched_heading_matches_its_table_and_excludes_too_new(rp, g
     assert built["counts"]["too_new"] == 3
 
     html = rp.render_html(built)
-    never_heading = html.index("Never watched (2)")
-    too_new_heading = html.index("Too new to judge (3)")
+    never_heading = html.index("Never watched")
+    too_new_heading = html.index("Too new to judge")
     assert never_heading < too_new_heading
 
     never_section = html[never_heading:too_new_heading]
+    # R2 still holds: the count in the summary equals the rows beneath it.
+    assert '<span class="count">2</span>' in never_section
     for i in range(3):
         assert f">FRESH{i}<" not in never_section
     for i in range(2):

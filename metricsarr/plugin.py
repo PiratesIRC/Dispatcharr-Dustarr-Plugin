@@ -36,7 +36,7 @@ except ImportError:                     # standalone (non-package) import path
 
 _LOGGER = logging.getLogger(__name__)
 
-PLUGIN_VERSION = "1.26.2070005"
+PLUGIN_VERSION = "1.26.2071541"
 
 DATA_DIR = "/data/metricsarr"           # plugin state (named volume)
 REPORT_DIR = "/data/logos/metricsarr"   # nginx serves /data/logos/** at /logos/**
@@ -743,7 +743,11 @@ class Plugin:
             if action == "validate_settings":
                 return self._validate(settings)
         except Exception as exc:
-            return {"status": "error", "message": redaction.redact(f"{exc}")}
+            # Dispatcharr renders `error` (red, persistent) and `message` (a
+            # transient GREEN toast); `status` renders NOWHERE. Without `error`
+            # a crash is pixel-identical to success.
+            redacted = redaction.redact(f"{exc}")
+            return {"status": "error", "error": redacted, "message": redacted}
 
         return {"status": "error", "message": f"Unknown action: {action}"}
 

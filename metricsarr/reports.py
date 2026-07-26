@@ -235,7 +235,12 @@ def build_model(rows, usage, settings, now):
     rollup = {}
     for entry in never + used + tuned_only:
         bucket = rollup.setdefault(entry["group"], {"group": entry["group"],
-                                                    "never": 0, "total": 0})
+                                                    "never": 0, "judged": 0,
+                                                    "total": 0})
+        # `judged` is the mini bar's denominator: `total` is the group's TRUE
+        # ORM count INCLUDING excluded rows, so a bar over it would assert a
+        # proportion the data does not support.
+        bucket["judged"] += 1
         if entry["reason"] in ("never_watched", "too_new"):
             bucket["never"] += 1
     for bucket in rollup.values():
@@ -346,18 +351,248 @@ def full_report_url(base_url, path=REPORT_URL_PATH):
         return path
     return base_url.rstrip("/") + path
 
+GAP_PX = 2          # surface gap between adjacent segments
+MIN_SEG_PX = 2      # a real category must never vanish sub-pixel
+BAR_H = 22          # mark spec: bars <= 24px thick
+
+# (legend label, counts key, css class). Order is for READING -- the palette
+# was validated all-pairs, so no order is unsafe. See spec section 6.
+_SEGMENT_ORDER = (
+    ("Never watched", "never_watched", "seg-never"),
+    ("Watched", "watched", "seg-watched"),
+    ("Too new", "too_new", "seg-toonew"),
+    ("Tuned, never qualified", "tuned_never_qualified", "seg-tuned"),
+)
+
+
+def _coerce_segment_count(count):
+    """TOTAL: coerce a raw segment count to a non-negative int, never raise.
+
+    `count or 0` does not save `int()` from a hostile value: `float('nan')`
+    is TRUTHY (nan != 0), so `count or 0` passes it straight through and
+    `int(nan)` raises `ValueError`; a non-numeric string raises too. NaN is
+    rejected explicitly via self-inequality (true only for NaN, and it works
+    across int/float/str alike, unlike `math.isnan` which only accepts
+    floats) before `int()` ever sees it.
+
+    `float('inf')`/`float('-inf')` are NOT caught by the NaN guard (infinity
+    equals itself) and `int(inf)` raises `OverflowError`, a THIRD exception
+    type beyond `TypeError`/`ValueError` -- caught explicitly alongside them
+    so a non-finite float can never escape this function. Anything
+    unparseable, negative, non-finite, or NaN degrades to 0 -- i.e. the
+    segment is dropped by the caller's `> 0` filter, never an exception.
+    """
+    if count != count:  # NaN is the only value that is not equal to itself
+        return 0
+    try:
+        value = int(count)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    return value if value > 0 else 0
+
+
+def _fit_to_track(raw_widths, track, floor):
+    """Floor every width to at least `floor`, then make the total exactly
+    `track` -- TOTAL over its inputs, never over/under-shoots.
+
+    Flooring tiny-but-real segments creates "debt" (sum(widths) > track).
+    The debt is shed from EVERY segment currently above the floor, not just
+    the single largest one: taking it all from one absorber only works while
+    that absorber has enough room, and a stress shape (one huge segment plus
+    many tiny ones, all now pinned at `floor`) has nowhere near enough --
+    the tiny segments' combined floor debt outstrips what the one absorber
+    can give up, and the old single-absorber clamp let the total overflow
+    `track` (rects then run past the viewBox). Shedding proportionally across
+    all above-floor segments, and re-running whenever a segment gets pinned
+    to the floor mid-shed, always converges because the branch below only
+    reaches this loop when `track >= n * floor` -- i.e. there is always
+    enough headroom above the floor, collectively, to absorb the debt.
+
+    Degenerate case: if the track cannot even fit `n * floor` (width so
+    narrow, or so many segments, that even the floor doesn't fit), the
+    defined behaviour is to abandon the floor and split the track evenly --
+    every segment shrinks together rather than any width going negative or
+    the total exceeding `track`.
+    """
+    n = len(raw_widths)
+    if n == 0:
+        return []
+    if track < n * floor:
+        even = track / n
+        return [even] * n
+
+    widths = [max(value, floor) for value in raw_widths]
+    debt = sum(widths) - track
+    while debt > 1e-9:
+        donors = [i for i, w in enumerate(widths) if w > floor + 1e-9]
+        if not donors:
+            break  # unreachable given the track >= n*floor guard above
+        share = debt / len(donors)
+        remaining = 0.0
+        for i in donors:
+            take = min(share, widths[i] - floor)
+            widths[i] -= take
+            remaining += share - take
+        debt = remaining
+    return widths
+
+
+def _svg_split_bar(segments, width=900):
+    """A 100%-stacked bar over the JUDGED population.
+
+    `segments` is [(label, count, css_class)]. Returns (svg, legend_html).
+
+    Denominated on the judged population, NOT the ORM universe: over all 1440
+    channels this bar spent ~70% of its ink on `excluded` -- the category
+    explicitly outside judgment -- while the broken-channels list rendered as
+    an unlabeled sliver.
+
+    Zero-count segments are dropped ENTIRELY (no rect, no gap, no legend
+    entry). That is why the palette is validated all-pairs rather than
+    adjacent-only: any two segments can become neighbours.
+
+    No in-bar text label: `.chart { width: 100% }` over a fixed-height
+    viewBox with `preserveAspectRatio="none"` scales X but not Y, so any
+    `<text>` glyph inside the bar stretches on desktop and squashes on a
+    narrow phone screen (the report is emailed as an attachment and opened on
+    phones) -- there is no aspect ratio at which in-bar text renders
+    undistorted. Every count already appears, undistorted, in the legend
+    directly below the bar and in a table on the same page -- that relief
+    rule is what makes dropping the in-bar label safe rather than a loss of
+    information.
+
+    TOTAL over its inputs -- every count is coerced defensively
+    (`_coerce_segment_count`: NaN, negative, non-numeric or None all degrade
+    to a dropped segment rather than raising) and widths always fit the
+    track (`_fit_to_track`, including the degenerate too-narrow-for-the-floor
+    case). `write_report` catches only OSError, so a raise here escapes to
+    run()'s catch-all -- there is no net under this function.
+    """
+    live = [(label, c, css) for label, count, css in segments
+            if (c := _coerce_segment_count(count)) > 0]
+    total = sum(count for _, count, _ in live)
+    if not live or total <= 0:
+        return (f'<svg class="chart" role="img" aria-label="Nothing judged yet"'
+                f' viewBox="0 0 {width} {BAR_H}" preserveAspectRatio="none">'
+                f'<rect class="track" x="0" y="0" width="{width}"'
+                f' height="{BAR_H}" rx="4"/>'
+                f'<title>Nothing judged yet</title></svg>', "")
+
+    track = max(0.0, width - GAP_PX * (len(live) - 1))
+    raw = [track * count / total for _, count, _ in live]
+    widths = _fit_to_track(raw, track, MIN_SEG_PX)
+
+    parts, legend, x = [], [], 0.0
+    for (label, count, css), seg_w in zip(live, widths, strict=True):
+        parts.append(f'<rect class="seg {css}" x="{x:.2f}" y="0"'
+                     f' width="{seg_w:.2f}" height="{BAR_H}" rx="4"/>')
+        legend.append(f'<li><span class="swatch {_esc(css)}"></span>'
+                      f'{_esc(label)} <b>{count}</b></li>')
+        x += seg_w + GAP_PX
+
+    aria = ", ".join(f"{label} {count}" for label, count, _ in live)
+    svg = (f'<svg class="chart" role="img" aria-label="Judged population: {_esc(aria)}"'
+           f' viewBox="0 0 {width} {BAR_H}" preserveAspectRatio="none">'
+           f'{"".join(parts)}<title>{_esc(aria)}</title></svg>')
+    return svg, f'<ul class="legend">{"".join(legend)}</ul>'
+
+
+METER_H = 14
+# Read from gates.MIN_COVERAGE (not hardcoded) so the tick position and the
+# "gate at N%" title text cannot silently drift out of sync if the gate moves.
+GATE_PCT = gates.MIN_COVERAGE
+
+
+def _svg_meter(fraction, gate_ok, width=280):
+    """Sampling DENSITY, not confidence. Returns (svg, chip_html).
+
+    Coverage attests to sampling density, never to data validity -- so length
+    encodes coverage in ONE neutral hue and the gate verdict rides on a
+    separate chip. Encoding the verdict as the bar's colour would paint a full
+    green bar for a blind-but-ticking collector, which is this plugin's
+    documented worst input.
+
+    TOTAL over its inputs (see _svg_split_bar's note on the missing net):
+    NaN, both infinities, None, non-numeric strings, an int too huge for
+    `float()` to represent (raises `OverflowError`, not `ValueError`), and
+    unexpected types all degrade to a sane default (0.0) rather than raising.
+    """
+    try:
+        value = float(fraction)
+    except (TypeError, ValueError, OverflowError):
+        value = 0.0
+    if value != value or value in (float("inf"), float("-inf")):   # NaN / inf
+        value = 0.0
+    value = min(1.0, max(0.0, value))
+
+    fill_w = width * value
+    tick_x = width * GATE_PCT
+    svg = (f'<svg class="meter" role="img"'
+           f' aria-label="Sampling density {value:.1%}"'
+           f' viewBox="0 0 {width} {METER_H}" preserveAspectRatio="none">'
+           f'<rect class="track" x="0" y="3" width="{width}" height="8" rx="4"/>'
+           f'<rect class="fill" x="0" y="3" width="{fill_w:.2f}" height="8" rx="4"/>'
+           f'<rect class="tick" x="{tick_x:.2f}" y="0" width="1.5"'
+           f' height="{METER_H}"/>'
+           f'<title>Sampling density {value:.1%} (gate at {GATE_PCT:.0%})</title>'
+           f'</svg>')
+
+    if gate_ok:
+        chip = '<span class="chip chip-ok"><b>&#10003;</b> sampling OK</span>'
+    else:
+        chip = '<span class="chip chip-bad"><b>&#9888;</b> not trustworthy</span>'
+    return svg, chip
+
+
+MINI_W = 100
+MINI_H = 10
+
+
+def _svg_mini_bar(never, judged, label):
+    """Never-watched share of a group's JUDGED rows. TOTAL over its inputs.
+
+    Denominated on `judged`, never `total` (see build_model's rollup loop) --
+    a bar drawn over the ORM total would assert a proportion the data does
+    not support. Coercion delegates to `_coerce_segment_count` (NaN checked
+    BEFORE `int()`, not after -- checking after would never run, since a
+    NaN already raised out of the `try` by then): NaN, both infinities, None,
+    non-numeric strings and unexpected types all degrade rather than raise,
+    and a ratio above 1 (an impossible but not-worth-crashing-over input) is
+    clamped.
+    """
+    never = _coerce_segment_count(never)
+    judged = _coerce_segment_count(judged)
+    ratio = 0.0 if judged <= 0 else min(1.0, max(0.0, never / float(judged)))
+    name = _esc(label)
+    return (f'<svg class="mini" role="img"'
+            f' aria-label="{name}: {never} of {judged} never watched"'
+            f' viewBox="0 0 {MINI_W} {MINI_H}" preserveAspectRatio="none">'
+            f'<rect class="track" x="0" y="1" width="{MINI_W}" height="8" rx="4"/>'
+            f'<rect class="fill" x="0" y="1" width="{MINI_W * ratio:.2f}"'
+            f' height="8" rx="4"/>'
+            f'<title>{name}: {never} of {judged} judged never watched</title>'
+            f'</svg>')
+
+
 _CSS = """
-:root { color-scheme: light dark; }
+:root {
+  color-scheme: light dark;
+  --never: #2a78d6; --watched: #1baf7a; --tuned: #e34948; --toonew: #898781;
+  --track: #e1e0d9; --ok: #0ca30c; --bad: #d03b3b;
+}
 body { font: 15px/1.5 system-ui, -apple-system, Segoe UI, sans-serif;
        margin: 0; padding: 24px; background: #fbfbfd; color: #16181d; }
 @media (prefers-color-scheme: dark) {
+  :root {
+    --never: #3987e5; --watched: #199e70; --tuned: #e66767; --toonew: #898781;
+    --track: #2c2c2a; --ok: #0ca30c; --bad: #d03b3b;
+  }
   body { background: #14161a; color: #e8eaed; }
   th { background: #1e2127 !important; }
   tr:nth-child(even) td { background: #191c21; }
   .card { background: #1a1d22 !important; border-color: #2a2e35 !important; }
 }
 h1 { font-size: 22px; margin: 0 0 4px; }
-h2 { font-size: 17px; margin: 32px 0 8px; }
 .sub { opacity: .7; font-size: 13px; margin-bottom: 20px; }
 .card { background: #fff; border: 1px solid #e3e5ea; border-radius: 10px;
         padding: 14px 16px; margin-bottom: 18px; }
@@ -369,8 +604,70 @@ table { border-collapse: collapse; width: 100%; font-size: 14px; }
 th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #e6e8ec; }
 th { background: #f2f3f6; position: sticky; top: 0; cursor: pointer; }
 td.num { text-align: right; font-variant-numeric: tabular-nums; }
-.pill { font-size: 12px; padding: 1px 7px; border-radius: 999px;
-        background: #eceef2; }
+"""
+
+_CSS += """
+.chart { width: 100%; height: 22px; display: block; }
+.track { fill: var(--track); }
+.seg-never { fill: var(--never); }
+.seg-watched { fill: var(--watched); }
+.seg-toonew { fill: var(--toonew); }
+.seg-tuned { fill: var(--tuned); }
+/* Gaps come from the x-offsets computed in _svg_split_bar, not from a
+   stroke -- do not add a stroke rule here, it would double-count. */
+.legend { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 18px;
+          margin: 10px 0 4px; padding: 0; font-size: 13px; }
+.swatch { display: inline-block; width: 11px; height: 11px; border-radius: 3px;
+          margin-right: 6px; vertical-align: -1px; }
+.swatch.seg-never { background: var(--never); }
+.swatch.seg-watched { background: var(--watched); }
+.swatch.seg-toonew { background: var(--toonew); }
+.swatch.seg-tuned { background: var(--tuned); }
+.caption { font-size: 13px; opacity: .7; margin: 2px 0 18px; }
+"""
+
+_CSS += """
+.meter { width: 280px; max-width: 100%; height: 14px; vertical-align: middle; }
+.meter .fill { fill: var(--never); }
+.meter .tick { fill: var(--bad); opacity: .55; }
+.meterrow { display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+            margin: 12px 0 16px; font-size: 13px; }
+.chip { font-size: 12px; padding: 2px 9px; border-radius: 999px;
+        border: 1px solid; }
+/* Text stays the page's normal ink (inherited, not set here) -- #0ca30c on
+   the light surface and #d03b3b on the dark surface both fall short of the
+   4.5:1 that 12px text needs. Meaning is carried by the glyph + the words,
+   never by colour alone, so the status hue rides on the border and the
+   glyph (the <b>) only. */
+.chip-ok { border-color: var(--ok); }
+.chip-bad { border-color: var(--bad); }
+.chip-ok b { color: var(--ok); }
+.chip-bad b { color: var(--bad); }
+"""
+
+_CSS += """
+.mini { width: 100px; height: 10px; vertical-align: middle; }
+.mini .fill { fill: var(--never); }
+td.barcell { width: 120px; }
+"""
+
+_CSS += """
+details { border-top: 1px solid var(--track); padding: 4px 0 8px; }
+summary { font-size: 17px; font-weight: 600; cursor: pointer;
+          padding: 10px 2px; list-style: none; }
+summary::-webkit-details-marker { display: none; }
+summary::before { content: '\\25B8'; display: inline-block; width: 1em;
+                  opacity: .55; transition: transform .12s; }
+details[open] > summary::before { transform: rotate(90deg); }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+       margin-right: 8px; vertical-align: baseline; }
+.dot-never { background: var(--never); }
+.dot-watched { background: var(--watched); }
+.dot-tuned { background: var(--tuned); }
+.dot-toonew { background: var(--toonew); }
+.dot-neutral { background: var(--track); }
+.count { font-weight: 400; opacity: .6; font-variant-numeric: tabular-nums; }
+.hint { font-size: 12px; opacity: .6; margin: 0 0 8px; }
 """
 
 # Inline, no external assets: click a header to sort its column ascending,
@@ -437,6 +734,24 @@ def _table(entries):
             f"<tbody>{''.join(body)}</tbody></table></div>")
 
 
+def _section(title, count, body, open_by_default, dot_class):
+    """One report section as a collapsible <details>.
+
+    `count` is Optional[int]: `Least used` / `Most used` are top-N slices
+    rather than populations and deliberately carry no number, so None omits
+    the span entirely. `dot_class` is the modifier only ("dot-never").
+
+    <details> needs no JavaScript, and a client that does not implement it
+    renders the content EXPANDED -- the failure mode is "everything visible",
+    never "content lost".
+    """
+    open_attr = " open" if open_by_default else ""
+    number = "" if count is None else f' <span class="count">{int(count)}</span>'
+    return (f'<details{open_attr}><summary>'
+            f'<span class="dot {_esc(dot_class)}" aria-hidden="true"></span>'
+            f'{_esc(title)}{number}</summary>{body}</details>')
+
+
 def render_html(model):
     """A complete, self-contained HTML page -- see the module-level note.
 
@@ -447,8 +762,8 @@ def render_html(model):
        watched" (R2) -- `model["never_watched"]` carries BOTH reasons so the
        CSV export sees every row, but a channel too young to fairly call
        unused (Task 8's `too_new`) is not dead weight and must not read as
-       if it were: the "Never watched (N)" heading's N must equal the row
-       count of the table directly beneath it.
+       if it were: the "Never watched" section's count span must equal the
+       row count of the table directly beneath it.
     3. "Tuned but never qualified" is its own section with an explanation --
        these are almost certainly BROKEN channels, not unused ones.
     4. A data-confidence header (tracking since / days / coverage%).
@@ -464,7 +779,9 @@ def render_html(model):
     rollup_rows = "".join(
         f"<tr><td>{_esc(g['group'])}</td>"
         f"<td class='num' data-v='{g['never']}'>{g['never']}</td>"
-        f"<td class='num' data-v='{g['total']}'>{g['total']}</td></tr>"
+        f"<td class='num' data-v='{g['total']}'>{g['total']}</td>"
+        f"<td class=\"barcell\" data-v=\"{(g['never'] / g['judged']) if g['judged'] else 0:.4f}\">"
+        f"{_svg_mini_bar(g['never'], g['judged'], g['group'])}</td></tr>"
         for g in model["group_rollup"])
 
     counts = model["counts"]
@@ -483,6 +800,56 @@ def render_html(model):
         least_used_note = ("<p class='sub'>All watched channels are listed "
                            "above.</p>")
 
+    judged = sum(counts[key] for _, key, _ in _SEGMENT_ORDER)
+    bar_svg, bar_legend = _svg_split_bar(
+        [(label, counts[key], css) for label, key, css in _SEGMENT_ORDER])
+    caption = (f"{model['total_channels']} channels · {judged} judged · "
+               f"not judged: {counts['excluded']} excluded, "
+               f"{counts['unobservable']} unobservable")
+
+    meter_svg, meter_chip = _svg_meter(model["coverage"], gate["ok"])
+    meter_row = (f'<div class="meterrow">{meter_svg}'
+                 f'<span>sampling density {model["coverage"]:.1%}</span>'
+                 f'<span>{_esc(model["tracked_days"])} days tracked</span>'
+                 f'{meter_chip}</div>')
+
+    never_body = (
+        "<div class='card'><div class='scroll'><table>"
+        "<thead><tr><th>Group</th><th>Never watched</th><th>Total</th>"
+        "<th>never / judged</th></tr></thead>"
+        f"<tbody>{rollup_rows}</tbody></table></div></div>" + _table(never_only))
+
+    # Every section that is CLOSED by default (see EXPECTED_OPEN in the test
+    # suite) carries this note -- find-in-page cannot reach inside a closed
+    # <details> on some browsers, regardless of which closed section it is.
+    find_hint = ("<p class='hint'>Expand to search these -- find-in-page does not "
+                "reach inside a collapsed section on some browsers.</p>")
+
+    sections = "".join([
+        _section("Never watched", counts["never_watched"], never_body,
+                 True, "dot-never"),
+        _section("Too new to judge", counts["too_new"],
+                 find_hint +
+                 "<p class='sub'>Created less than the unused threshold ago -- not "
+                 "enough time has passed to fairly call these unused. Not dead "
+                 "weight; just wait.</p>" + _table(too_new_only),
+                 False, "dot-toonew"),
+        _section("Tuned but never qualified", counts["tuned_never_qualified"],
+                 "<p class='sub'>You tried to watch these and gave up quickly. They "
+                 "are probably <b>broken</b> (dead source, black screen, provider "
+                 "kick), not unused.</p>" + _table(model["tuned_never_qualified"]),
+                 True, "dot-tuned"),
+        _section("Least used", None,
+                 find_hint + least_used_note + _table(model["least_used"]),
+                 False, "dot-neutral"),
+        _section("Most used", None, _table(model["most_used"]),
+                 True, "dot-watched"),
+        _section("Excluded and unobservable",
+                 counts["excluded"] + counts["unobservable"],
+                 find_hint + _table(model["excluded"] + model["unobservable"]),
+                 False, "dot-neutral"),
+    ])
+
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -497,41 +864,14 @@ def render_html(model):
   Tracking since {_esc(_fmt_local(model['stats_since']))} ·
   {_esc(model['tracked_days'])} days ·
   coverage {model['coverage']:.1%} ·
-  {model['total_channels']} channels ·
-  <span class="pill">{counts['never_watched']} never watched</span>
-  <span class="pill">{counts['watched']} watched</span>
-  <span class="pill">{counts['excluded']} excluded</span>
+  {model['total_channels']} channels
 </div>
+{bar_svg}
+{bar_legend}
+<div class="caption">{caption}</div>
+{meter_row}
 {banner}
-
-<h2>Never watched ({counts['never_watched']})</h2>
-<div class="card">
-  <div class="scroll"><table>
-    <thead><tr><th>Group</th><th>Never watched</th><th>Total</th></tr></thead>
-    <tbody>{rollup_rows}</tbody>
-  </table></div>
-</div>
-{_table(never_only)}
-
-<h2>Too new to judge ({counts['too_new']})</h2>
-<p class="sub">Created less than the unused threshold ago -- not enough time
-has passed to fairly call these unused. Not dead weight; just wait.</p>
-{_table(too_new_only)}
-
-<h2>Tuned but never qualified ({counts['tuned_never_qualified']})</h2>
-<p class="sub">You tried to watch these and gave up quickly. They are probably
-<b>broken</b> (dead source, black screen, provider kick), not unused.</p>
-{_table(model['tuned_never_qualified'])}
-
-<h2>Least used</h2>
-{least_used_note}
-{_table(model['least_used'])}
-
-<h2>Most used</h2>
-{_table(model['most_used'])}
-
-<h2>Excluded ({counts['excluded']}) and unobservable ({counts['unobservable']})</h2>
-{_table(model['excluded'] + model['unobservable'])}
+{sections}
 
 <script>{_SORT_JS}</script>
 </body>

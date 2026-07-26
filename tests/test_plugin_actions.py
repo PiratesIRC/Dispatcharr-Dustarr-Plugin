@@ -1481,3 +1481,19 @@ def test_email_report_now_still_errors_on_a_refusal_with_NO_reason(plugin, monke
     r = plugin.Plugin().run("email_report_now", {}, {"settings": {}})
     assert r["status"] == "error"
     assert r.get("error") and "did not accept" in r["error"]
+
+
+def test_action_exception_sets_error_key_not_just_message(plugin, monkeypatch):
+    """Dispatcharr renders `error` (red, persistent) and `message` (transient
+    green toast); `status` renders NOWHERE. A raising action must set `error`
+    or the failure is pixel-identical to success."""
+    def boom(_settings):
+        raise ValueError("kaboom")
+
+    monkeypatch.setattr(plugin, "_build_report", boom)
+    inst = plugin.Plugin.__new__(plugin.Plugin)
+    result = inst.run("build_report", {}, {})
+
+    assert result["status"] == "error"
+    assert "error" in result, "no `error` key: this failure renders as success"
+    assert "kaboom" in result["error"]
