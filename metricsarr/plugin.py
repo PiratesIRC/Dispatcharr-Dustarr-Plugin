@@ -146,18 +146,22 @@ ACTIONS = [
     {"id": "build_report", "label": "Build report",
      "description": "Write the HTML report and CSV now. Does not send "
                     "notifications - the scheduled report does.",
-     "button_label": "Build"},
+     "button_label": "📈 Build",
+     "button_variant": "filled", "button_color": "orange"},
     {"id": "email_report_now", "label": "Email report now",
      "description": "Build the report now and email it with the file attached "
                     "- the same job the schedule runs. Does NOT prove the "
                     "SCHEDULE works: this runs in the web worker, the schedule "
                     "runs on a Celery worker.",
-     "button_label": "Email now"},
+     "button_label": "📧 Email now",
+     "button_variant": "filled", "button_color": "cyan"},
     {"id": "show_summary", "label": "Show summary",
      "description": "Tracking window, coverage, never-watched count.",
-     "button_label": "Summary"},
+     "button_label": "📊 Summary",
+     "button_variant": "outline", "button_color": "blue"},
     {"id": "validate_settings", "label": "Validate settings",
-     "description": "Check every setting parses.", "button_label": "Validate"},
+     "description": "Check every setting parses.", "button_label": "✅ Validate",
+     "button_variant": "outline", "button_color": "green"},
 ]
 
 _NUMERIC_FLOORS = {"poll_interval_s": (5, MAX_POLL_INTERVAL_S),
