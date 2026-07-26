@@ -144,14 +144,18 @@ def test_segment_order_is_pinned(rp):
 
 def test_hostile_counts_never_raise_and_are_dropped(rp):
     """`count or 0` let float('nan') (truthy!) and non-numeric strings reach
-    int() and raise. Every hostile value here must degrade to a dropped
-    segment, never an exception."""
+    int() and raise. `float('inf')`/`float('-inf')` slip past the NaN guard
+    (infinity equals itself) and raise `OverflowError` instead -- a third
+    exception type, caught alongside TypeError/ValueError. Every hostile
+    value here must degrade to a dropped segment, never an exception."""
     segs = [
         ("never", 385, "seg-never"),
         ("negative", -5, "seg-watched"),
         ("none", None, "seg-tuned"),
         ("nonnumeric", "not-a-number", "seg-toonew"),
         ("nan", float("nan"), "seg-watched"),
+        ("posinf", float("inf"), "seg-tuned"),
+        ("neginf", float("-inf"), "seg-toonew"),
     ]
     svg, legend = rp._svg_split_bar(segs, width=900)
     widths = _rect_widths(svg)
@@ -161,6 +165,8 @@ def test_hostile_counts_never_raise_and_are_dropped(rp):
     assert "negative" not in legend
     assert "none" not in legend
     assert "nonnumeric" not in legend
+    assert "posinf" not in legend
+    assert "neginf" not in legend
 
 
 def test_all_zero_counts_render_empty_track(rp):
@@ -185,11 +191,11 @@ def test_width_zero_does_not_raise(rp):
 
 
 def test_many_tiny_segments_never_overflow_the_track(rp):
-    """Reviewer repro: flooring 300 tiny segments at MIN_SEG_PX=2 demands 600px
-    of floor alone before the one huge segment gets a look-in -- taking all
-    the debt from a single absorber drove the total past `track` (and, at 900
-    tiny segments, negative). Redistributing the debt across every above-floor
-    segment must keep the geometry invariant regardless of shape."""
+    """Degenerate-branch cover: 300 tiny segments plus one huge one at
+    width=900 makes track (300) < n*MIN_SEG_PX (602), so `_fit_to_track`
+    takes its even-split fallback rather than the proportional-shedding
+    loop. Still must never overflow the track (the old single-absorber bug
+    overflowed this shape by ~300px) or go negative."""
     segs = [("huge", 100_000, "seg-never")]
     segs += [(f"tiny{i}", 1, "seg-watched") for i in range(300)]
     svg, _ = rp._svg_split_bar(segs, width=900)
@@ -203,4 +209,24 @@ def test_many_tiny_segments_never_overflow_the_track(rp):
     # single-absorber bug overflowed by ~300px on this exact shape -- far
     # past this tolerance -- so it still fails the invariant.
     assert sum(widths) <= track + 1.0
+    assert all(w >= 0 for w in widths)
+
+
+def test_multi_donor_redistribution_loop_runs_and_holds_the_invariant(rp):
+    """Finding 3: the previous stress test lands in the DEGENERATE even-split
+    branch (track < n*floor) and never exercises the proportional multi-donor
+    shedding loop in `_fit_to_track`. This shape is the reviewer's own
+    non-degenerate repro: 3 segments of 1000 plus 300 of 1, width=2000 ->
+    track=1396, n*floor=606 (track >= n*floor, so the loop runs), and no
+    single one of the three big segments has enough headroom alone to absorb
+    the floor debt from 300 tiny segments -- multiple donors must share it."""
+    segs = [(f"big{i}", 1000, "seg-never") for i in range(3)]
+    segs += [(f"tiny{i}", 1, "seg-watched") for i in range(300)]
+    svg, _ = rp._svg_split_bar(segs, width=2000)
+    widths = _rect_widths(svg)
+    assert len(widths) == 303
+    track = 2000 - rp.GAP_PX * (len(widths) - 1)
+    assert track >= 303 * rp.MIN_SEG_PX  # confirms the non-degenerate branch
+    assert sum(widths) <= track + 1.0
+    assert all(w >= rp.MIN_SEG_PX - 1.0 for w in widths)
     assert all(w >= 0 for w in widths)

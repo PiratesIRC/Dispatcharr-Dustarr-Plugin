@@ -370,15 +370,20 @@ def _coerce_segment_count(count):
     `int(nan)` raises `ValueError`; a non-numeric string raises too. NaN is
     rejected explicitly via self-inequality (true only for NaN, and it works
     across int/float/str alike, unlike `math.isnan` which only accepts
-    floats) before `int()` ever sees it. Anything unparseable, negative, or
-    NaN degrades to 0 -- i.e. the segment is dropped by the caller's `> 0`
-    filter, never an exception.
+    floats) before `int()` ever sees it.
+
+    `float('inf')`/`float('-inf')` are NOT caught by the NaN guard (infinity
+    equals itself) and `int(inf)` raises `OverflowError`, a THIRD exception
+    type beyond `TypeError`/`ValueError` -- caught explicitly alongside them
+    so a non-finite float can never escape this function. Anything
+    unparseable, negative, non-finite, or NaN degrades to 0 -- i.e. the
+    segment is dropped by the caller's `> 0` filter, never an exception.
     """
     if count != count:  # NaN is the only value that is not equal to itself
         return 0
     try:
         value = int(count)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
     return value if value > 0 else 0
 
