@@ -103,3 +103,23 @@ def test_no_content_is_lost_to_a_details_unaware_client(rp, gw):
     html = rp.render_html(model(rp, gw, n=5, watched=2))
     for i in range(5):
         assert f">CH{i}<" in html
+
+
+def test_rollup_bar_cell_is_sortable(rp, gw):
+    """_SORT_JS binds EVERY th and sorts on `dataset.v || textContent`. An
+    SVG-only cell has neither, so the column would present as sortable and
+    silently do nothing."""
+    html = rp.render_html(model(rp, gw, n=5, watched=2))
+    assert "never / judged" in html
+    assert re.search(r'<td class="barcell" data-v="[0-9.]+"', html)
+
+
+def test_rollup_group_name_is_escaped_in_the_svg_title(rp, gw):
+    rows = [gw.ChannelRow(id=1, uuid="u1", name="CH", group='<b>G</b>',
+                          auto_created=False, created_at=NOW - 90 * 86400,
+                          proxying=True)]
+    usage = {"channels": {}, "meta": {"stats_since": NOW - 40 * 86400,
+                                      "coverage": {}}}
+    html = rp.render_html(rp.build_model(rows, usage, SETTINGS, NOW))
+    assert "<b>G</b>" not in html
+    assert "&lt;b&gt;G&lt;/b&gt;" in html

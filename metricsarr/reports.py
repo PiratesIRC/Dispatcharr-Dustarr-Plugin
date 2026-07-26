@@ -235,7 +235,12 @@ def build_model(rows, usage, settings, now):
     rollup = {}
     for entry in never + used + tuned_only:
         bucket = rollup.setdefault(entry["group"], {"group": entry["group"],
-                                                    "never": 0, "total": 0})
+                                                    "never": 0, "judged": 0,
+                                                    "total": 0})
+        # `judged` is the mini bar's denominator: `total` is the group's TRUE
+        # ORM count INCLUDING excluded rows, so a bar over it would assert a
+        # proportion the data does not support.
+        bucket["judged"] += 1
         if entry["reason"] in ("never_watched", "too_new"):
             bucket["never"] += 1
     for bucket in rollup.values():
@@ -535,6 +540,46 @@ def _svg_meter(fraction, gate_ok, width=280):
     return svg, chip
 
 
+MINI_W = 100
+MINI_H = 10
+
+
+def _svg_mini_bar(never, judged, label):
+    """Never-watched share of a group's JUDGED rows. TOTAL over its inputs.
+
+    Denominated on `judged`, never `total` (see build_model's rollup loop) --
+    a bar drawn over the ORM total would assert a proportion the data does
+    not support. Coercion mirrors `_svg_meter`/`_svg_split_bar`: NaN, both
+    infinities, None, non-numeric strings and unexpected types all degrade
+    rather than raise, and a ratio above 1 (an impossible but not-worth-
+    crashing-over input) is clamped.
+    """
+    try:
+        never = int(never)
+    except (TypeError, ValueError, OverflowError):
+        never = 0
+    if never != never:  # NaN
+        never = 0
+    try:
+        judged = int(judged)
+    except (TypeError, ValueError, OverflowError):
+        judged = 0
+    if judged != judged:  # NaN
+        judged = 0
+    never = max(0, never)
+    judged = max(0, judged)
+    ratio = 0.0 if judged <= 0 else min(1.0, max(0.0, never / float(judged)))
+    name = _esc(label)
+    return (f'<svg class="mini" role="img"'
+            f' aria-label="{name}: {never} of {judged} never watched"'
+            f' viewBox="0 0 {MINI_W} {MINI_H}" preserveAspectRatio="none">'
+            f'<rect class="track" x="0" y="1" width="{MINI_W}" height="8" rx="4"/>'
+            f'<rect class="fill" x="0" y="1" width="{MINI_W * ratio:.2f}"'
+            f' height="8" rx="4"/>'
+            f'<title>{name}: {never} of {judged} judged never watched</title>'
+            f'</svg>')
+
+
 _CSS = """
 :root {
   color-scheme: light dark;
@@ -603,6 +648,13 @@ _CSS += """
         border: 1px solid; }
 .chip-ok { color: var(--ok); border-color: var(--ok); }
 .chip-bad { color: var(--bad); border-color: var(--bad); }
+"""
+
+_CSS += """
+.mini { width: 100px; height: 10px; vertical-align: middle; }
+.mini .track { fill: var(--track); }
+.mini .fill { fill: var(--never); }
+td.barcell { width: 120px; }
 """
 
 _CSS += """
@@ -733,7 +785,9 @@ def render_html(model):
     rollup_rows = "".join(
         f"<tr><td>{_esc(g['group'])}</td>"
         f"<td class='num' data-v='{g['never']}'>{g['never']}</td>"
-        f"<td class='num' data-v='{g['total']}'>{g['total']}</td></tr>"
+        f"<td class='num' data-v='{g['total']}'>{g['total']}</td>"
+        f"<td class=\"barcell\" data-v=\"{(g['never'] / g['judged']) if g['judged'] else 0:.4f}\">"
+        f"{_svg_mini_bar(g['never'], g['judged'], g['group'])}</td></tr>"
         for g in model["group_rollup"])
 
     counts = model["counts"]
@@ -767,7 +821,8 @@ def render_html(model):
 
     never_body = (
         "<div class='card'><div class='scroll'><table>"
-        "<thead><tr><th>Group</th><th>Never watched</th><th>Total</th></tr></thead>"
+        "<thead><tr><th>Group</th><th>Never watched</th><th>Total</th>"
+        "<th>never / judged</th></tr></thead>"
         f"<tbody>{rollup_rows}</tbody></table></div></div>" + _table(never_only))
 
     sections = "".join([

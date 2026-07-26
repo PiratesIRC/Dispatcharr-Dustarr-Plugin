@@ -276,3 +276,38 @@ def test_multi_donor_redistribution_loop_runs_and_holds_the_invariant(rp):
     assert sum(widths) <= track + 1.0
     assert all(w >= rp.MIN_SEG_PX - 1.0 for w in widths)
     assert all(w >= 0 for w in widths)
+
+
+def test_mini_bar_is_proportional_to_judged_not_total(rp):
+    svg = rp._svg_mini_bar(3, 4, "US: Movies")
+    fills = [float(w) for w in
+             re.findall(r'<rect[^>]*class="fill"[^>]*width="([0-9.]+)"', svg)]
+    assert len(fills) == 1
+    assert abs(fills[0] / 100.0 - 0.75) < 0.01
+
+
+def test_mini_bar_guards_a_zero_denominator(rp):
+    svg = rp._svg_mini_bar(0, 0, "G")
+    assert "NaN" not in svg
+    assert "<svg" in svg
+
+
+def test_mini_bar_clamps_an_impossible_ratio(rp):
+    svg = rp._svg_mini_bar(9, 4, "G")
+    fills = [float(w) for w in
+             re.findall(r'<rect[^>]*class="fill"[^>]*width="([0-9.]+)"', svg)]
+    assert fills[0] <= 100.0
+
+
+def test_mini_bar_escapes_the_group_name_in_its_title(rp):
+    """The group name is provider-controlled and is the ONLY such string that
+    reaches an SVG."""
+    svg = rp._svg_mini_bar(1, 2, '<script>alert(1)</script>')
+    assert "<script>alert" not in svg
+    assert "&lt;script&gt;" in svg
+
+
+def test_mini_bar_emits_no_colour_presentation_attributes(rp):
+    svg = rp._svg_mini_bar(1, 2, "G")
+    assert "fill=" not in svg
+    assert "stroke=" not in svg

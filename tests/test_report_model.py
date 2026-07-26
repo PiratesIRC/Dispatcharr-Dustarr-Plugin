@@ -382,3 +382,22 @@ def test_atomic_write_uses_a_process_unique_temp_name(rp, tmp_path, monkeypatch)
     assert tmps, "no temp file was used"
     assert all(str(os.getpid()) in t for t in tmps), tmps
     assert (tmp_path / "r.html").read_text(encoding="utf-8") == "x"
+
+
+def test_group_rollup_carries_a_judged_count(rp, gw):
+    """The mini bar's denominator. `total` is the group's TRUE ORM count
+    INCLUDING excluded rows (reports.py:170-179), so a bar drawn over it
+    would assert a proportion the data does not support."""
+    rows = [gw.ChannelRow(id=i, uuid=f"u{i}", name=f"CH{i}", group="G",
+                          auto_created=False, created_at=NOW - 90 * 86400,
+                          proxying=True) for i in range(4)]
+    usage = {"channels": {"u0": {"watch_count": 2, "watch_seconds": 7200.0,
+                                 "tune_count": 2, "last_watched": NOW - 60,
+                                 "last_tuned": NOW - 60,
+                                 "first_seen": NOW - 86400}},
+             "meta": {"stats_since": NOW - 40 * 86400, "coverage": {}}}
+    built = rp.build_model(rows, usage, SETTINGS, NOW)
+    bucket = built["group_rollup"][0]
+    assert bucket["judged"] == 4
+    assert bucket["never"] == 3
+    assert bucket["never"] <= bucket["judged"]
