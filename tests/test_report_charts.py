@@ -15,11 +15,11 @@ NOW = 1_700_000_000.0
 # in both modes (7.1 light, 13.0 dark).
 PALETTE_LIGHT = {"--never": "#2a78d6", "--watched": "#1baf7a",
                  "--tuned": "#e34948", "--toonew": "#898781",
-                 "--track": "#e1e0d9", "--gap": "#ffffff",
+                 "--track": "#e1e0d9",
                  "--ok": "#0ca30c", "--bad": "#d03b3b"}
 PALETTE_DARK = {"--never": "#3987e5", "--watched": "#199e70",
                 "--tuned": "#e66767", "--toonew": "#898781",
-                "--track": "#2c2c2a", "--gap": "#1a1d22",
+                "--track": "#2c2c2a",
                 "--ok": "#0ca30c", "--bad": "#d03b3b"}
 
 
@@ -89,7 +89,13 @@ def test_zero_count_segments_are_dropped_entirely(rp):
     assert abs(sum(_rect_widths(svg)) - (900 - rp.GAP_PX)) <= 1.0
 
 
-GATE_PCT = 0.90
+def test_gate_pct_tracks_gates_min_coverage(rp):
+    """GATE_PCT must be READ from gates.MIN_COVERAGE, not a second hardcoded
+    0.90 -- otherwise the tick position and the "gate at N%" title text can
+    silently disagree with the actual gate if it ever moves."""
+    import sys
+    gates = sys.modules["metricsarr_under_test.gates"]
+    assert rp.GATE_PCT == gates.MIN_COVERAGE
 
 
 def test_meter_clamps_out_of_range_fractions(rp):
@@ -126,7 +132,7 @@ def test_meter_marks_the_gate_threshold(rp):
     svg, _ = rp._svg_meter(0.5, False, width=280)
     ticks = re.findall(r'class="tick"[^>]*x="([0-9.]+)"', svg)
     assert ticks, "no gate tick"
-    assert abs(float(ticks[0]) - 280 * GATE_PCT) < 1.0
+    assert abs(float(ticks[0]) - 280 * rp.GATE_PCT) < 1.0
 
 
 def test_meter_emits_no_colour_presentation_attributes(rp):
@@ -152,15 +158,21 @@ def test_empty_input_renders_an_empty_track_not_a_crash(rp):
         assert "NaN" not in svg2
 
 
-def test_label_fit_is_measured_not_a_share_threshold(rp):
-    """A share threshold breaks at narrow widths: 6% is 54px at 900 but 19px
-    at 320, while '1010' needs ~28px."""
+def test_split_bar_has_no_in_bar_text_label_at_any_width(rp):
+    """`.chart { width: 100% }` over a fixed-height viewBox with
+    `preserveAspectRatio="none"` scales X but not Y, so any in-bar <text>
+    stretches on desktop and squashes on a narrow phone screen (the report
+    is emailed and opened on phones) -- there is no width at which it
+    renders undistorted. Every count already appears, undistorted, in the
+    legend and in a table on the same page, so the bar itself must carry no
+    text at all, regardless of segment size or bar width."""
     segs = [("never", 1010, "seg-never"), ("tuned", 5, "seg-tuned")]
-    wide, _ = rp._svg_split_bar(segs, width=900)
-    narrow, _ = rp._svg_split_bar(segs, width=320)
-    assert ">1010<" in wide
-    assert ">5<" not in wide          # 5/1015 of 900px cannot hold one digit
-    assert ">5<" not in narrow
+    for width in (900, 320):
+        svg, legend = rp._svg_split_bar(segs, width=width)
+        assert "seglabel" not in svg
+        assert "<text" not in svg
+        assert ">1010<" in legend
+        assert ">5<" in legend
 
 
 def test_generators_emit_no_colour_presentation_attributes(rp):
@@ -311,3 +323,41 @@ def test_mini_bar_emits_no_colour_presentation_attributes(rp):
     svg = rp._svg_mini_bar(1, 2, "G")
     assert "fill=" not in svg
     assert "stroke=" not in svg
+
+
+def test_meter_survives_a_huge_int_fraction(rp):
+    """`float(10**400)` raises OverflowError, not TypeError/ValueError -- the
+    exact third exception type _coerce_segment_count already guards against
+    and _svg_meter's own `float()` call had not ported. The docstring claims
+    TOTAL over its inputs; this is the case that used to break that claim."""
+    svg, _ = rp._svg_meter(10 ** 400, True, width=280)
+    assert "NaN" not in svg
+    fills = [float(w) for w in
+             re.findall(r'<rect[^>]*class="fill"[^>]*width="([0-9.]+)"', svg)]
+    assert fills and 0.0 <= fills[0] <= 280.0
+
+
+# -- FIX 4: SVG geometry constants must agree with their unpinned CSS -------
+#
+# `preserveAspectRatio="none"` means a change to the Python constant alone,
+# with no matching CSS edit, silently stretches the rendered SVG. Parse the
+# literal out of _CSS and compare it to the constant rather than restructure
+# the CSS to interpolate it (a test is enough, and less fragile).
+
+def test_bar_height_constant_matches_the_css(rp):
+    m = re.search(r"\.chart\s*\{[^}]*height:\s*(\d+)px", rp._CSS)
+    assert m, "no .chart height rule found in _CSS"
+    assert int(m.group(1)) == rp.BAR_H
+
+
+def test_meter_height_constant_matches_the_css(rp):
+    m = re.search(r"\.meter\s*\{[^}]*height:\s*(\d+)px", rp._CSS)
+    assert m, "no .meter height rule found in _CSS"
+    assert int(m.group(1)) == rp.METER_H
+
+
+def test_mini_dimension_constants_match_the_css(rp):
+    m = re.search(r"\.mini\s*\{[^}]*width:\s*(\d+)px[^}]*height:\s*(\d+)px", rp._CSS)
+    assert m, "no .mini width/height rule found in _CSS"
+    assert int(m.group(1)) == rp.MINI_W
+    assert int(m.group(2)) == rp.MINI_H

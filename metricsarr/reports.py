@@ -354,8 +354,6 @@ def full_report_url(base_url, path=REPORT_URL_PATH):
 GAP_PX = 2          # surface gap between adjacent segments
 MIN_SEG_PX = 2      # a real category must never vanish sub-pixel
 BAR_H = 22          # mark spec: bars <= 24px thick
-CHAR_PX = 8         # per-digit width estimate for label-fit measurement
-PAD_PX = 6
 
 # (legend label, counts key, css class). Order is for READING -- the palette
 # was validated all-pairs, so no order is unsafe. See spec section 6.
@@ -453,6 +451,16 @@ def _svg_split_bar(segments, width=900):
     entry). That is why the palette is validated all-pairs rather than
     adjacent-only: any two segments can become neighbours.
 
+    No in-bar text label: `.chart { width: 100% }` over a fixed-height
+    viewBox with `preserveAspectRatio="none"` scales X but not Y, so any
+    `<text>` glyph inside the bar stretches on desktop and squashes on a
+    narrow phone screen (the report is emailed as an attachment and opened on
+    phones) -- there is no aspect ratio at which in-bar text renders
+    undistorted. Every count already appears, undistorted, in the legend
+    directly below the bar and in a table on the same page -- that relief
+    rule is what makes dropping the in-bar label safe rather than a loss of
+    information.
+
     TOTAL over its inputs -- every count is coerced defensively
     (`_coerce_segment_count`: NaN, negative, non-numeric or None all degrade
     to a dropped segment rather than raising) and widths always fit the
@@ -478,13 +486,6 @@ def _svg_split_bar(segments, width=900):
     for (label, count, css), seg_w in zip(live, widths):
         parts.append(f'<rect class="seg {css}" x="{x:.2f}" y="0"'
                      f' width="{seg_w:.2f}" height="{BAR_H}" rx="4"/>')
-        text = str(count)
-        # MEASURE, do not use a share threshold: 6% is 54px at width 900 but
-        # only 19px at 320, while "1010" needs ~28px.
-        if seg_w >= len(text) * CHAR_PX + 2 * PAD_PX:
-            parts.append(f'<text class="seglabel" x="{x + seg_w / 2:.2f}"'
-                         f' y="{BAR_H / 2 + 4:.0f}"'
-                         f' text-anchor="middle">{_esc(text)}</text>')
         legend.append(f'<li><span class="swatch {_esc(css)}"></span>'
                       f'{_esc(label)} <b>{count}</b></li>')
         x += seg_w + GAP_PX
@@ -497,7 +498,9 @@ def _svg_split_bar(segments, width=900):
 
 
 METER_H = 14
-GATE_PCT = 0.90     # gates.py's MIN_COVERAGE floor -- ticked so distance is visible
+# Read from gates.MIN_COVERAGE (not hardcoded) so the tick position and the
+# "gate at N%" title text cannot silently drift out of sync if the gate moves.
+GATE_PCT = gates.MIN_COVERAGE
 
 
 def _svg_meter(fraction, gate_ok, width=280):
@@ -510,12 +513,13 @@ def _svg_meter(fraction, gate_ok, width=280):
     documented worst input.
 
     TOTAL over its inputs (see _svg_split_bar's note on the missing net):
-    NaN, both infinities, None, non-numeric strings and unexpected types all
-    degrade to a sane default (0.0) rather than raising.
+    NaN, both infinities, None, non-numeric strings, an int too huge for
+    `float()` to represent (raises `OverflowError`, not `ValueError`), and
+    unexpected types all degrade to a sane default (0.0) rather than raising.
     """
     try:
         value = float(fraction)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         value = 0.0
     if value != value or value in (float("inf"), float("-inf")):   # NaN / inf
         value = 0.0
@@ -549,25 +553,15 @@ def _svg_mini_bar(never, judged, label):
 
     Denominated on `judged`, never `total` (see build_model's rollup loop) --
     a bar drawn over the ORM total would assert a proportion the data does
-    not support. Coercion mirrors `_svg_meter`/`_svg_split_bar`: NaN, both
-    infinities, None, non-numeric strings and unexpected types all degrade
-    rather than raise, and a ratio above 1 (an impossible but not-worth-
-    crashing-over input) is clamped.
+    not support. Coercion delegates to `_coerce_segment_count` (NaN checked
+    BEFORE `int()`, not after -- checking after would never run, since a
+    NaN already raised out of the `try` by then): NaN, both infinities, None,
+    non-numeric strings and unexpected types all degrade rather than raise,
+    and a ratio above 1 (an impossible but not-worth-crashing-over input) is
+    clamped.
     """
-    try:
-        never = int(never)
-    except (TypeError, ValueError, OverflowError):
-        never = 0
-    if never != never:  # NaN
-        never = 0
-    try:
-        judged = int(judged)
-    except (TypeError, ValueError, OverflowError):
-        judged = 0
-    if judged != judged:  # NaN
-        judged = 0
-    never = max(0, never)
-    judged = max(0, judged)
+    never = _coerce_segment_count(never)
+    judged = _coerce_segment_count(judged)
     ratio = 0.0 if judged <= 0 else min(1.0, max(0.0, never / float(judged)))
     name = _esc(label)
     return (f'<svg class="mini" role="img"'
@@ -584,14 +578,14 @@ _CSS = """
 :root {
   color-scheme: light dark;
   --never: #2a78d6; --watched: #1baf7a; --tuned: #e34948; --toonew: #898781;
-  --track: #e1e0d9; --gap: #ffffff; --ok: #0ca30c; --bad: #d03b3b;
+  --track: #e1e0d9; --ok: #0ca30c; --bad: #d03b3b;
 }
 body { font: 15px/1.5 system-ui, -apple-system, Segoe UI, sans-serif;
        margin: 0; padding: 24px; background: #fbfbfd; color: #16181d; }
 @media (prefers-color-scheme: dark) {
   :root {
     --never: #3987e5; --watched: #199e70; --tuned: #e66767; --toonew: #898781;
-    --track: #2c2c2a; --gap: #1a1d22; --ok: #0ca30c; --bad: #d03b3b;
+    --track: #2c2c2a; --ok: #0ca30c; --bad: #d03b3b;
   }
   body { background: #14161a; color: #e8eaed; }
   th { background: #1e2127 !important; }
@@ -599,7 +593,6 @@ body { font: 15px/1.5 system-ui, -apple-system, Segoe UI, sans-serif;
   .card { background: #1a1d22 !important; border-color: #2a2e35 !important; }
 }
 h1 { font-size: 22px; margin: 0 0 4px; }
-h2 { font-size: 17px; margin: 32px 0 8px; }
 .sub { opacity: .7; font-size: 13px; margin-bottom: 20px; }
 .card { background: #fff; border: 1px solid #e3e5ea; border-radius: 10px;
         padding: 14px 16px; margin-bottom: 18px; }
@@ -622,10 +615,6 @@ _CSS += """
 .seg-tuned { fill: var(--tuned); }
 /* Gaps come from the x-offsets computed in _svg_split_bar, not from a
    stroke -- do not add a stroke rule here, it would double-count. */
-/* White label. On --never (#2a78d6) this measures 4.42:1, just under the
-   4.5 normal-text bar; the relief rule already covers it (every count is
-   also in the legend and in a table on the same page). */
-.seglabel { fill: #fff; font: 600 12px system-ui, sans-serif; }
 .legend { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 18px;
           margin: 10px 0 4px; padding: 0; font-size: 13px; }
 .swatch { display: inline-block; width: 11px; height: 11px; border-radius: 3px;
@@ -639,26 +628,31 @@ _CSS += """
 
 _CSS += """
 .meter { width: 280px; max-width: 100%; height: 14px; vertical-align: middle; }
-.meter .track { fill: var(--track); }
 .meter .fill { fill: var(--never); }
 .meter .tick { fill: var(--bad); opacity: .55; }
 .meterrow { display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
             margin: 12px 0 16px; font-size: 13px; }
 .chip { font-size: 12px; padding: 2px 9px; border-radius: 999px;
         border: 1px solid; }
-.chip-ok { color: var(--ok); border-color: var(--ok); }
-.chip-bad { color: var(--bad); border-color: var(--bad); }
+/* Text stays the page's normal ink (inherited, not set here) -- #0ca30c on
+   the light surface and #d03b3b on the dark surface both fall short of the
+   4.5:1 that 12px text needs. Meaning is carried by the glyph + the words,
+   never by colour alone, so the status hue rides on the border and the
+   glyph (the <b>) only. */
+.chip-ok { border-color: var(--ok); }
+.chip-bad { border-color: var(--bad); }
+.chip-ok b { color: var(--ok); }
+.chip-bad b { color: var(--bad); }
 """
 
 _CSS += """
 .mini { width: 100px; height: 10px; vertical-align: middle; }
-.mini .track { fill: var(--track); }
 .mini .fill { fill: var(--never); }
 td.barcell { width: 120px; }
 """
 
 _CSS += """
-details { border-top: 1px solid #e6e8ec; padding: 4px 0 8px; }
+details { border-top: 1px solid var(--track); padding: 4px 0 8px; }
 summary { font-size: 17px; font-weight: 600; cursor: pointer;
           padding: 10px 2px; list-style: none; }
 summary::-webkit-details-marker { display: none; }
@@ -825,10 +819,17 @@ def render_html(model):
         "<th>never / judged</th></tr></thead>"
         f"<tbody>{rollup_rows}</tbody></table></div></div>" + _table(never_only))
 
+    # Every section that is CLOSED by default (see EXPECTED_OPEN in the test
+    # suite) carries this note -- find-in-page cannot reach inside a closed
+    # <details> on some browsers, regardless of which closed section it is.
+    find_hint = ("<p class='hint'>Expand to search these -- find-in-page does not "
+                "reach inside a collapsed section on some browsers.</p>")
+
     sections = "".join([
         _section("Never watched", counts["never_watched"], never_body,
                  True, "dot-never"),
         _section("Too new to judge", counts["too_new"],
+                 find_hint +
                  "<p class='sub'>Created less than the unused threshold ago -- not "
                  "enough time has passed to fairly call these unused. Not dead "
                  "weight; just wait.</p>" + _table(too_new_only),
@@ -838,15 +839,14 @@ def render_html(model):
                  "are probably <b>broken</b> (dead source, black screen, provider "
                  "kick), not unused.</p>" + _table(model["tuned_never_qualified"]),
                  True, "dot-tuned"),
-        _section("Least used", None, least_used_note + _table(model["least_used"]),
+        _section("Least used", None,
+                 find_hint + least_used_note + _table(model["least_used"]),
                  False, "dot-neutral"),
         _section("Most used", None, _table(model["most_used"]),
                  True, "dot-watched"),
         _section("Excluded and unobservable",
                  counts["excluded"] + counts["unobservable"],
-                 "<p class='hint'>Expand to search these -- find-in-page does not "
-                 "reach inside a collapsed section on some browsers.</p>"
-                 + _table(model["excluded"] + model["unobservable"]),
+                 find_hint + _table(model["excluded"] + model["unobservable"]),
                  False, "dot-neutral"),
     ])
 

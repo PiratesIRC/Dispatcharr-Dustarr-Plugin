@@ -247,3 +247,49 @@ def fake_clock():
 @pytest.fixture
 def fake_redis(fake_clock):
     return FakeRedis(clock=fake_clock)
+
+
+# ---------------------------------------------------------------------------
+# Shared report-rendering sample model (FIX 8).
+#
+# test_report_sections.py and test_report_render.py used to each carry their
+# own byte-identical copy of NOW/SETTINGS/model()/the rp+gw fixtures.
+# scripts/render_sample.py (the committed-fixture regenerator) reached into
+# test_report_sections.py to borrow its model() -- so renaming that test's
+# helper would silently break the regenerator with no test failure pointing
+# at the real cause. Sharing one copy here means both the tests and the
+# regenerator use the same sample data by construction.
+# ---------------------------------------------------------------------------
+
+NOW = 1_700_000_000.0
+
+SETTINGS = {"exclude_groups": "", "exclude_name_regex": "",
+            "exclude_auto_created": False, "top_n": 5,
+            "unused_threshold_days": 30, "never_watched_ceiling": 0.99,
+            "poll_interval_s": 15.0, "client_gap_grace_s": 90.0}
+
+
+def model(rp, gw, n=5, watched=2):
+    """Sample channel-usage model used by the report-rendering tests and by
+    scripts/render_sample.py (the fixture regenerator)."""
+    rows = [gw.ChannelRow(id=i, uuid=f"u{i}", name=f"CH{i}", group="US: Movies",
+                          auto_created=False, created_at=NOW - 90 * 86400,
+                          proxying=True) for i in range(n)]
+    channels = {f"u{i}": {"watch_count": 3, "watch_seconds": 7200.0,
+                          "tune_count": 3, "last_watched": NOW - 3600,
+                          "last_tuned": NOW - 3600,
+                          "first_seen": NOW - 80 * 86400}
+                for i in range(watched)}
+    usage = {"channels": channels,
+             "meta": {"stats_since": NOW - 40 * 86400, "coverage": {}}}
+    return rp.build_model(rows, usage, SETTINGS, NOW)
+
+
+@pytest.fixture()
+def rp():
+    return sys.modules["metricsarr_under_test.reports"]
+
+
+@pytest.fixture()
+def gw():
+    return sys.modules["metricsarr_under_test.gateway"]
