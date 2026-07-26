@@ -381,6 +381,25 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
         background: #eceef2; }
 """
 
+_CSS += """
+details { border-top: 1px solid #e6e8ec; padding: 4px 0 8px; }
+summary { font-size: 17px; font-weight: 600; cursor: pointer;
+          padding: 10px 2px; list-style: none; }
+summary::-webkit-details-marker { display: none; }
+summary::before { content: '\\25B8'; display: inline-block; width: 1em;
+                  opacity: .55; transition: transform .12s; }
+details[open] > summary::before { transform: rotate(90deg); }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+       margin-right: 8px; vertical-align: baseline; }
+.dot-never { background: var(--never); }
+.dot-watched { background: var(--watched); }
+.dot-tuned { background: var(--tuned); }
+.dot-toonew { background: var(--toonew); }
+.dot-neutral { background: var(--track); }
+.count { font-weight: 400; opacity: .6; font-variant-numeric: tabular-nums; }
+.hint { font-size: 12px; opacity: .6; margin: 0 0 8px; }
+"""
+
 # Inline, no external assets: click a header to sort its column ascending,
 # click again for descending. Works with no network access (TV browsers).
 _SORT_JS = """
@@ -445,6 +464,24 @@ def _table(entries):
             f"<tbody>{''.join(body)}</tbody></table></div>")
 
 
+def _section(title, count, body, open_by_default, dot_class):
+    """One report section as a collapsible <details>.
+
+    `count` is Optional[int]: `Least used` / `Most used` are top-N slices
+    rather than populations and deliberately carry no number, so None omits
+    the span entirely. `dot_class` is the modifier only ("dot-never").
+
+    <details> needs no JavaScript, and a client that does not implement it
+    renders the content EXPANDED -- the failure mode is "everything visible",
+    never "content lost".
+    """
+    open_attr = " open" if open_by_default else ""
+    number = "" if count is None else f' <span class="count">{int(count)}</span>'
+    return (f'<details{open_attr}><summary>'
+            f'<span class="dot {_esc(dot_class)}" aria-hidden="true"></span>'
+            f'{_esc(title)}{number}</summary>{body}</details>')
+
+
 def render_html(model):
     """A complete, self-contained HTML page -- see the module-level note.
 
@@ -455,8 +492,8 @@ def render_html(model):
        watched" (R2) -- `model["never_watched"]` carries BOTH reasons so the
        CSV export sees every row, but a channel too young to fairly call
        unused (Task 8's `too_new`) is not dead weight and must not read as
-       if it were: the "Never watched (N)" heading's N must equal the row
-       count of the table directly beneath it.
+       if it were: the "Never watched" section's count span must equal the
+       row count of the table directly beneath it.
     3. "Tuned but never qualified" is its own section with an explanation --
        these are almost certainly BROKEN channels, not unused ones.
     4. A data-confidence header (tracking since / days / coverage%).
@@ -491,6 +528,36 @@ def render_html(model):
         least_used_note = ("<p class='sub'>All watched channels are listed "
                            "above.</p>")
 
+    never_body = (
+        "<div class='card'><div class='scroll'><table>"
+        "<thead><tr><th>Group</th><th>Never watched</th><th>Total</th></tr></thead>"
+        f"<tbody>{rollup_rows}</tbody></table></div></div>" + _table(never_only))
+
+    sections = "".join([
+        _section("Never watched", counts["never_watched"], never_body,
+                 True, "dot-never"),
+        _section("Too new to judge", counts["too_new"],
+                 "<p class='sub'>Created less than the unused threshold ago -- not "
+                 "enough time has passed to fairly call these unused. Not dead "
+                 "weight; just wait.</p>" + _table(too_new_only),
+                 False, "dot-toonew"),
+        _section("Tuned but never qualified", counts["tuned_never_qualified"],
+                 "<p class='sub'>You tried to watch these and gave up quickly. They "
+                 "are probably <b>broken</b> (dead source, black screen, provider "
+                 "kick), not unused.</p>" + _table(model["tuned_never_qualified"]),
+                 True, "dot-tuned"),
+        _section("Least used", None, least_used_note + _table(model["least_used"]),
+                 False, "dot-neutral"),
+        _section("Most used", None, _table(model["most_used"]),
+                 True, "dot-watched"),
+        _section("Excluded and unobservable",
+                 counts["excluded"] + counts["unobservable"],
+                 "<p class='hint'>Expand to search these -- find-in-page does not "
+                 "reach inside a collapsed section on some browsers.</p>"
+                 + _table(model["excluded"] + model["unobservable"]),
+                 False, "dot-neutral"),
+    ])
+
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -511,35 +578,7 @@ def render_html(model):
   <span class="pill">{counts['excluded']} excluded</span>
 </div>
 {banner}
-
-<h2>Never watched ({counts['never_watched']})</h2>
-<div class="card">
-  <div class="scroll"><table>
-    <thead><tr><th>Group</th><th>Never watched</th><th>Total</th></tr></thead>
-    <tbody>{rollup_rows}</tbody>
-  </table></div>
-</div>
-{_table(never_only)}
-
-<h2>Too new to judge ({counts['too_new']})</h2>
-<p class="sub">Created less than the unused threshold ago -- not enough time
-has passed to fairly call these unused. Not dead weight; just wait.</p>
-{_table(too_new_only)}
-
-<h2>Tuned but never qualified ({counts['tuned_never_qualified']})</h2>
-<p class="sub">You tried to watch these and gave up quickly. They are probably
-<b>broken</b> (dead source, black screen, provider kick), not unused.</p>
-{_table(model['tuned_never_qualified'])}
-
-<h2>Least used</h2>
-{least_used_note}
-{_table(model['least_used'])}
-
-<h2>Most used</h2>
-{_table(model['most_used'])}
-
-<h2>Excluded ({counts['excluded']}) and unobservable ({counts['unobservable']})</h2>
-{_table(model['excluded'] + model['unobservable'])}
+{sections}
 
 <script>{_SORT_JS}</script>
 </body>

@@ -104,11 +104,13 @@ def test_html_never_watched_heading_matches_its_table_and_excludes_too_new(rp, g
     assert built["counts"]["too_new"] == 3
 
     html = rp.render_html(built)
-    never_heading = html.index("Never watched (2)")
-    too_new_heading = html.index("Too new to judge (3)")
+    never_heading = html.index("Never watched")
+    too_new_heading = html.index("Too new to judge")
     assert never_heading < too_new_heading
 
     never_section = html[never_heading:too_new_heading]
+    # R2 still holds: the count in the summary equals the rows beneath it.
+    assert '<span class="count">2</span>' in never_section
     for i in range(3):
         assert f">FRESH{i}<" not in never_section
     for i in range(2):
