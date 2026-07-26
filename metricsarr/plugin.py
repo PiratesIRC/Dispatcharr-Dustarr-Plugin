@@ -743,7 +743,11 @@ class Plugin:
             if action == "validate_settings":
                 return self._validate(settings)
         except Exception as exc:
-            return {"status": "error", "message": redaction.redact(f"{exc}")}
+            # Dispatcharr renders `error` (red, persistent) and `message` (a
+            # transient GREEN toast); `status` renders NOWHERE. Without `error`
+            # a crash is pixel-identical to success.
+            redacted = redaction.redact(f"{exc}")
+            return {"status": "error", "error": redacted, "message": redacted}
 
         return {"status": "error", "message": f"Unknown action: {action}"}
 
