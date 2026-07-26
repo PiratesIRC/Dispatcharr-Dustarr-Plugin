@@ -18,7 +18,7 @@ import types
 
 SCHEMA_V = 1
 CLIENT_VERSION = "1.1.0"
-DEFAULT_BASE = "/data/notifier"
+DEFAULT_BASE = "/data/newsflasharr"
 MAX_BODY_BYTES = 65536
 MAX_SPOOL_FILES = 1000
 # Headroom only `critical` may consume, so a backed-up spool cannot
