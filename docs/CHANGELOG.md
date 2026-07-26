@@ -1,5 +1,55 @@
 # Changelog
 
+## v1.26.2071742 (July 26, 2026)
+
+### Added
+
+- **Quick Start panel at the top of the settings**, mirroring EPG-Janitor's
+  `_section_quickstart`. It names the four actions in the order a new user
+  should run them, and pre-empts the 30-day "not trustworthy" banner, which is
+  the single thing most likely to be mistaken for a fault on a fresh install.
+  The existing "Metricsarr is read-only" box stays directly beneath it.
+  Written as one flowing paragraph rather than a multi-line list: an `info`
+  body is not a safe place to rely on line breaks, and the sibling action
+  `message` toast is known to collapse them.
+  Unlike EPG-Janitor there is no Preview/Apply pairing to describe, because no
+  action here writes to Dispatcharr.
+  A test binds the copy to the `ACTIONS` list rather than to a hardcoded
+  string, so renaming a button without updating the orientation copy fails the
+  build instead of quietly leaving the panel pointing at a button that no
+  longer exists.
+
+### Fixed
+
+- **The AST mutation guard's function-parameter blind spot.** The guard proves
+  the plugin cannot mutate Dispatcharr by refusing any write-shaped ORM call
+  whose receiver is not provably safe, but its provenance pass walked
+  assignments, for-targets, `with` items, walrus and returns: every binding
+  shape *except* a parameter, which is bound by the caller. So
+  `def disable(ch): ch.channelprofilemembership_set.update(...)` passed
+  cleanly. That is exactly the shape the Phase 2 decay ladder will reuse, so
+  the guard would have been blind to the first real mutation it exists to
+  police. (`.save()` and `.delete()` were always caught, being unambiguous and
+  receiver-agnostic respectively; the gap was precisely the ambiguous set of
+  update/add/remove/create/clear/set.)
+  Closed from two directions because neither suffices alone: `<model>_set`
+  reverse-related-manager **attributes** are structural proof needing no
+  provenance, so they survive a cross-module call this per-file guard cannot
+  trace; plus call-site parameter provenance, run to a fixed point since
+  provenance now flows backwards as well as forwards. Attribute-only on
+  purpose, so a plain Python set named `uuid_set` stays ordinary code.
+
+## v1.26.2071652 (July 26, 2026)
+
+### Changed
+
+- **Larger type for 10-foot viewing.** The report is read from the couch on a
+  TV as well as at a desk, and the new legend carries information the old badge
+  pills did not. The at-a-glance chrome moves up one step: the confidence line,
+  legend, caption and meter row from 13px to 15px, the status chip and hints
+  from 12px to 14px, and tables from 14px to 15px. Headings and all chart
+  geometry are unchanged. Confirmed on the device.
+
 ## v1.26.2071541 (July 26, 2026)
 
 Visual polish for the generated HTML report. Presentation only — no change to

@@ -154,6 +154,17 @@ it's reported separately as **unobservable**, not folded into never-watched.
   than the full channel count, so a healthy household can show a large
   never-watched share among it without tripping a false alarm.
 
+## If you have just installed it
+
+The plugin's settings page opens with a **Quick Start** panel naming the four
+buttons in the order you want to press them: **Validate settings** first, then
+**Show summary** for the headline numbers, **Build report** to write the HTML
+and CSV, and **Email report now** if you have Newsflasharr notifications on.
+
+The one thing worth knowing up front: your first reports will carry a "not
+trustworthy" banner, and that is the age gate working rather than a fault. See
+"What to expect early on" below.
+
 ## Key settings
 
 Everything lives in the plugin's settings card in the Dispatcharr UI:
