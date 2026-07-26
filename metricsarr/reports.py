@@ -362,6 +362,73 @@ _SEGMENT_ORDER = (
 )
 
 
+def _coerce_segment_count(count):
+    """TOTAL: coerce a raw segment count to a non-negative int, never raise.
+
+    `count or 0` does not save `int()` from a hostile value: `float('nan')`
+    is TRUTHY (nan != 0), so `count or 0` passes it straight through and
+    `int(nan)` raises `ValueError`; a non-numeric string raises too. NaN is
+    rejected explicitly via self-inequality (true only for NaN, and it works
+    across int/float/str alike, unlike `math.isnan` which only accepts
+    floats) before `int()` ever sees it. Anything unparseable, negative, or
+    NaN degrades to 0 -- i.e. the segment is dropped by the caller's `> 0`
+    filter, never an exception.
+    """
+    if count != count:  # NaN is the only value that is not equal to itself
+        return 0
+    try:
+        value = int(count)
+    except (TypeError, ValueError):
+        return 0
+    return value if value > 0 else 0
+
+
+def _fit_to_track(raw_widths, track, floor):
+    """Floor every width to at least `floor`, then make the total exactly
+    `track` -- TOTAL over its inputs, never over/under-shoots.
+
+    Flooring tiny-but-real segments creates "debt" (sum(widths) > track).
+    The debt is shed from EVERY segment currently above the floor, not just
+    the single largest one: taking it all from one absorber only works while
+    that absorber has enough room, and a stress shape (one huge segment plus
+    many tiny ones, all now pinned at `floor`) has nowhere near enough --
+    the tiny segments' combined floor debt outstrips what the one absorber
+    can give up, and the old single-absorber clamp let the total overflow
+    `track` (rects then run past the viewBox). Shedding proportionally across
+    all above-floor segments, and re-running whenever a segment gets pinned
+    to the floor mid-shed, always converges because the branch below only
+    reaches this loop when `track >= n * floor` -- i.e. there is always
+    enough headroom above the floor, collectively, to absorb the debt.
+
+    Degenerate case: if the track cannot even fit `n * floor` (width so
+    narrow, or so many segments, that even the floor doesn't fit), the
+    defined behaviour is to abandon the floor and split the track evenly --
+    every segment shrinks together rather than any width going negative or
+    the total exceeding `track`.
+    """
+    n = len(raw_widths)
+    if n == 0:
+        return []
+    if track < n * floor:
+        even = track / n
+        return [even] * n
+
+    widths = [max(value, floor) for value in raw_widths]
+    debt = sum(widths) - track
+    while debt > 1e-9:
+        donors = [i for i, w in enumerate(widths) if w > floor + 1e-9]
+        if not donors:
+            break  # unreachable given the track >= n*floor guard above
+        share = debt / len(donors)
+        remaining = 0.0
+        for i in donors:
+            take = min(share, widths[i] - floor)
+            widths[i] -= take
+            remaining += share - take
+        debt = remaining
+    return widths
+
+
 def _svg_split_bar(segments, width=900):
     """A 100%-stacked bar over the JUDGED population.
 
@@ -376,11 +443,15 @@ def _svg_split_bar(segments, width=900):
     entry). That is why the palette is validated all-pairs rather than
     adjacent-only: any two segments can become neighbours.
 
-    TOTAL over its inputs. `write_report` catches only OSError, so a raise
-    here escapes to run()'s catch-all -- there is no net under this function.
+    TOTAL over its inputs -- every count is coerced defensively
+    (`_coerce_segment_count`: NaN, negative, non-numeric or None all degrade
+    to a dropped segment rather than raising) and widths always fit the
+    track (`_fit_to_track`, including the degenerate too-narrow-for-the-floor
+    case). `write_report` catches only OSError, so a raise here escapes to
+    run()'s catch-all -- there is no net under this function.
     """
-    live = [(label, int(count or 0), css) for label, count, css in segments
-            if int(count or 0) > 0]
+    live = [(label, c, css) for label, count, css in segments
+            if (c := _coerce_segment_count(count)) > 0]
     total = sum(count for _, count, _ in live)
     if not live or total <= 0:
         return (f'<svg class="chart" role="img" aria-label="Nothing judged yet"'
@@ -389,14 +460,9 @@ def _svg_split_bar(segments, width=900):
                 f' height="{BAR_H}" rx="4"/>'
                 f'<title>Nothing judged yet</title></svg>', "")
 
-    track = width - GAP_PX * (len(live) - 1)
+    track = max(0.0, width - GAP_PX * (len(live) - 1))
     raw = [track * count / total for _, count, _ in live]
-    # Floor tiny-but-real segments, taking the debt from the largest.
-    widths = [max(value, MIN_SEG_PX) for value in raw]
-    debt = sum(widths) - track
-    if debt > 0:
-        biggest = max(range(len(widths)), key=lambda i: widths[i])
-        widths[biggest] = max(MIN_SEG_PX, widths[biggest] - debt)
+    widths = _fit_to_track(raw, track, MIN_SEG_PX)
 
     parts, legend, x = [], [], 0.0
     for (label, count, css), seg_w in zip(live, widths):

@@ -135,3 +135,72 @@ def test_segment_order_is_pinned(rp):
         ("Too new", "too_new", "seg-toonew"),
         ("Tuned, never qualified", "tuned_never_qualified", "seg-tuned"),
     )
+
+
+# Fix round 1: hostile-input coercion (Finding 1) and debt-redistribution
+# overflow (Finding 2). Both are against the function's documented "TOTAL
+# over its inputs" contract -- write_report catches only OSError, so
+# anything else escapes to the action layer.
+
+def test_hostile_counts_never_raise_and_are_dropped(rp):
+    """`count or 0` let float('nan') (truthy!) and non-numeric strings reach
+    int() and raise. Every hostile value here must degrade to a dropped
+    segment, never an exception."""
+    segs = [
+        ("never", 385, "seg-never"),
+        ("negative", -5, "seg-watched"),
+        ("none", None, "seg-tuned"),
+        ("nonnumeric", "not-a-number", "seg-toonew"),
+        ("nan", float("nan"), "seg-watched"),
+    ]
+    svg, legend = rp._svg_split_bar(segs, width=900)
+    widths = _rect_widths(svg)
+    assert len(widths) == 1          # only "never" survives
+    assert "NaN" not in svg
+    assert "nan" not in legend
+    assert "negative" not in legend
+    assert "none" not in legend
+    assert "nonnumeric" not in legend
+
+
+def test_all_zero_counts_render_empty_track(rp):
+    svg, legend = rp._svg_split_bar(
+        [("a", 0, "seg-never"), ("b", 0, "seg-watched")], width=900)
+    assert "Nothing judged yet" in svg
+    assert "NaN" not in svg
+    assert legend == ""
+
+
+def test_single_segment_fills_the_track(rp):
+    svg, _ = rp._svg_split_bar([("only", 42, "seg-never")], width=900)
+    widths = _rect_widths(svg)
+    assert len(widths) == 1
+    assert abs(widths[0] - 900) <= 1.0
+
+
+def test_width_zero_does_not_raise(rp):
+    svg, _ = rp._svg_split_bar(
+        [("a", 10, "seg-never"), ("b", 5, "seg-watched")], width=0)
+    assert "NaN" not in svg
+
+
+def test_many_tiny_segments_never_overflow_the_track(rp):
+    """Reviewer repro: flooring 300 tiny segments at MIN_SEG_PX=2 demands 600px
+    of floor alone before the one huge segment gets a look-in -- taking all
+    the debt from a single absorber drove the total past `track` (and, at 900
+    tiny segments, negative). Redistributing the debt across every above-floor
+    segment must keep the geometry invariant regardless of shape."""
+    segs = [("huge", 100_000, "seg-never")]
+    segs += [(f"tiny{i}", 1, "seg-watched") for i in range(300)]
+    svg, _ = rp._svg_split_bar(segs, width=900)
+    widths = _rect_widths(svg)
+    assert len(widths) == 301
+    track = 900 - rp.GAP_PX * (len(widths) - 1)
+    # Tolerance matches the rest of this suite (e.g.
+    # test_segment_widths_sum_to_track_minus_gaps): rendered widths are
+    # individually rounded to 2 decimals for the SVG attribute, so summing
+    # 301 of them can accumulate a little display-rounding slop. The old
+    # single-absorber bug overflowed by ~300px on this exact shape -- far
+    # past this tolerance -- so it still fails the invariant.
+    assert sum(widths) <= track + 1.0
+    assert all(w >= 0 for w in widths)
