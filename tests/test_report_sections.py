@@ -123,3 +123,46 @@ def test_rollup_group_name_is_escaped_in_the_svg_title(rp, gw):
     html = rp.render_html(rp.build_model(rows, usage, SETTINGS, NOW))
     assert "<b>G</b>" not in html
     assert "&lt;b&gt;G&lt;/b&gt;" in html
+
+
+def test_page_needs_no_script_for_structure_or_charts(rp, gw):
+    """Charts and collapsing must survive scripting being disabled. The only
+    script on the page is the progressive-enhancement column sorter."""
+    html = rp.render_html(model(rp, gw))
+    assert html.count("<script>") == 1
+    body_start = html.index("<body>")
+    script_start = html.index("<script>")
+    # Everything structural is emitted before the sorter, and none of it
+    # depends on the sorter running.
+    assert "<details" in html[body_start:script_start]
+    assert "<svg" in html[body_start:script_start]
+
+
+def test_no_colour_presentation_attributes_anywhere_in_the_page(rp, gw):
+    """`fill="var(--x)"` has patchy support and falls back to BLACK, an
+    invisible chart on the dark #14161a surface -- this must hold across the
+    WHOLE page, not just the split bar / meter / mini-bar generators."""
+    html = rp.render_html(model(rp, gw))
+    assert 'fill="' not in html
+    assert 'stroke="' not in html
+
+
+def test_render_is_newline_agnostic(rp, gw):
+    """CRLF worktree, LF index, LF CI -- assertions must not depend on it."""
+    html = rp.render_html(model(rp, gw))
+    assert html.replace("\r\n", "\n").count("<details") == 6
+
+
+def test_regenerate_the_committed_fixture(rp, gw, tmp_path):
+    """The visual check leaves an artifact a later session can diff, rather
+    than an unfalsifiable `I looked at it`."""
+    import pathlib
+    html = rp.render_html(model(rp, gw, n=12, watched=4))
+    fixture = (pathlib.Path(__file__).parent / "fixtures" / "sample_report.html")
+    assert fixture.exists(), (
+        "tests/fixtures/sample_report.html is missing -- regenerate it with: "
+        "python scripts/render_sample.py")
+    on_disk = fixture.read_text(encoding="utf-8")
+    assert on_disk.replace("\r\n", "\n") == html.replace("\r\n", "\n"), (
+        "tests/fixtures/sample_report.html is stale (renderer changed) -- "
+        "regenerate and commit it with: python scripts/render_sample.py")
