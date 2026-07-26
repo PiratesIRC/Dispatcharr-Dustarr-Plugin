@@ -1,5 +1,24 @@
 # Changelog
 
+## v1.26.2071812 (July 26, 2026)
+
+### Added
+
+- **The usage rankings now say when they are omitting real viewing.** "Most
+  used" and "Least used" are drawn from the JUDGED population only, so a
+  channel that is genuinely watched but sits in an excluded group never
+  appears in them. On the reference box that silently hid **21 of 65** watched
+  channels, Fox News and the local OTA affiliates among them.
+  That is the exclusions working as designed, and it is correct for the
+  question this report exists to answer. But omitting a third of real viewing
+  with no acknowledgement makes "Most used" read as *what I watch most* when it
+  only ever meant *what I watch most among the channels I might turn off*.
+  Both sections now carry a one-line note naming the count and the reason.
+  Suppressed when the count is zero: a permanent parenthetical nobody needs is
+  how real notices get tuned out.
+  Computed in `render_html` from `model["excluded"]`, so there is no model
+  change and the `counts` sum invariant is untouched.
+
 ## v1.26.2071742 (July 26, 2026)
 
 ### Added
