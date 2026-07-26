@@ -29,6 +29,17 @@ queryset/model is on the other end:
     through an aliased import, a list comprehension, or a for-loop target
     like `for channel in queryset.iterator(): channel.streams.add(...)`)
     is caught even though the call site itself never mentions `.objects`, OR
+  * the receiver reaches an ATTRIBUTE named `<model>_set` -- Django's default
+    reverse related-manager name (`channel.channelprofilemembership_set
+    .update(...)`). Structural, so it needs no provenance and therefore
+    survives a CROSS-MODULE call, which the per-file provenance pass cannot.
+    Attribute-only on purpose: a plain Python set named `uuid_set` is not a
+    related manager, and a real one is always an attribute OF an instance, OR
+  * a PARAMETER was bound at a local call site from an ORM-proven argument
+    (`f(Channel.objects.filter(...))` proves `f`'s matching parameter). Every
+    other binding shape is an assignment; a parameter is bound by the CALLER,
+    which is why this one needed its own pass -- and it is the exact shape
+    Phase 2's decay ladder will reuse, OR
   * the method itself has NO stdlib/dict/set/list/Redis-client collision at
     all (`save`, `bulk_create`, `bulk_update`, `get_or_create`,
     `update_or_create`, and the Django 4.1+ async names `asave`, `adelete`,
@@ -184,6 +195,34 @@ def _dotted(node):
     return None
 
 
+def _has_related_manager_attr(node):
+    """True if the receiver chain reaches an ATTRIBUTE named `<something>_set`
+    -- Django's default reverse related-manager name
+    (`channel.channelprofilemembership_set.update(...)`).
+
+    This is a STRUCTURAL proof needing no provenance, which is what makes it
+    the only half of the parameter fix that survives a CROSS-MODULE call:
+    this guard is per-file, so when the queryset is passed in from another
+    module the call-site pass can never see it.
+
+    Deliberately ATTRIBUTE-ONLY, never a bare root Name: `uuid_set.add(x)` on
+    a plain Python set is ordinary code and must not be flagged, while a
+    Django related manager is always reached as an attribute OF a model
+    instance -- so nothing real is lost by the restriction.
+    """
+    while True:
+        if isinstance(node, ast.Attribute):
+            if len(node.attr) > 4 and node.attr.endswith("_set"):
+                return True
+            node = node.value
+        elif isinstance(node, ast.Call):
+            node = node.func
+        elif isinstance(node, ast.Subscript):
+            node = node.value
+        else:
+            return False
+
+
 def _is_orm_receiver(base, orm_names=frozenset(), orm_dotted=frozenset()):
     """True if `base` (the receiver expression of some outer call, OR any
     expression being checked for ORM-provenance during alias collection)
@@ -192,6 +231,8 @@ def _is_orm_receiver(base, orm_names=frozenset(), orm_dotted=frozenset()):
     elsewhere in the module."""
     tokens = _receiver_chain_tokens(base)
     if "objects" in tokens or any(t in KNOWN_MODELS for t in tokens):
+        return True
+    if _has_related_manager_attr(base):
         return True
     if orm_names and any(t in orm_names for t in tokens):
         return True
@@ -229,6 +270,16 @@ def _collect_bindings(tree, is_source):
     """
     names, dotted = set(), set()
 
+    # name -> (positional parameter names, accepted keyword names), used by
+    # the call-site parameter pass below.
+    funcdefs = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            spec = node.args
+            funcdefs[node.name] = (
+                [p.arg for p in (*spec.posonlyargs, *spec.args)],
+                {p.arg for p in (*spec.args, *spec.kwonlyargs)})
+
     def bind(target, value):
         if (isinstance(target, (ast.Tuple, ast.List))
                 and isinstance(value, (ast.Tuple, ast.List))
@@ -245,29 +296,54 @@ def _collect_bindings(tree, is_source):
             if path:
                 dotted.add(path)
 
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            for target in node.targets:
-                bind(target, node.value)
-        elif (isinstance(node, ast.AnnAssign) and node.value is not None
-              and node.target is not None):
-            bind(node.target, node.value)
-        elif isinstance(node, ast.NamedExpr):                     # walrus
-            if is_source(node.value, names, dotted) and isinstance(node.target, ast.Name):
-                names.add(node.target.id)
-        elif isinstance(node, ast.With):
-            for item in node.items:
-                if item.optional_vars is not None:
-                    bind(item.optional_vars, item.context_expr)
-        elif isinstance(node, ast.For) and is_source(node.iter, names, dotted):
-            if isinstance(node.target, ast.Name):
-                names.add(node.target.id)
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            for sub in ast.walk(node):
-                if isinstance(sub, ast.Return) and sub.value is not None and \
-                        is_source(sub.value, names, dotted):
-                    names.add(node.name)
-                    break
+    def scan():
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    bind(target, node.value)
+            elif (isinstance(node, ast.AnnAssign) and node.value is not None
+                  and node.target is not None):
+                bind(node.target, node.value)
+            elif isinstance(node, ast.NamedExpr):                     # walrus
+                if is_source(node.value, names, dotted) and isinstance(node.target, ast.Name):
+                    names.add(node.target.id)
+            elif isinstance(node, ast.With):
+                for item in node.items:
+                    if item.optional_vars is not None:
+                        bind(item.optional_vars, item.context_expr)
+            elif isinstance(node, ast.For) and is_source(node.iter, names, dotted):
+                if isinstance(node.target, ast.Name):
+                    names.add(node.target.id)
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for sub in ast.walk(node):
+                    if isinstance(sub, ast.Return) and sub.value is not None and \
+                            is_source(sub.value, names, dotted):
+                        names.add(node.name)
+                        break
+            elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                  and node.func.id in funcdefs):
+                # CALL-SITE PARAMETER PROVENANCE: a queryset arriving as a
+                # PARAMETER was the guard's last blind spot -- every binding
+                # shape above is an assignment of some kind, and a parameter
+                # is bound by the CALLER. `f(Channel.objects.filter(...))`
+                # now proves f's matching parameter for the whole module.
+                positional, keyword_names = funcdefs[node.func.id]
+                for index, arg in enumerate(node.args):
+                    if index < len(positional) and is_source(arg, names, dotted):
+                        names.add(positional[index])
+                for kw in node.keywords:
+                    if kw.arg in keyword_names and is_source(kw.value, names, dotted):
+                        names.add(kw.arg)
+
+    # Run to a FIXED POINT rather than once. Provenance now flows backwards
+    # (a call site proves a parameter defined earlier in the file) as well as
+    # forwards, so a single ordered pass can no longer see everything -- and
+    # one binding can unlock another (`f(qs)` -> `g(param)`).
+    for _ in range(len(funcdefs) + 4):
+        before = (len(names), len(dotted))
+        scan()
+        if (len(names), len(dotted)) == before:
+            break
     return names, dotted
 
 
@@ -541,6 +617,41 @@ TRUE_POSITIVE_ORM_WRITES = {
     "queryset_bound_via_tuple_unpack": (
         'qs, n = Channel.objects.all(), 1\n'
         'qs.update(name="x")'),
+    # ---- the FUNCTION-PARAMETER blind spot (closed 2026-07-26) -------------
+    # A queryset/model arriving as a PARAMETER was never bound by the
+    # provenance pass, which only ever walked assignments, for-targets,
+    # with-items, walrus and returns. So the receiver was unprovable and every
+    # AMBIGUOUS method (update/add/remove/clear/set/create) sailed through.
+    # `.save()`/`.delete()` were always caught (unambiguous / receiver-
+    # agnostic) -- this gap is exactly and only the ambiguous set.
+    #
+    # This is the shape Phase 2's decay ladder will reuse verbatim, ported
+    # from ECM's membership toggle.
+    "param_related_manager_update": (
+        'def disable(ch):\n'
+        '    ch.channelprofilemembership_set.update(enabled=False)'),
+    # Caught by the `*_set` reverse-related-manager naming rule alone, so it
+    # holds even when the caller lives in ANOTHER module and this per-file
+    # guard can never see it.
+    "param_related_manager_update_never_called_locally": (
+        'def disable(ch):\n'
+        '    ch.channelprofilemembership_set.update(enabled=False)\n'
+        '# no local caller at all\n'),
+    # Caught by call-site parameter provenance: the argument is ORM-proven
+    # here, so the parameter it lands on is ORM-proven for the whole function.
+    "param_bound_from_orm_call_site_m2m_add": (
+        'def attach(channel, stream):\n'
+        '    channel.streams.add(stream)\n'
+        'for c in Channel.objects.all():\n'
+        '    attach(c, s)'),
+    "param_bound_from_orm_call_site_keyword": (
+        'def wipe(rows):\n'
+        '    rows.update(enabled=False)\n'
+        'wipe(rows=Channel.objects.filter(id=1))'),
+    "param_bound_from_orm_call_site_direct_expression": (
+        'def wipe(rows):\n'
+        '    rows.clear()\n'
+        'wipe(Channel.objects.filter(id=1))'),
 }
 
 
@@ -597,6 +708,28 @@ LEGITIMATE_NON_ORM_PATTERNS = {
     "tuple_unpack_non_orm_values": (
         'a, b = 1, 2\n'
         'stats.update({"a": a, "b": b})'),
+    # ---- counter-fixtures for the 2026-07-26 parameter fix ----------------
+    # The `*_set` rule matches ATTRIBUTE names only, never a bare local: a
+    # Python set named `uuid_set` is ordinary code and must stay unflagged.
+    # Django related managers are always reached as an attribute of a model
+    # instance (`channel.channelprofilemembership_set`), so nothing is lost.
+    "local_python_set_named_with_set_suffix": (
+        'uuid_set = set()\n'
+        'uuid_set.add(entry["uuid"])'),
+    "local_python_set_named_with_set_suffix_update": (
+        'seen_set = set()\n'
+        'seen_set.update(other)'),
+    # A parameter that is never passed anything ORM-proven stays unproven --
+    # call-site provenance must not taint every parameter in the module.
+    "param_never_bound_from_orm_is_not_flagged": (
+        'def merge(stats, extra):\n'
+        '    stats.update(extra)\n'
+        'merge({"a": 1}, {"b": 2})'),
+    # Provenance is per-parameter-position, not "any argument taints them all".
+    "only_the_orm_argument_position_is_bound": (
+        'def pair(rows, counters):\n'
+        '    counters.update({"n": 1})\n'
+        'pair(Channel.objects.all(), {})'),
 }
 
 
@@ -624,6 +757,23 @@ def test_guard_catches_queryset_update_injected_into_a_gateway_copy():
     assert mutated != src, "injection site not found -- gateway.py shape changed?"
     offenders = _orm_write_offenders(mutated, "gateway.py (mutated)")
     assert offenders, "guard failed to catch an injected queryset.update()"
+
+
+def test_guard_catches_a_parameter_shaped_mutation_injected_into_a_gateway_copy():
+    """The Phase 2 shape, against REAL code rather than a synthetic snippet.
+
+    A helper taking the model as a PARAMETER is what the decay ladder will
+    reuse (ported from ECM's membership toggle), and it is precisely what the
+    provenance pass could not see before 2026-07-26: every other binding shape
+    is an assignment, and a parameter is bound by the CALLER.
+    """
+    src = (PLUGIN_DIR / "gateway.py").read_text(encoding="utf-8")
+    injected = (
+        "def _disable(ch):\n"
+        "    ch.channelprofilemembership_set.update(enabled=False)\n\n\n")
+    mutated = injected + src
+    offenders = _orm_write_offenders(mutated, "gateway.py (mutated)")
+    assert offenders, "guard failed to catch a parameter-shaped ORM write"
 
 
 def test_guard_catches_channel_delete_injected_into_a_gateway_copy():
