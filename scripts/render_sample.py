@@ -15,7 +15,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tests"))
 
-from conftest import load_plugin, model      # noqa: E402
+from conftest import load_plugin, model  # noqa: E402
 
 load_plugin()
 

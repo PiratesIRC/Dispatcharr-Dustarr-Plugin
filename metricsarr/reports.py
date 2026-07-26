@@ -483,7 +483,7 @@ def _svg_split_bar(segments, width=900):
     widths = _fit_to_track(raw, track, MIN_SEG_PX)
 
     parts, legend, x = [], [], 0.0
-    for (label, count, css), seg_w in zip(live, widths):
+    for (label, count, css), seg_w in zip(live, widths, strict=True):
         parts.append(f'<rect class="seg {css}" x="{x:.2f}" y="0"'
                      f' width="{seg_w:.2f}" height="{BAR_H}" rx="4"/>')
         legend.append(f'<li><span class="swatch {_esc(css)}"></span>'
