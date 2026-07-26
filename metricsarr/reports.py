@@ -593,13 +593,13 @@ body { font: 15px/1.5 system-ui, -apple-system, Segoe UI, sans-serif;
   .card { background: #1a1d22 !important; border-color: #2a2e35 !important; }
 }
 h1 { font-size: 22px; margin: 0 0 4px; }
-.sub { opacity: .7; font-size: 13px; margin-bottom: 20px; }
+.sub { opacity: .7; font-size: 15px; margin-bottom: 20px; }
 .card { background: #fff; border: 1px solid #e3e5ea; border-radius: 10px;
         padding: 14px 16px; margin-bottom: 18px; }
 .banner { background: #fff4e5; border: 1px solid #ffb84d; border-radius: 10px;
           padding: 12px 16px; margin-bottom: 18px; color: #7a4b00; }
 .banner ul { margin: 6px 0 0 18px; padding: 0; }
-table { border-collapse: collapse; width: 100%; font-size: 14px; }
+table { border-collapse: collapse; width: 100%; font-size: 15px; }
 .scroll { overflow-x: auto; }
 th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #e6e8ec; }
 th { background: #f2f3f6; position: sticky; top: 0; cursor: pointer; }
@@ -616,14 +616,14 @@ _CSS += """
 /* Gaps come from the x-offsets computed in _svg_split_bar, not from a
    stroke -- do not add a stroke rule here, it would double-count. */
 .legend { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 18px;
-          margin: 10px 0 4px; padding: 0; font-size: 13px; }
+          margin: 10px 0 4px; padding: 0; font-size: 15px; }
 .swatch { display: inline-block; width: 11px; height: 11px; border-radius: 3px;
           margin-right: 6px; vertical-align: -1px; }
 .swatch.seg-never { background: var(--never); }
 .swatch.seg-watched { background: var(--watched); }
 .swatch.seg-toonew { background: var(--toonew); }
 .swatch.seg-tuned { background: var(--tuned); }
-.caption { font-size: 13px; opacity: .7; margin: 2px 0 18px; }
+.caption { font-size: 15px; opacity: .7; margin: 2px 0 18px; }
 """
 
 _CSS += """
@@ -631,8 +631,8 @@ _CSS += """
 .meter .fill { fill: var(--never); }
 .meter .tick { fill: var(--bad); opacity: .55; }
 .meterrow { display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
-            margin: 12px 0 16px; font-size: 13px; }
-.chip { font-size: 12px; padding: 2px 9px; border-radius: 999px;
+            margin: 12px 0 16px; font-size: 15px; }
+.chip { font-size: 14px; padding: 2px 9px; border-radius: 999px;
         border: 1px solid; }
 /* Text stays the page's normal ink (inherited, not set here) -- #0ca30c on
    the light surface and #d03b3b on the dark surface both fall short of the
@@ -667,7 +667,7 @@ details[open] > summary::before { transform: rotate(90deg); }
 .dot-toonew { background: var(--toonew); }
 .dot-neutral { background: var(--track); }
 .count { font-weight: 400; opacity: .6; font-variant-numeric: tabular-nums; }
-.hint { font-size: 12px; opacity: .6; margin: 0 0 8px; }
+.hint { font-size: 14px; opacity: .6; margin: 0 0 8px; }
 """
 
 # Inline, no external assets: click a header to sort its column ascending,
