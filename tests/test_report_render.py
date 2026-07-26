@@ -84,6 +84,48 @@ def test_html_never_watched_heading_matches_its_table_and_excludes_too_new(rp, g
         assert never_section.count(f">STALE{i}<") == 1
 
 
+def _model_with_a_watched_excluded_channel(rp, gw):
+    """A channel that IS watched but sits in an excluded group. Real shape on
+    this box: Fox News and the local OTA affiliates are watched regularly and
+    are excluded by policy, so they never reach the usage rankings."""
+    rows = [
+        gw.ChannelRow(id=1, uuid="u1", name="Fox News", group="US: News",
+                      auto_created=False, created_at=NOW - 90 * 86400,
+                      proxying=True),
+        gw.ChannelRow(id=2, uuid="u2", name="A Movie", group="US: Movies",
+                      auto_created=False, created_at=NOW - 90 * 86400,
+                      proxying=True),
+    ]
+    rec = {"watch_count": 3, "watch_seconds": 7200.0, "tune_count": 3,
+           "last_watched": NOW - 3600, "last_tuned": NOW - 3600,
+           "first_seen": NOW - 80 * 86400}
+    usage = {"channels": {"u1": dict(rec), "u2": dict(rec)},
+             "meta": {"stats_since": NOW - 40 * 86400, "coverage": {}}}
+    settings = dict(SETTINGS, exclude_groups="US: News")
+    return rp.build_model(rows, usage, settings, NOW)
+
+
+def test_watched_but_excluded_channels_are_surfaced_in_the_report(rp, gw):
+    """`Most used` is drawn only from JUDGED channels, so a watched channel in
+    an excluded group never appears in it. Silently omitting real viewing makes
+    the rankings read as `what I watch most` when they are only `what I watch
+    most among the channels I might turn off`."""
+    built = _model_with_a_watched_excluded_channel(rp, gw)
+    assert built["counts"]["watched"] == 1          # only the non-excluded one
+    assert any(e["watch_count"] > 0 for e in built["excluded"])
+
+    html = rp.render_html(built)
+    assert "1 watched channel" in html
+    assert "excluded from these rankings" in html
+
+
+def test_no_exclusion_note_when_nothing_watched_is_excluded(rp, gw):
+    """The note must not appear when it would say zero -- a permanent
+    parenthetical nobody needs is how real notices get tuned out."""
+    html = rp.render_html(model(rp, gw, n=5, watched=2))
+    assert "excluded from these rankings" not in html
+
+
 def test_csv_has_one_row_per_channel_with_a_reason(rp, gw):
     text = rp.render_csv(model(rp, gw, n=5, watched=2))
     rows = list(csv.DictReader(io.StringIO(text)))

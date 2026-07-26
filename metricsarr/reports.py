@@ -800,6 +800,25 @@ def render_html(model):
         least_used_note = ("<p class='sub'>All watched channels are listed "
                            "above.</p>")
 
+    # The usage rankings are drawn from the JUDGED population only, so a
+    # channel that is genuinely watched but sits in an excluded group (news,
+    # OTA, sports, auto-created slots) never appears in them -- on this box
+    # that silently hid a third of all watched channels, Fox News and the local
+    # affiliates among them. Omitting real viewing with no acknowledgement
+    # makes "Most used" read as "what I watch most" when it only ever meant
+    # "what I watch most among the channels I might turn off". State the gap.
+    watched_excluded = sum(1 for entry in model["excluded"]
+                           if (entry.get("watch_count") or 0) > 0)
+    rankings_note = ""
+    if watched_excluded:
+        plural = "" if watched_excluded == 1 else "s"
+        rankings_note = (
+            f"<p class='sub'>{watched_excluded} watched channel{plural} "
+            f"{'is' if watched_excluded == 1 else 'are'} <b>excluded from these "
+            f"rankings</b>. These lists answer &quot;what can I turn off&quot;, "
+            f"not &quot;what do I watch most&quot; -- excluded channels are "
+            f"never judged, however much they are watched.</p>")
+
     judged = sum(counts[key] for _, key, _ in _SEGMENT_ORDER)
     bar_svg, bar_legend = _svg_split_bar(
         [(label, counts[key], css) for label, key, css in _SEGMENT_ORDER])
@@ -840,9 +859,10 @@ def render_html(model):
                  "kick), not unused.</p>" + _table(model["tuned_never_qualified"]),
                  True, "dot-tuned"),
         _section("Least used", None,
-                 find_hint + least_used_note + _table(model["least_used"]),
+                 find_hint + rankings_note + least_used_note
+                 + _table(model["least_used"]),
                  False, "dot-neutral"),
-        _section("Most used", None, _table(model["most_used"]),
+        _section("Most used", None, rankings_note + _table(model["most_used"]),
                  True, "dot-watched"),
         _section("Excluded and unobservable",
                  counts["excluded"] + counts["unobservable"],
