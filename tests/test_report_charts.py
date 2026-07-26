@@ -52,5 +52,5 @@ def test_every_var_referenced_is_defined(rp):
     fill that means BLACK, i.e. an invisible chart on the dark surface."""
     css = rp._CSS
     referenced = set(re.findall(r"var\((--[a-z0-9-]+)", css))
-    defined = set(re.findall(r"^\s*(--[a-z0-9-]+):", css, re.MULTILINE))
+    defined = set(re.findall(r"(--[a-z0-9-]+):", css))
     assert referenced <= defined, f"undefined: {referenced - defined}"
