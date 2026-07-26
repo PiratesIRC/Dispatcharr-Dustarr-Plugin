@@ -170,6 +170,27 @@ change to redirect where its notifications land.
 If Newsflasharr isn't installed or isn't enabled, turning this setting on is
 harmless — Metricsarr degrades safely and simply doesn't spool anything.
 
+### Email report now
+
+**Email report now** builds the report immediately and emails it with the file
+attached — the same job the schedule runs, so you get fresh data rather than a
+re-send of an older file.
+
+The wording it reports back is deliberate:
+
+- Success says **"queued for delivery"**, not "sent". Handing the report to
+  Newsflasharr means it was durably spooled; Newsflasharr delivers it afterwards
+  on its own retry schedule.
+- If notifications are off, nothing was published, Newsflasharr declined the
+  event, or its collector has stopped running, you get a **red error** naming
+  which — never a green tick.
+
+**It does not prove the *schedule* works.** The button runs in the web worker
+using the settings currently on screen; the schedule runs on a background worker
+from saved settings. **Validate settings** is what tells you about the schedule:
+it reports when the scheduled report last ran, and warns if it has never run, is
+disabled, or is queued to a worker that would reject it.
+
 ## Install / upgrade
 
 Copy the `metricsarr/` folder into Dispatcharr's plugin directory, or install the
