@@ -1,7 +1,7 @@
 """Dustarr — channel usage metrics for Dispatcharr. READ-ONLY.
 
 Phase 1 mutates NOTHING in Dispatcharr: it polls Redis, writes its own files, and
-reports. Spec: docs/superpowers/specs/2026-07-12-dustarr-design.md (rev 2).
+reports. Spec: docs/superpowers/specs/ (the original design doc predates this plugin's rename).
 
 Plugin.__init__ is O(ms) and I/O-free. (The procfs read that gates the collector
 to uWSGI workers lives in ensure_collector, not here.) Django imports are
@@ -36,7 +36,7 @@ except ImportError:                     # standalone (non-package) import path
 
 _LOGGER = logging.getLogger(__name__)
 
-PLUGIN_VERSION = "1.26.2071812"
+PLUGIN_VERSION = "1.26.2081551"
 
 DATA_DIR = "/data/dustarr"           # plugin state (named volume)
 REPORT_DIR = "/data/logos/dustarr"   # nginx serves /data/logos/** at /logos/**
