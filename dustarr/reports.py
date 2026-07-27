@@ -838,15 +838,16 @@ def render_html(model):
         "<th>never / judged</th></tr></thead>"
         f"<tbody>{rollup_rows}</tbody></table></div></div>" + _table(never_only))
 
-    # Every section that is CLOSED by default (see EXPECTED_OPEN in the test
-    # suite) carries this note -- find-in-page cannot reach inside a closed
-    # <details> on some browsers, regardless of which closed section it is.
+    # Every section is CLOSED by default (see EXPECTED_OPEN in the test
+    # suite), so every one carries this note -- find-in-page cannot reach
+    # inside a closed <details> on some browsers.
     find_hint = ("<p class='hint'>Expand to search these -- find-in-page does not "
                 "reach inside a collapsed section on some browsers.</p>")
 
     sections = "".join([
-        _section("Never watched", counts["never_watched"], never_body,
-                 True, "dot-never"),
+        _section("Never watched", counts["never_watched"],
+                 find_hint + never_body,
+                 False, "dot-never"),
         _section("Too new to judge", counts["too_new"],
                  find_hint +
                  "<p class='sub'>Created less than the unused threshold ago -- not "
@@ -854,16 +855,18 @@ def render_html(model):
                  "weight; just wait.</p>" + _table(too_new_only),
                  False, "dot-toonew"),
         _section("Tuned but never qualified", counts["tuned_never_qualified"],
+                 find_hint +
                  "<p class='sub'>You tried to watch these and gave up quickly. They "
                  "are probably <b>broken</b> (dead source, black screen, provider "
                  "kick), not unused.</p>" + _table(model["tuned_never_qualified"]),
-                 True, "dot-tuned"),
+                 False, "dot-tuned"),
         _section("Least used", None,
                  find_hint + rankings_note + least_used_note
                  + _table(model["least_used"]),
                  False, "dot-neutral"),
-        _section("Most used", None, rankings_note + _table(model["most_used"]),
-                 True, "dot-watched"),
+        _section("Most used", None,
+                 find_hint + rankings_note + _table(model["most_used"]),
+                 False, "dot-watched"),
         _section("Excluded and unobservable",
                  counts["excluded"] + counts["unobservable"],
                  find_hint + _table(model["excluded"] + model["unobservable"]),

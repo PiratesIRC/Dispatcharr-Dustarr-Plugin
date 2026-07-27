@@ -36,7 +36,7 @@ except ImportError:                     # standalone (non-package) import path
 
 _LOGGER = logging.getLogger(__name__)
 
-PLUGIN_VERSION = "1.26.2081551"
+PLUGIN_VERSION = "1.26.2081957"
 
 DATA_DIR = "/data/dustarr"           # plugin state (named volume)
 REPORT_DIR = "/data/logos/dustarr"   # nginx serves /data/logos/** at /logos/**

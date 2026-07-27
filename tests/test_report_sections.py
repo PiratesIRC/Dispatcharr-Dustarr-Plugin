@@ -5,13 +5,15 @@ from conftest import NOW, SETTINGS, load_plugin, model
 load_plugin()
 
 
-# Spec section 4.2. Title -> expected `open` attribute present.
+# Spec section 4.2, amended 2026-07-27: every section now starts COLLAPSED at
+# the operator's request, so the page opens as an index rather than a wall of
+# tables. Title -> expected `open` attribute present.
 EXPECTED_OPEN = {
-    "Never watched": True,
+    "Never watched": False,
     "Too new to judge": False,
-    "Tuned but never qualified": True,
+    "Tuned but never qualified": False,
     "Least used": False,
-    "Most used": True,
+    "Most used": False,
     "Excluded and unobservable": False,
 }
 
@@ -132,3 +134,23 @@ def test_regenerate_the_committed_fixture(rp, gw, tmp_path):
     assert on_disk.replace("\r\n", "\n") == html.replace("\r\n", "\n"), (
         "tests/fixtures/sample_report.html is stale (renderer changed) -- "
         "regenerate and commit it with: python scripts/render_sample.py")
+
+
+def test_every_section_starts_collapsed(rp, gw):
+    """The page opens as an index, not a wall of tables. `<details>` with no
+    `open` is the whole mechanism, so a stray `open` is the only way this
+    regresses."""
+    html = rp.render_html(model(rp, gw))
+    assert "<details open>" not in html
+    assert "<details >" not in html
+    assert html.replace("\r\n", "\n").count("<details>") == len(EXPECTED_OPEN)
+
+
+def test_every_collapsed_section_carries_the_find_in_page_hint(rp, gw):
+    """find-in-page does not reach inside a collapsed <details> on some
+    browsers. Every section is collapsed, so every section must say so."""
+    html = rp.render_html(model(rp, gw))
+    bodies = re.findall(r"</summary>(.*?)</details>", html, re.DOTALL)
+    assert len(bodies) == len(EXPECTED_OPEN)
+    for body in bodies:
+        assert "find-in-page" in body
