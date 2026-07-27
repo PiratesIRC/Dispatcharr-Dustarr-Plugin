@@ -1,5 +1,27 @@
 # Changelog
 
+## v1.26.2082129 (July 27, 2026)
+
+GUI pass on the action buttons.
+
+- **Validate settings is now the first button.** It is the one to press before
+  any other and it writes nothing. The Quick Start panel already described that
+  order, so the buttons now match their own documentation.
+- **New "Report an issue" button** surfacing the GitHub issue tracker. A plugin
+  action cannot navigate a browser, so it returns the URL in `file`
+  (persistent) as well as `message` (a toast that clips around 280
+  characters), and its description says so rather than implying a link that
+  opens.
+- **Email report now gained a preflight** and refuses BEFORE building when
+  notifications are off, Newsflasharr is missing or disabled, its SMTP is
+  incomplete, no routing rule sends dustarr's `usage_report` to smtp, or its
+  collector has stopped ticking. The routing case is why this exists: spooling
+  succeeds and the mail is simply delivered elsewhere, so that failure was
+  previously invisible. The requirement is also stated in the action
+  description, so it survives the checks being removed.
+- Only key NAMES are reported for missing SMTP settings, never values;
+  `smtp_password` is one of the keys checked.
+
 ## v1.26.2082008 (July 27, 2026)
 
 Report presentation, and the rename went live.

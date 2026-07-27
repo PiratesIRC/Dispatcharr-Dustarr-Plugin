@@ -155,10 +155,11 @@ is reported separately as **unobservable**, not folded into never-watched.
 
 ## If you have just installed it
 
-The plugin's settings page opens with a **Quick Start** panel naming the four
-buttons in the order you want to press them: **Validate settings** first, then
+The plugin's settings page opens with a **Quick Start** panel, and the buttons
+sit in the order you want to press them: **Validate settings** first, then
 **Show summary** for the headline numbers, **Build report** to write the HTML
 and CSV, and **Email report now** if you have Newsflasharr notifications on.
+**Report an issue** prints the link to the issue tracker.
 
 The one thing worth knowing up front: your first reports will carry a "not
 trustworthy" banner, and that is the age gate working rather than a fault. See
@@ -219,6 +220,14 @@ harmless: Dustarr degrades safely and simply does not spool anything.
 **Email report now** builds the report immediately and emails it with the file
 attached. It is the same job the schedule runs, so you get fresh data rather than a
 re-send of an older file.
+
+**It checks that the mail can actually leave the box before it builds
+anything.** Emailing requires Newsflasharr installed and enabled, with its SMTP
+configured and a routing rule sending dustarr to smtp, so the button refuses up
+front and names what is missing rather than producing a report nobody receives.
+The routing check is the one that earns its keep: without a matching rule the
+event still spools successfully and is simply delivered somewhere else, which
+looks exactly like working.
 
 The wording it reports back is deliberate:
 
