@@ -1,5 +1,27 @@
 # Changelog
 
+## v1.26.2081551 (July 27, 2026)
+
+Renamed the plugin from Metricsarr to Dustarr. The old name promised analytics;
+this plugin answers one question, which is what can safely be turned off, and
+the name now says so.
+
+- Plugin id `metricsarr` -> `dustarr`, display name `Metricsarr` -> `Dustarr`.
+- Paths moved: `/data/metricsarr` -> `/data/dustarr`,
+  `/data/logos/metricsarr` -> `/data/logos/dustarr`,
+  `/config/metricsarr` -> `/config/dustarr`. The report URL is now
+  `http://<host>:9191/logos/dustarr/report.html`.
+- Celery task `metricsarr_build_report` -> `dustarr_build_report`, task path
+  `_dispatcharr_plugin_dustarr.plugin.build_report_task`. The stale Beat row is
+  deleted at migration; `sync_schedule` creates by task name and would
+  otherwise leave it dispatching a task that no longer exists.
+- Redis leader key `metricsarr:leader` -> `dustarr:leader`.
+- Newsflasharr `source` string `metricsarr` -> `dustarr`. A matching routing
+  rule must exist on the Newsflasharr side or the report email is silently
+  unrouted.
+- New `tests/test_name_hygiene.py` fails the build if the legacy name reappears
+  in shipped code, tests or tooling.
+
 ## v1.26.2071812 (July 26, 2026)
 
 ### Added

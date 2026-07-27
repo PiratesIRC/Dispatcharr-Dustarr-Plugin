@@ -1,4 +1,4 @@
-# Metricsarr
+# Dustarr
 
 A Dispatcharr plugin that records which channels are actually watched, and reports
 the most-used, least-used, and never-watched channels so you can turn off the dead
@@ -26,8 +26,8 @@ separate scheduled task, not inline with the collector.
 
 | Where | What |
 |---|---|
-| `http://<your-dispatcharr-host>:9191/logos/metricsarr/report.html` | The report. Self-contained, sortable HTML with collapsible sections and inline charts — one click from any browser, including a phone or a Shield/Fire TV. Served on the **same host and port as the Dispatcharr UI you already have open** (Dispatcharr's own nginx, the `/logos/` static route) — no extra container, no extra port to open, no new address to remember. If you can reach Dispatcharr, you can reach the report. |
-| `/config/metricsarr/report-<timestamp>.csv` | The same data as CSV. `/config` is Dispatcharr's existing bind mount, so this file lands somewhere on your host you can double-click straight into Excel or LibreOffice. |
+| `http://<your-dispatcharr-host>:9191/logos/dustarr/report.html` | The report. Self-contained, sortable HTML with collapsible sections and inline charts — one click from any browser, including a phone or a Shield/Fire TV. Served on the **same host and port as the Dispatcharr UI you already have open** (Dispatcharr's own nginx, the `/logos/` static route) — no extra container, no extra port to open, no new address to remember. If you can reach Dispatcharr, you can reach the report. |
+| `/config/dustarr/report-<timestamp>.csv` | The same data as CSV. `/config` is Dispatcharr's existing bind mount, so this file lands somewhere on your host you can double-click straight into Excel or LibreOffice. |
 | Newsflasharr (optional) | A short message with the headline numbers and a link to the full report, sent on whatever schedule you configure. See "Notifications via Newsflasharr" below. |
 
 ## Reading the report
@@ -82,7 +82,7 @@ yet) and **excluded / unobservable** (see below).
 
 ## Excluded by default
 
-Some channels look unused but aren't, so Metricsarr keeps them out of the
+Some channels look unused but aren't, so Dustarr keeps them out of the
 never-watched judgment by default (all of this is configurable in the plugin
 settings):
 
@@ -95,7 +95,7 @@ settings):
 - **Sports** — has a legitimate off-season, so a quiet month doesn't mean unused.
 
 A channel whose stream profile isn't proxying (e.g. set to Redirect) never writes
-the Redis keys the collector polls, so it's structurally invisible to Metricsarr —
+the Redis keys the collector polls, so it's structurally invisible to Dustarr —
 it's reported separately as **unobservable**, not folded into never-watched.
 
 ## Safety
@@ -132,7 +132,7 @@ it's reported separately as **unobservable**, not folded into never-watched.
 - **If the collector goes blind, the report says so loudly.** A Redis flush, a
   Dispatcharr upgrade that reshapes the keyspace, or a wedged collector thread would
   otherwise quietly produce a report claiming the household watches nothing.
-  Metricsarr checks sampling coverage and watch plausibility before trusting its own
+  Dustarr checks sampling coverage and watch plausibility before trusting its own
   data, and if those checks fail it puts a loud banner at the top of the report
   listing exactly what looked wrong, instead of silently telling you every channel
   is dead.
@@ -198,7 +198,7 @@ Everything lives in the plugin's settings card in the Dispatcharr UI:
 
 ## Notifications via Newsflasharr
 
-Metricsarr no longer talks to Discord (or any webhook) directly. Instead it has
+Dustarr no longer talks to Discord (or any webhook) directly. Instead it has
 one setting, **Send notifications to Newsflasharr** (off by default), that hands
 its report summary and any honesty-gate alerts to the
 [Newsflasharr](https://github.com/PiratesIRC/Dispatcharr_Newsflasharr) plugin if
@@ -208,12 +208,12 @@ Turning the toggle on is the whole caller-side setup. Everything else —
 **which channel(s) it goes to (Discord, ntfy, email, a generic webhook, ...),
 whether it's routed differently by severity, quiet hours, storm dedup** — lives
 entirely in Newsflasharr's own routing rules, keyed on the source name
-`metricsarr`. See the Newsflasharr plugin's own docs for how to add a routing
-rule and pick a destination channel; nothing on Metricsarr's side needs to
+`dustarr`. See the Newsflasharr plugin's own docs for how to add a routing
+rule and pick a destination channel; nothing on Dustarr's side needs to
 change to redirect where its notifications land.
 
 If Newsflasharr isn't installed or isn't enabled, turning this setting on is
-harmless — Metricsarr degrades safely and simply doesn't spool anything.
+harmless — Dustarr degrades safely and simply doesn't spool anything.
 
 ### Email report now
 
@@ -238,7 +238,7 @@ disabled, or is queued to a worker that would reject it.
 
 ## Install / upgrade
 
-Copy the `metricsarr/` folder into Dispatcharr's plugin directory, or install the
+Copy the `dustarr/` folder into Dispatcharr's plugin directory, or install the
 release zip from the plugin UI. **Restart the Dispatcharr container after
 upgrading** — Dispatcharr's web workers hot-reload a plugin when `plugin.json`'s
 modified time changes, but the Celery workers that run the scheduled report task

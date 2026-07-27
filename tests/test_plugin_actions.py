@@ -32,11 +32,11 @@ def _make_thread(plugin, version=None, fingerprint=None, alive_for=30.0):
         stop_event.wait(alive_for)
 
     thread = threading.Thread(target=loop, name=plugin.THREAD_NAME, daemon=True)
-    thread.metricsarr_version = version or plugin.PLUGIN_VERSION
-    thread.metricsarr_fingerprint = (
+    thread.dustarr_version = version or plugin.PLUGIN_VERSION
+    thread.dustarr_fingerprint = (
         fingerprint if fingerprint is not None
         else plugin._thresholds_fingerprint(plugin.coerce_settings({})))
-    thread.metricsarr_stop = stop_event
+    thread.dustarr_stop = stop_event
     thread.start()
     return thread
 
@@ -163,8 +163,8 @@ def test_validate_settings_accepts_report_base_url_with_https_scheme(plugin, mon
 def test_build_report_writes_files_and_returns_the_path(plugin, tmp_path,
                                                         monkeypatch):
     import sys
-    gw_mod = sys.modules["metricsarr_under_test.gateway"]
-    storage_mod = sys.modules["metricsarr_under_test.storage"]
+    gw_mod = sys.modules["dustarr_under_test.gateway"]
+    storage_mod = sys.modules["dustarr_under_test.storage"]
 
     rows = [gw_mod.ChannelRow(id=i, uuid=f"u{i}", name=f"CH{i}", group="US: Movies",
                               auto_created=False, created_at=NOW - 90 * 86400,
@@ -202,7 +202,7 @@ def test_show_summary_never_crashes_on_a_missing_usage_file(plugin, tmp_path,
     # show_summary only touches Storage(DATA_DIR) today, but patch all three
     # real-path globals here too (defense in depth / FIX 3 audit) so a future
     # change that routes it through _build_report can't silently write to the
-    # real host paths (/data/logos/metricsarr, /config/metricsarr) again.
+    # real host paths (/data/logos/dustarr, /config/dustarr) again.
     monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path / "nothing-here"))
     monkeypatch.setattr(plugin, "REPORT_DIR", str(tmp_path / "logos"))
     monkeypatch.setattr(plugin, "CSV_DIR", str(tmp_path / "config"))
@@ -219,7 +219,7 @@ def test_show_summary_uses_the_gateway_clock_not_wall_clock(plugin, tmp_path,
     faked (tests) or diverges from wall-clock (production). Uses a sentinel
     `now` far from real wall-clock time so a regression to time.time() would
     make the computed tracking-days figure nonsensical instead of ~10.0."""
-    storage_mod = sys.modules["metricsarr_under_test.storage"]
+    storage_mod = sys.modules["dustarr_under_test.storage"]
     store = storage_mod.Storage(str(tmp_path / "data"))
     store.write({"channels": {},
                 "meta": {"stats_since": NOW - 10 * 86400, "coverage": {}}}, NOW)
@@ -270,7 +270,7 @@ def test_build_report_task_runs_and_returns_counts(plugin, tmp_path, monkeypatch
 # ---- bug-078: a green result must never outlive a failed publish -----------
 #
 # The report's counts are computed BEFORE the write, and write_report never
-# raises (it degrades, by design). So when /data/logos/metricsarr was owned by
+# raises (it degrades, by design). So when /data/logos/dustarr was owned by
 # root and the Celery worker runs as `dispatch`, the scheduled report returned
 # SUCCESS with a full set of counts while publishing NOTHING -- the failure was
 # visible only by noticing report.html's mtime never moved. Same shape as the
@@ -379,9 +379,9 @@ def test_stop_stops_the_collector_thread(plugin, monkeypatch):
     thread = spawned[0]
     try:
         plugin.Plugin().stop()
-        assert thread.metricsarr_stop.is_set()
+        assert thread.dustarr_stop.is_set()
     finally:
-        thread.metricsarr_stop.set()
+        thread.dustarr_stop.set()
         thread.join(timeout=2)
 
 
@@ -419,7 +419,7 @@ def test_plugin_init_spawns_the_collector_under_the_uwsgi_gate(plugin, monkeypat
         assert len(spawned) == 1
     finally:
         for thread in spawned:
-            thread.metricsarr_stop.set()
+            thread.dustarr_stop.set()
             thread.join(timeout=2)
 
 
@@ -466,13 +466,13 @@ def test_ensure_collector_respawns_on_a_settings_change_even_at_the_same_version
     monkeypatch.setattr(plugin, "_spawn_collector", fake_spawn)
     try:
         plugin.ensure_collector({"poll_interval_s": 5})
-        assert old.metricsarr_stop.is_set()
+        assert old.dustarr_stop.is_set()
         assert len(spawned) == 1
     finally:
-        old.metricsarr_stop.set()
+        old.dustarr_stop.set()
         old.join(timeout=2)
         for thread in spawned:
-            thread.metricsarr_stop.set()
+            thread.dustarr_stop.set()
             thread.join(timeout=2)
 
 
@@ -485,10 +485,10 @@ def test_ensure_collector_does_not_respawn_when_settings_are_unchanged(plugin,
                         lambda settings: spawned.append(1))
     try:
         plugin.ensure_collector({})
-        assert not old.metricsarr_stop.is_set()
+        assert not old.dustarr_stop.is_set()
         assert spawned == []
     finally:
-        old.metricsarr_stop.set()
+        old.dustarr_stop.set()
         old.join(timeout=2)
 
 
@@ -510,10 +510,10 @@ def test_ensure_collector_settings_change_respawn_shares_the_crash_loop_budget(
         # crash-loop bound already saturated -- refuse the respawn, keep the
         # incumbent alive, exactly as it would for a version-bump respawn.
         assert spawned == []
-        assert not old.metricsarr_stop.is_set()
+        assert not old.dustarr_stop.is_set()
         assert old.is_alive()
     finally:
-        old.metricsarr_stop.set()
+        old.dustarr_stop.set()
         old.join(timeout=2)
 
 
@@ -548,7 +548,7 @@ def test_ensure_collector_is_idempotent_one_thread_per_worker(plugin, monkeypatc
         assert len(live) == 1
     finally:
         for thread in spawned:
-            thread.metricsarr_stop.set()
+            thread.dustarr_stop.set()
             thread.join(timeout=2)
 
 
@@ -565,13 +565,13 @@ def test_ensure_collector_supersedes_an_old_version(plugin, monkeypatch):
     monkeypatch.setattr(plugin, "_spawn_collector", fake_spawn)
     try:
         plugin.ensure_collector({})
-        assert old.metricsarr_stop.is_set()
+        assert old.dustarr_stop.is_set()
         assert len(spawned) == 1
     finally:
-        old.metricsarr_stop.set()
+        old.dustarr_stop.set()
         old.join(timeout=2)
         for thread in spawned:
-            thread.metricsarr_stop.set()
+            thread.dustarr_stop.set()
             thread.join(timeout=2)
 
 
@@ -603,10 +603,10 @@ def test_ensure_collector_crash_loop_bound_does_not_kill_the_incumbent(plugin,
     try:
         plugin.ensure_collector({})
         assert spawned == []
-        assert not old.metricsarr_stop.is_set()
+        assert not old.dustarr_stop.is_set()
         assert old.is_alive()
     finally:
-        old.metricsarr_stop.set()
+        old.dustarr_stop.set()
         old.join(timeout=2)
 
 
@@ -815,7 +815,7 @@ def test_collector_loop_logs_on_a_persistent_failure(plugin, monkeypatch, caplog
     with caplog.at_level(logging.ERROR):
         thread = plugin._spawn_collector({"poll_interval_s": 5})
         time.sleep(0.3)
-        thread.metricsarr_stop.set()
+        thread.dustarr_stop.set()
         thread.join(timeout=3)
 
     assert "collector tick failed" in caplog.text
@@ -913,7 +913,7 @@ def test_toggle_on_emits_report_and_ledgerable_event(plugin, tmp_path, monkeypat
     plugin.build_report_task()
     assert len(calls) == 1
     kw = calls[0]
-    assert kw["source"] == "metricsarr"
+    assert kw["source"] == "dustarr"
     assert kw["event"] == "usage_report"
     assert kw["attachment"]                     # written["archive_path"]
     assert kw["url"].startswith("http://192.168.1.53:9191")
@@ -1194,7 +1194,7 @@ def test_a_failed_publish_does_not_record_a_scheduled_run(plugin, monkeypatch, t
 # -- failures must reach the surface that actually RENDERS --------------------
 # Dispatcharr's plugin card renders `.file`, `.error` (red, persistent) and
 # `message` (a TRANSIENT, hardcoded-GREEN toast). `status` renders NOWHERE.
-# metricsarr set `error` nowhere at all, so its existing bug-078 publish
+# dustarr set `error` nowhere at all, so its existing bug-078 publish
 # failure was already pixel-identical to success.
 
 _HEALTHY = {"exists": True, "enabled": True, "queue": "dvr",

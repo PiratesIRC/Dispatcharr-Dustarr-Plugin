@@ -5,7 +5,7 @@ PowerShell's Compress-Archive writes BACKSLASH path separators, which break
 install on Dispatcharr's Linux host. zipfile.namelist() HIDES this, so parse the
 raw central-directory bytes instead. Also rejects CRLF in .py files (bug-118).
 
-Usage: python scripts/validate_zip.py Metricsarr.zip
+Usage: python scripts/validate_zip.py Dustarr.zip
 """
 import sys
 import zipfile

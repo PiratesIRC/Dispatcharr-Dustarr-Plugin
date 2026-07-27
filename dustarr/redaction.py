@@ -1,4 +1,4 @@
-"""Metricsarr redaction — credential-scrubbing regexes. Stdlib only.
+"""Dustarr redaction — credential-scrubbing regexes. Stdlib only.
 
 Provider credentials live INSIDE stream URLs in this deployment, so every string
 that reaches a notification (title, body, or a logged error) passes through

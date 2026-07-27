@@ -1,4 +1,4 @@
-"""Metricsarr collector -- leader lease + tick loop. Stdlib only, Redis only.
+"""Dustarr collector -- leader lease + tick loop. Stdlib only, Redis only.
 
 NEVER touches the ORM or Postgres (spec S11.2). The redis client is injected and
 duck-typed: get/set/delete/expire/scard/scan_iter/pipeline.
@@ -8,7 +8,7 @@ from __future__ import annotations
 import time
 import traceback
 
-LEADER_KEY = "metricsarr:leader"
+LEADER_KEY = "dustarr:leader"
 LEASE_TTL = 60
 
 SCAN_PATTERN = "live:channel:*:metadata"

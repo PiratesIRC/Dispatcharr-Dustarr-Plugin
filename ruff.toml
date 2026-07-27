@@ -1,4 +1,4 @@
-# Ruff config for the Metricsarr plugin repo.
+# Ruff config for the Dustarr plugin repo.
 #
 # Mirrors the workspace-wide <workspace>\ruff.toml conventions so
 # `ruff check .` behaves identically whether run from inside this repo alone

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bump Metricsarr's calver version in plugin.py AND plugin.json in one shot.
+"""Bump Dustarr's calver version in plugin.py AND plugin.json in one shot.
 
 Calver: 1.YY.DDDHHMM  (YY=2-digit year, DDD=day-of-year, HHMM=UTC time)
 Hot-reload fires on plugin.json's mtime, so the two MUST stay in sync.
@@ -10,8 +10,8 @@ import re
 import time
 
 ROOT = pathlib.Path(__file__).resolve().parent
-PLUGIN_PY = ROOT / "metricsarr" / "plugin.py"
-PLUGIN_JSON = ROOT / "metricsarr" / "plugin.json"
+PLUGIN_PY = ROOT / "dustarr" / "plugin.py"
+PLUGIN_JSON = ROOT / "dustarr" / "plugin.json"
 
 
 def new_version():

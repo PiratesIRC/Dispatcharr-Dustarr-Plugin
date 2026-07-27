@@ -1,4 +1,4 @@
-"""Metricsarr reports -- join the ORM channel universe against usage.json.
+"""Dustarr reports -- join the ORM channel universe against usage.json.
 
 THE INVARIANT (spec S6): the channel universe is the ORM. usage.json is a SPARSE
 OVERLAY of watched channels only. A channel absent from it is NEVER-WATCHED --
@@ -322,7 +322,7 @@ def summary_for_notify(model, report_url):
 # The report is written to nginx's already-unauthenticated static route
 # (/data/logos/** is served by Dispatcharr's nginx with no auth and correct
 # MIME types -- verified live) so it is one click away at
-# http://<host>:9191/logos/metricsarr/report.html, instead of trapped inside
+# http://<host>:9191/logos/dustarr/report.html, instead of trapped inside
 # a named Docker volume with no Windows path. The page must be fully
 # self-contained (inline CSS/JS, no external assets): it is served from a
 # plain static route with no build step and must render on a TV browser
@@ -335,7 +335,7 @@ def summary_for_notify(model, report_url):
 # --------------------------------------------------------------------------
 
 REPORT_HTML = "report.html"
-REPORT_URL_PATH = "/logos/metricsarr/report.html"
+REPORT_URL_PATH = "/logos/dustarr/report.html"
 
 
 def full_report_url(base_url, path=REPORT_URL_PATH):
@@ -875,11 +875,11 @@ def render_html(model):
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Metricsarr - channel usage</title>
+<title>Dustarr - channel usage</title>
 <style>{_CSS}</style>
 </head>
 <body>
-<h1>Metricsarr - channel usage</h1>
+<h1>Dustarr - channel usage</h1>
 <div class="sub">
   Tracking since {_esc(_fmt_local(model['stats_since']))} ·
   {_esc(model['tracked_days'])} days ·

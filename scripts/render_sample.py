@@ -19,8 +19,8 @@ from conftest import load_plugin, model  # noqa: E402
 
 load_plugin()
 
-rp = sys.modules["metricsarr_under_test.reports"]
-gw = sys.modules["metricsarr_under_test.gateway"]
+rp = sys.modules["dustarr_under_test.reports"]
+gw = sys.modules["dustarr_under_test.gateway"]
 
 html = rp.render_html(model(rp, gw, n=12, watched=4))
 out = ROOT / "tests" / "fixtures" / "sample_report.html"
