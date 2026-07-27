@@ -67,7 +67,12 @@ def test_guard_actually_scans_something():
     tests/test_report_sections.py exists in every checkout, so an empty sweep
     means the walker itself broke (a renamed directory, a bad skip rule), not
     that the tree is clean.
+
+    After the rename the package MUST contribute, or the offenders test passes
+    vacuously on an absent dustarr/. dustarr/plugin.json is the sentinel: if it
+    is not present in the scanned set, the rename tasks have not completed.
     """
     scanned = {p.relative_to(REPO).as_posix() for p in _candidate_files()}
     assert "tests/test_report_sections.py" in scanned
     assert len(scanned) > 20, f"only {len(scanned)} files scanned"
+    assert "dustarr/plugin.json" in scanned
