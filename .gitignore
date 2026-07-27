@@ -6,3 +6,8 @@
 .claude/settings.local.json
 
 .superpowers/
+
+# Agent guidance and the design archive: kept on disk, out of the repo.
+# The published tree is the plugin, its tests, its tooling and its README.
+CLAUDE.md
+docs/superpowers/
