@@ -36,7 +36,7 @@ except ImportError:                     # standalone (non-package) import path
 
 _LOGGER = logging.getLogger(__name__)
 
-PLUGIN_VERSION = "1.26.2082008"
+PLUGIN_VERSION = "1.26.2082129"
 
 DATA_DIR = "/data/dustarr"           # plugin state (named volume)
 REPORT_DIR = "/data/logos/dustarr"   # nginx serves /data/logos/** at /logos/**
@@ -73,12 +73,17 @@ FIELDS = [
     # multi-line layout in an info body, and the action `message` toast is
     # known to collapse newlines. No em dashes, per operator instruction.
     {"id": "_section_quickstart", "type": "info", "label": "Quick Start",
-     "description": "New here? Typical workflow: 1) Validate settings checks "
-                    "your config, the collector and the schedule. 2) Show "
-                    "summary prints the headline numbers without writing "
-                    "anything. 3) Build report writes the HTML report plus the "
-                    "CSV export. 4) Email report now sends that report through "
-                    "Newsflasharr if you have notifications turned on. Expect a "
+     "description": "New here? The buttons are in the order you want to press "
+                    "them: 1) Validate settings checks your config, the "
+                    "collector, the schedule and whether email can actually go "
+                    "out. 2) Show summary prints the headline numbers without "
+                    "writing anything. 3) Build report writes the HTML report "
+                    "plus the CSV export. 4) Email report now sends that report "
+                    "through Newsflasharr, which must be installed and enabled "
+                    "with its SMTP set up and a routing rule pointing dustarr "
+                    "at smtp, and the button refuses up front if any of that is "
+                    "missing. Report an issue shows the link to the issue "
+                    "tracker. Expect a "
                     "'not trustworthy' banner for the first 30 days: the "
                     "dataset has to be older than the unused threshold before "
                     "anything can fairly be called unused, so that banner is "
@@ -147,7 +152,22 @@ FIELDS = [
                  {"value": "monthly", "label": "Monthly (1st, 03:00)"}]},
 ]
 
+ISSUES_URL = "https://github.com/PiratesIRC/Dispatcharr-Dustarr-Plugin/issues"
+
+# Validate settings is FIRST (operator decision 2026-07-27): it is the button
+# to press before any other, it writes nothing, and it is what diagnoses the
+# schedule. The order here matches the Quick Start copy, and a test binds the
+# two together.
 ACTIONS = [
+    {"id": "validate_settings", "label": "Validate settings",
+     "description": "Check every setting parses, and report on the collector, "
+                    "the schedule and email readiness. Writes nothing.",
+     "button_label": "✅ Validate",
+     "button_variant": "outline", "button_color": "green"},
+    {"id": "show_summary", "label": "Show summary",
+     "description": "Tracking window, coverage, never-watched count.",
+     "button_label": "📊 Summary",
+     "button_variant": "outline", "button_color": "blue"},
     {"id": "build_report", "label": "Build report",
      "description": "Write the HTML report and CSV now. Does not send "
                     "notifications - the scheduled report does.",
@@ -155,18 +175,21 @@ ACTIONS = [
      "button_variant": "filled", "button_color": "orange"},
     {"id": "email_report_now", "label": "Email report now",
      "description": "Build the report now and email it with the file attached "
-                    "- the same job the schedule runs. Does NOT prove the "
-                    "SCHEDULE works: this runs in the web worker, the schedule "
-                    "runs on a Celery worker.",
+                    "- the same job the schedule runs. REQUIRES Newsflasharr "
+                    "installed and enabled, with its SMTP configured and a "
+                    "routing rule sending dustarr to smtp; this button checks "
+                    "all of that first and refuses rather than building a "
+                    "report nobody receives. Does NOT prove the SCHEDULE "
+                    "works: this runs in the web worker, the schedule runs on "
+                    "a Celery worker.",
      "button_label": "📧 Email now",
      "button_variant": "filled", "button_color": "cyan"},
-    {"id": "show_summary", "label": "Show summary",
-     "description": "Tracking window, coverage, never-watched count.",
-     "button_label": "📊 Summary",
-     "button_variant": "outline", "button_color": "blue"},
-    {"id": "validate_settings", "label": "Validate settings",
-     "description": "Check every setting parses.", "button_label": "✅ Validate",
-     "button_variant": "outline", "button_color": "green"},
+    {"id": "report_issue", "label": "Report an issue",
+     "description": "Show the link to this plugin's GitHub issue tracker. A "
+                    "plugin action cannot open a browser tab, so it prints the "
+                    "address for you to copy.",
+     "button_label": "🐞 Report an issue",
+     "button_variant": "outline", "button_color": "gray"},
 ]
 
 _NUMERIC_FLOORS = {"poll_interval_s": (5, MAX_POLL_INTERVAL_S),
@@ -593,6 +616,90 @@ def _read_scheduled_run_ts():
         return None
 
 
+NOTIFY_SOURCE = "dustarr"
+NOTIFY_EVENT = "usage_report"
+NEWSFLASHARR_KEY = "newsflasharr"
+_SMTP_REQUIRED = ("smtp_server", "smtp_username", "smtp_password", "smtp_to")
+
+
+def _routes_to_smtp(nf_settings):
+    """Would a dustarr usage_report actually reach the smtp channel?
+
+    `routing_rules` is stored as a JSON STRING, not a list, so it is parsed
+    defensively; a list is accepted too in case that ever changes. A rule with
+    no `source` or no `event` is a wildcard and matches. If nothing matches,
+    the event falls through to `default_channels`, which is the silent failure
+    this check exists to catch: delivery looks fine and the mail goes elsewhere.
+    """
+    raw = nf_settings.get("routing_rules")
+    rules = raw if isinstance(raw, list) else []
+    if isinstance(raw, str):
+        try:
+            rules = json.loads(raw)
+        except (ValueError, TypeError):
+            rules = []
+    for rule in rules if isinstance(rules, list) else []:
+        if not isinstance(rule, dict):
+            continue
+        match = rule.get("match") if isinstance(rule.get("match"), dict) else {}
+        if match.get("source") not in (None, NOTIFY_SOURCE):
+            continue
+        if match.get("event") not in (None, NOTIFY_EVENT):
+            continue
+        channels = rule.get("channels")
+        if any("smtp" in str(c).lower() for c in (channels or [])):
+            return True
+    return "smtp" in str(nf_settings.get("default_channels") or "").lower()
+
+
+def _newsflasharr_readiness():
+    """Everything that must be true for an emailed report to actually arrive.
+
+    Read-only on another plugin's configuration row, which is explicitly
+    allowed; nothing here writes. Returns a list of blocking problems, empty
+    when the path is clear.
+
+    This runs BEFORE the report is built. Every one of these failures used to
+    surface only afterwards, or not at all: a missing routing rule in
+    particular is invisible, because spooling succeeds and the event is simply
+    delivered somewhere other than the inbox.
+
+    Never echo a settings VALUE here. `smtp_password` is one of the keys being
+    checked and only its presence is ever reported.
+    """
+    try:
+        from apps.plugins.models import PluginConfig  # Dispatcharr runtime only
+    except Exception:
+        return ["Cannot reach Dispatcharr's plugin registry to check "
+                "Newsflasharr."]
+    try:
+        row = PluginConfig.objects.filter(key=NEWSFLASHARR_KEY).first()
+    except Exception as exc:
+        return ["Could not read Newsflasharr's configuration: "
+                f"{redaction.redact(str(exc))}"]
+
+    if row is None:
+        return ["Newsflasharr is not installed, and it is what actually sends "
+                "the mail."]
+
+    problems = []
+    if not getattr(row, "enabled", False):
+        problems.append("Newsflasharr is installed but not enabled.")
+
+    nf_settings = row.settings if isinstance(getattr(row, "settings", None), dict) else {}
+    missing = [key for key in _SMTP_REQUIRED
+               if not str(nf_settings.get(key) or "").strip()]
+    if missing:
+        problems.append("Newsflasharr's SMTP is not fully configured (missing: "
+                        + ", ".join(missing) + ").")
+    elif not _routes_to_smtp(nf_settings):
+        problems.append(
+            f"Newsflasharr has no routing rule sending {NOTIFY_SOURCE}'s "
+            f"{NOTIFY_EVENT} to smtp, and smtp is not among its default "
+            "channels, so the report would be delivered somewhere else.")
+    return problems
+
+
 def _notifier_alive():
     """Is Newsflasharr's collector ticking?
 
@@ -767,6 +874,8 @@ class Plugin:
                 return self._email_report_now(settings)
             if action == "validate_settings":
                 return self._validate(settings)
+            if action == "report_issue":
+                return self._report_issue()
         except Exception as exc:
             # Dispatcharr renders `error` (red, persistent) and `message` (a
             # transient GREEN toast); `status` renders NOWHERE. Without `error`
@@ -775,6 +884,19 @@ class Plugin:
             return {"status": "error", "error": redacted, "message": redacted}
 
         return {"status": "error", "message": f"Unknown action: {action}"}
+
+    def _report_issue(self):
+        """Surface the issue tracker's address.
+
+        A plugin action returns data; it cannot navigate the operator's
+        browser, so this prints the link rather than opening it. The URL goes
+        in `file` as well as `message` because `message` is a transient toast
+        that clips around 280 characters, while `file` is persistent, and a
+        link you cannot select is no link at all.
+        """
+        return {"status": "ok",
+                "message": f"Report a bug or request a feature: {ISSUES_URL}",
+                "file": ISSUES_URL}
 
     def _email_report_now(self, settings):
         """The scheduled job, on demand: build -> verify it published -> emit.
@@ -789,6 +911,23 @@ class Plugin:
         `report_emitted=True` with `error` set is reachable (the report emit
         succeeds, then the gate/state block raises), so `error` outranks it.
         """
+        # PREFLIGHT, before any work. Building a report and then discovering
+        # nothing can send it wastes the run and reads as success in the two
+        # cases that matter most: notifications off, and a missing routing rule
+        # (which spools happily and delivers elsewhere).
+        blockers = []
+        if not coerce_settings(settings).get("notify_enabled"):
+            blockers.append("Notifications are off: turn on 'Send "
+                            "notifications to Newsflasharr'.")
+        blockers.extend(_newsflasharr_readiness())
+        if not blockers and not _notifier_alive():
+            blockers.append("Newsflasharr's collector has not ticked recently, "
+                            "so a spooled event would sit unsent.")
+        if blockers:
+            msg = ("Cannot email the report yet. " + " ".join(blockers)
+                   + " Nothing was built or sent.")
+            return {"status": "error", "message": msg, "error": msg}
+
         result, model, written = _build_report(settings)
 
         # bug-078: never notify about a report that does not exist.

@@ -105,7 +105,7 @@ def test_webhook_surface_is_gone_and_notify_toggle_present():
 VALID_ACTION_KEYS = {"id", "label", "description", "confirm", "button_label",
                      "button_variant", "button_color", "events"}
 ACTION_IDS = {"build_report", "email_report_now", "show_summary",
-              "validate_settings"}
+              "validate_settings", "report_issue"}
 
 
 def test_action_ids_match_spec():
@@ -143,3 +143,27 @@ def test_task_path_matches_the_real_package_directory():
     plugin = load_plugin()
     expected = f"_dispatcharr_plugin_{PLUGIN_DIR.name}.plugin.build_report_task"
     assert plugin.TASK_PATH == expected
+
+
+def test_validate_settings_is_the_first_action():
+    """Operator decision 2026-07-27. It is the button to press before any
+    other, and it writes nothing."""
+    plugin = load_plugin()
+    assert plugin.ACTIONS[0]["id"] == "validate_settings"
+
+
+def test_report_issue_action_carries_the_real_repository_url():
+    plugin = load_plugin()
+    assert plugin.ISSUES_URL.startswith("https://github.com/")
+    assert plugin.ISSUES_URL.endswith("/issues")
+    assert any(a["id"] == "report_issue" for a in plugin.ACTIONS)
+
+
+def test_email_action_states_its_newsflasharr_requirement():
+    """If the checks were ever removed, the description is the fallback the
+    operator reads. It must name what is required either way."""
+    plugin = load_plugin()
+    desc = next(a for a in plugin.ACTIONS
+                if a["id"] == "email_report_now")["description"].lower()
+    assert "newsflasharr" in desc
+    assert "smtp" in desc

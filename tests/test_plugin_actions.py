@@ -237,7 +237,7 @@ def test_actions_expose_the_expected_ids(plugin):
     # EQUALITY, not a subset: a subset check passes when an action is dropped,
     # renamed or silently rejected by Dispatcharr's serializer.
     assert ids == {"build_report", "email_report_now", "show_summary",
-                   "validate_settings"}
+                   "validate_settings", "report_issue"}
 
 
 # ---- C1: build_report_task must actually register with Celery --------------
@@ -1380,6 +1380,18 @@ def _stub_build(plugin, monkeypatch, html_path="/tmp/report.html", err=None):
         _minimal_model(ok=True, tracked_days=45), written))
 
 
+def _stub_email_preflight(plugin, monkeypatch, alive=True):
+    """Let the preflight pass so a test can reach the post-build rows.
+
+    The preflight reads Newsflasharr's PluginConfig row, which does not exist
+    in the unit environment, so without this every email test would stop at
+    "Newsflasharr is not installed" and assert nothing about the code it names.
+    """
+    monkeypatch.setattr(plugin, "_newsflasharr_readiness", lambda: [])
+    monkeypatch.setattr(plugin, "_notifier_alive", lambda: alive)
+    return {"notify_enabled": True}
+
+
 def test_email_report_now_runs_the_job_and_says_queued(plugin, monkeypatch, tmp_path):
     monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
     _stub_build(plugin, monkeypatch)
@@ -1387,7 +1399,8 @@ def test_email_report_now_runs_the_job_and_says_queued(plugin, monkeypatch, tmp_
         "enabled": True, "report_emitted": True, "error": None})
     monkeypatch.setattr(plugin, "_notifier_alive", lambda: True)
 
-    r = plugin.Plugin().run("email_report_now", {}, {"settings": {}})
+    st = _stub_email_preflight(plugin, monkeypatch)
+    r = plugin.Plugin().run("email_report_now", {}, {"settings": st})
     assert r["status"] == "ok"
     assert not r.get("error")
     import re as _re
@@ -1404,7 +1417,8 @@ def test_email_report_now_does_not_stamp_the_schedule(plugin, monkeypatch, tmp_p
     monkeypatch.setattr(plugin, "_emit_notifications", lambda *a, **k: {
         "enabled": True, "report_emitted": True, "error": None})
     monkeypatch.setattr(plugin, "_notifier_alive", lambda: True)
-    plugin.Plugin().run("email_report_now", {}, {"settings": {}})
+    st = _stub_email_preflight(plugin, monkeypatch)
+    plugin.Plugin().run("email_report_now", {}, {"settings": st})
     assert plugin._read_scheduled_run_ts() is None
 
 
@@ -1416,7 +1430,8 @@ def test_email_report_now_refuses_to_emit_when_nothing_was_published(
     calls = []
     monkeypatch.setattr(plugin, "_emit_notifications",
                         lambda *a, **k: calls.append(a) or {})
-    r = plugin.Plugin().run("email_report_now", {}, {"settings": {}})
+    st = _stub_email_preflight(plugin, monkeypatch)
+    r = plugin.Plugin().run("email_report_now", {}, {"settings": st})
     assert calls == [], "it must NOT emit when nothing was published"
     assert r["status"] == "error"
     assert r.get("error") and "Permission denied" in r["error"]
@@ -1437,7 +1452,8 @@ def test_email_report_now_reports_a_refusal_with_its_reason(plugin, monkeypatch,
     _stub_build(plugin, monkeypatch)
     monkeypatch.setattr(plugin, "_emit_notifications", lambda *a, **k: {
         "enabled": True, "report_emitted": False, "error": "spool full"})
-    r = plugin.Plugin().run("email_report_now", {}, {"settings": {}})
+    st = _stub_email_preflight(plugin, monkeypatch)
+    r = plugin.Plugin().run("email_report_now", {}, {"settings": st})
     assert r["status"] == "error"
     assert "spool full" in r["error"]
 
@@ -1448,8 +1464,8 @@ def test_email_report_now_reports_a_dead_collector(plugin, monkeypatch, tmp_path
     _stub_build(plugin, monkeypatch)
     monkeypatch.setattr(plugin, "_emit_notifications", lambda *a, **k: {
         "enabled": True, "report_emitted": True, "error": None})
-    monkeypatch.setattr(plugin, "_notifier_alive", lambda: False)
-    r = plugin.Plugin().run("email_report_now", {}, {"settings": {}})
+    st = _stub_email_preflight(plugin, monkeypatch, alive=False)
+    r = plugin.Plugin().run("email_report_now", {}, {"settings": st})
     assert r["status"] == "error"
     assert "collector" in r["error"].lower()
 
@@ -1478,7 +1494,8 @@ def test_email_report_now_still_errors_on_a_refusal_with_NO_reason(plugin, monke
     monkeypatch.setattr(plugin, "_emit_notifications", lambda *a, **k: {
         "enabled": True, "report_emitted": False, "error": None})
     monkeypatch.setattr(plugin, "_notifier_alive", lambda: True)
-    r = plugin.Plugin().run("email_report_now", {}, {"settings": {}})
+    st = _stub_email_preflight(plugin, monkeypatch)
+    r = plugin.Plugin().run("email_report_now", {}, {"settings": st})
     assert r["status"] == "error"
     assert r.get("error") and "did not accept" in r["error"]
 
@@ -1497,3 +1514,122 @@ def test_action_exception_sets_error_key_not_just_message(plugin, monkeypatch):
     assert result["status"] == "error"
     assert "error" in result, "no `error` key: this failure renders as success"
     assert "kaboom" in result["error"]
+
+
+# ---- Email preflight: can the mail actually leave the box? ------------------
+# Every one of these used to surface only AFTER a report had been built, or in
+# the routing case not at all: spooling succeeds and the event is delivered
+# somewhere other than the inbox, which looks identical to success.
+
+class _Row:
+    def __init__(self, enabled=True, settings=None):
+        self.enabled = enabled
+        self.settings = settings if settings is not None else {}
+
+
+def _nf(plugin, monkeypatch, row):
+    """Stand in for the newsflasharr PluginConfig row the plugin reads."""
+    class _QS:
+        def filter(self, **_kw):
+            return self
+
+        def first(self):
+            return row
+
+    import sys
+    import types
+    mod = types.ModuleType("apps.plugins.models")
+    mod.PluginConfig = type("PluginConfig", (), {"objects": _QS()})
+    pkg = types.ModuleType("apps.plugins")
+    pkg.models = mod
+    apps = sys.modules.get("apps") or types.ModuleType("apps")
+    apps.plugins = pkg
+    monkeypatch.setitem(sys.modules, "apps", apps)
+    monkeypatch.setitem(sys.modules, "apps.plugins", pkg)
+    monkeypatch.setitem(sys.modules, "apps.plugins.models", mod)
+
+
+_GOOD_SMTP = {"smtp_server": "smtp.example.com", "smtp_username": "u",
+              "smtp_password": "p", "smtp_to": "me@example.com",
+              "routing_rules": '[{"match": {"source": "dustarr", '
+                               '"event": "usage_report"}, '
+                               '"channels": ["smtp"]}]'}
+
+
+def test_readiness_is_clear_when_newsflasharr_is_set_up(plugin, monkeypatch):
+    _nf(plugin, monkeypatch, _Row(True, dict(_GOOD_SMTP)))
+    assert plugin._newsflasharr_readiness() == []
+
+
+def test_readiness_flags_newsflasharr_missing(plugin, monkeypatch):
+    _nf(plugin, monkeypatch, None)
+    problems = plugin._newsflasharr_readiness()
+    assert problems and "not installed" in problems[0]
+
+
+def test_readiness_flags_newsflasharr_disabled(plugin, monkeypatch):
+    _nf(plugin, monkeypatch, _Row(False, dict(_GOOD_SMTP)))
+    assert any("not enabled" in p for p in plugin._newsflasharr_readiness())
+
+
+def test_readiness_flags_incomplete_smtp_without_leaking_values(plugin, monkeypatch):
+    settings = dict(_GOOD_SMTP)
+    settings["smtp_password"] = ""
+    settings["smtp_server"] = "   "
+    _nf(plugin, monkeypatch, _Row(True, settings))
+    problems = plugin._newsflasharr_readiness()
+    assert any("SMTP is not fully configured" in p for p in problems)
+    joined = " ".join(problems)
+    assert "smtp_password" in joined and "smtp_server" in joined
+    # The KEY names are reported; a secret VALUE never is.
+    assert _GOOD_SMTP["smtp_to"] not in joined
+
+
+def test_readiness_flags_a_routing_rule_that_does_not_reach_smtp(plugin, monkeypatch):
+    settings = dict(_GOOD_SMTP)
+    settings["routing_rules"] = ('[{"match": {"source": "someone-else"}, '
+                                 '"channels": ["smtp"]}]')
+    settings["default_channels"] = "Ntfy"
+    _nf(plugin, monkeypatch, _Row(True, settings))
+    assert any("routing rule" in p for p in plugin._newsflasharr_readiness())
+
+
+def test_readiness_accepts_smtp_reached_via_default_channels(plugin, monkeypatch):
+    settings = dict(_GOOD_SMTP)
+    settings["routing_rules"] = "[]"
+    settings["default_channels"] = "Smtp"
+    _nf(plugin, monkeypatch, _Row(True, settings))
+    assert plugin._newsflasharr_readiness() == []
+
+
+def test_readiness_survives_unparseable_routing_rules(plugin, monkeypatch):
+    """routing_rules is a JSON STRING. Garbage must read as 'no route', never
+    raise: this runs inside a button the operator is pressing."""
+    settings = dict(_GOOD_SMTP)
+    settings["routing_rules"] = "{not json"
+    _nf(plugin, monkeypatch, _Row(True, settings))
+    assert any("routing rule" in p for p in plugin._newsflasharr_readiness())
+
+
+def test_email_preflight_refuses_before_building_anything(plugin, monkeypatch, tmp_path):
+    """The point of the preflight: no report is built when nothing can send it."""
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
+    built = []
+    monkeypatch.setattr(plugin, "_build_report",
+                        lambda *a, **k: built.append(1) or (None, None, None))
+    monkeypatch.setattr(plugin, "_newsflasharr_readiness",
+                        lambda: ["Newsflasharr is not installed, and it is what "
+                                 "actually sends the mail."])
+    r = plugin.Plugin().run("email_report_now", {},
+                            {"settings": {"notify_enabled": True}})
+    assert built == [], "it must not build a report it cannot send"
+    assert r["status"] == "error"
+    assert r["error"] == r["message"]
+    assert "not installed" in r["error"]
+
+
+def test_report_issue_returns_the_url_persistently(plugin):
+    r = plugin.Plugin().run("report_issue", {}, {"settings": {}})
+    assert r["status"] == "ok"
+    assert r["file"] == plugin.ISSUES_URL
+    assert plugin.ISSUES_URL in r["message"]
