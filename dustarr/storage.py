@@ -1,4 +1,4 @@
-"""Metricsarr storage — usage.json under /data/metricsarr. Stdlib only.
+"""Dustarr storage — usage.json under /data/dustarr. Stdlib only.
 
 Leader-only writer (enforced by the collector, not here). A corrupt file is
 SIDELINED, never blanked: an empty usage.json read as "nobody watched anything"

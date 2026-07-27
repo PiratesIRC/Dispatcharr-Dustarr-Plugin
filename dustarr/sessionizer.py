@@ -1,4 +1,4 @@
-"""Metricsarr sessionizer -- the watch state machine. Pure, stdlib only.
+"""Dustarr sessionizer -- the watch state machine. Pure, stdlib only.
 
 Every rule here was bought with a review finding; the comments name them.
 Spec S5.

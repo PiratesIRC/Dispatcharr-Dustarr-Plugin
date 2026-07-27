@@ -9,7 +9,7 @@ load_plugin()  # installs the Django stubs before gateway imports anything
 @pytest.fixture()
 def gw():
     import sys
-    return sys.modules["metricsarr_under_test.gateway"]
+    return sys.modules["dustarr_under_test.gateway"]
 
 
 def row(gw, **kw):

@@ -1,4 +1,4 @@
-"""Metricsarr gateway — the ONLY ORM reader. READ-ONLY BY CONSTRUCTION.
+"""Dustarr gateway — the ONLY ORM reader. READ-ONLY BY CONSTRUCTION.
 
 Phase 1 mutates nothing: there is no .save()/.update()/.delete()/.create() in this
 file, and tests/test_no_mutations.py enforces that structurally (spec S11.1).

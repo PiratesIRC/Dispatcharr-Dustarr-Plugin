@@ -1,4 +1,4 @@
-"""Metricsarr gates -- coverage density + plausibility. Pure, stdlib only.
+"""Dustarr gates -- coverage density + plausibility. Pure, stdlib only.
 
 These gates are the difference between "the user stopped watching" and "the sensor
 went blind". The catastrophic failure this module exists to catch is not a missing
@@ -88,7 +88,7 @@ def _load_sibling(name):
     import pathlib
 
     spec = importlib.util.spec_from_file_location(
-        f"_metricsarr_gates_sibling_{name}",
+        f"_dustarr_gates_sibling_{name}",
         pathlib.Path(__file__).resolve().parent / f"{name}.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

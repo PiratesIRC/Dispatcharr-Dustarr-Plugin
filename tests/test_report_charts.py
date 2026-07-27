@@ -26,7 +26,7 @@ PALETTE_DARK = {"--never": "#3987e5", "--watched": "#199e70",
 @pytest.fixture()
 def rp():
     import sys
-    return sys.modules["metricsarr_under_test.reports"]
+    return sys.modules["dustarr_under_test.reports"]
 
 
 def _dark_block(css):
@@ -94,7 +94,7 @@ def test_gate_pct_tracks_gates_min_coverage(rp):
     0.90 -- otherwise the tick position and the "gate at N%" title text can
     silently disagree with the actual gate if it ever moves."""
     import sys
-    gates = sys.modules["metricsarr_under_test.gates"]
+    gates = sys.modules["dustarr_under_test.gates"]
     assert rp.GATE_PCT == gates.MIN_COVERAGE
 
 

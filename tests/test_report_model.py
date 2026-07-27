@@ -9,13 +9,13 @@ load_plugin()
 @pytest.fixture()
 def rp():
     import sys
-    return sys.modules["metricsarr_under_test.reports"]
+    return sys.modules["dustarr_under_test.reports"]
 
 
 @pytest.fixture()
 def gw():
     import sys
-    return sys.modules["metricsarr_under_test.gateway"]
+    return sys.modules["dustarr_under_test.gateway"]
 
 
 NOW = 1_700_000_000.0

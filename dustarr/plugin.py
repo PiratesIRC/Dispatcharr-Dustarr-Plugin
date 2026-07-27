@@ -1,7 +1,7 @@
-"""Metricsarr — channel usage metrics for Dispatcharr. READ-ONLY.
+"""Dustarr — channel usage metrics for Dispatcharr. READ-ONLY.
 
 Phase 1 mutates NOTHING in Dispatcharr: it polls Redis, writes its own files, and
-reports. Spec: docs/superpowers/specs/2026-07-12-metricsarr-design.md (rev 2).
+reports. Spec: docs/superpowers/specs/2026-07-12-dustarr-design.md (rev 2).
 
 Plugin.__init__ is O(ms) and I/O-free. (The procfs read that gates the collector
 to uWSGI workers lives in ensure_collector, not here.) Django imports are
@@ -38,12 +38,12 @@ _LOGGER = logging.getLogger(__name__)
 
 PLUGIN_VERSION = "1.26.2071812"
 
-DATA_DIR = "/data/metricsarr"           # plugin state (named volume)
-REPORT_DIR = "/data/logos/metricsarr"   # nginx serves /data/logos/** at /logos/**
-CSV_DIR = "/config/metricsarr"          # bind mount -> <config-mount>
+DATA_DIR = "/data/dustarr"           # plugin state (named volume)
+REPORT_DIR = "/data/logos/dustarr"   # nginx serves /data/logos/** at /logos/**
+CSV_DIR = "/config/dustarr"          # bind mount -> <config-mount>
 
-THREAD_NAME = "metricsarr-collector"
-TASK_NAME = "metricsarr_build_report"
+THREAD_NAME = "dustarr-collector"
+TASK_NAME = "dustarr_build_report"
 # bug-075: plugin @shared_tasks register ONLY on the threads `dvr` worker,
 # never on the prefork `celery` worker. A row without this queue is rejected.
 SCHEDULE_QUEUE = "dvr"
@@ -78,7 +78,7 @@ FIELDS = [
                     "dataset has to be older than the unused threshold before "
                     "anything can fairly be called unused, so that banner is "
                     "the age gate working, not a fault."},
-    {"id": "info", "type": "info", "label": "Metricsarr is read-only",
+    {"id": "info", "type": "info", "label": "Dustarr is read-only",
      "description": "It records which channels are watched and reports the dead "
                     "weight. It never changes a channel."},
     {"id": "poll_interval_s", "label": "Poll interval (s)", "type": "number",
@@ -289,7 +289,7 @@ def _spawn_collector(settings):
                 # cannot flood the log.
                 now_log = time.time()
                 if now_log - last_error_log >= _ERROR_LOG_INTERVAL_S:
-                    _LOGGER.exception("metricsarr collector tick failed")
+                    _LOGGER.exception("dustarr collector tick failed")
                     last_error_log = now_log
             if stop_event.wait(wait):
                 break
@@ -297,9 +297,9 @@ def _spawn_collector(settings):
             col.shutdown()
 
     thread = threading.Thread(target=loop, name=THREAD_NAME, daemon=True)
-    thread.metricsarr_version = PLUGIN_VERSION
-    thread.metricsarr_fingerprint = _thresholds_fingerprint(thresholds)
-    thread.metricsarr_stop = stop_event
+    thread.dustarr_version = PLUGIN_VERSION
+    thread.dustarr_fingerprint = _thresholds_fingerprint(thresholds)
+    thread.dustarr_stop = stop_event
     thread.start()
     return thread
 
@@ -323,8 +323,8 @@ def ensure_collector(settings=None):
         live = [t for t in threading.enumerate()
                 if t.name == THREAD_NAME and t.is_alive()]
         for thread in live:
-            if (getattr(thread, "metricsarr_version", None) == PLUGIN_VERSION
-                    and getattr(thread, "metricsarr_fingerprint", None) == fingerprint):
+            if (getattr(thread, "dustarr_version", None) == PLUGIN_VERSION
+                    and getattr(thread, "dustarr_fingerprint", None) == fingerprint):
                 return
 
         # M3 / I1: check the crash-loop bound BEFORE stopping any incumbent
@@ -341,7 +341,7 @@ def ensure_collector(settings=None):
             return                          # crash-loop bound; incumbent survives
 
         for thread in live:
-            getattr(thread, "metricsarr_stop", threading.Event()).set()
+            getattr(thread, "dustarr_stop", threading.Event()).set()
 
         _restart_times.append(now)
         _spawn_collector(settings or {})
@@ -376,7 +376,7 @@ def _build_report(settings):
     # bug-078: the counts above are computed BEFORE the write, and write_report
     # never raises (it degrades, by design), so a hardcoded "ok" here reported a
     # perfectly healthy-looking summary for a run that published NOTHING -- the
-    # live symptom when /data/logos/metricsarr was root-owned and the Celery
+    # live symptom when /data/logos/dustarr was root-owned and the Celery
     # worker runs as `dispatch`. The only evidence was report.html's unmoved
     # mtime. Status must reflect the PUBLISH, not the computation.
     #
@@ -440,7 +440,7 @@ def _emit_notifications(settings, model, written):
         archive = written.get("archive_path")
         url = None
         if base and archive:
-            url = base.rstrip("/") + "/logos/metricsarr/" + os.path.basename(archive)
+            url = base.rstrip("/") + "/logos/dustarr/" + os.path.basename(archive)
         summary = reports.summary_for_notify(
             model, reports.full_report_url(base, reports.REPORT_URL_PATH))
         emitted, why = notify_report.emit_report_result(
@@ -464,7 +464,7 @@ def _emit_notifications(settings, model, written):
             notify_report.save_prev_ok(state_path, new_ok)
     except Exception as exc:
         result["error"] = redaction.redact(f"{exc}")
-        _LOGGER.warning("metricsarr notify emit failed (suppressed)")
+        _LOGGER.warning("dustarr notify emit failed (suppressed)")
     return result
 
 
@@ -503,7 +503,7 @@ def build_report_task():
     WRITE is never an exception at all (write_report degrades by design), and
     the counts are computed before the write, so the first-ever scheduled run
     returned SUCCESS with a full healthy-looking payload while publishing
-    nothing -- /data/logos/metricsarr was root-owned and this worker runs as
+    nothing -- /data/logos/dustarr was root-owned and this worker runs as
     `dispatch`. A green Celery result does not prove a report exists; only a
     non-empty html_path does. Hence the explicit raise below.
     """
@@ -527,7 +527,7 @@ def build_report_task():
         return model["counts"]
     except Exception as exc:
         redacted = redaction.redact(str(exc))
-        _LOGGER.error("metricsarr build_report_task failed: %s", redacted)
+        _LOGGER.error("dustarr build_report_task failed: %s", redacted)
         raise RuntimeError(redacted) from None
 
 
@@ -535,7 +535,7 @@ def _load_settings():
     from apps.plugins.models import PluginConfig  # Dispatcharr runtime only
 
     try:
-        config = PluginConfig.objects.get(key="metricsarr")
+        config = PluginConfig.objects.get(key="dustarr")
         return config.settings or {}
     except Exception:
         return {}
@@ -571,7 +571,7 @@ def _write_scheduled_run_ts(now):
             json.dump({"last_scheduled_run_ts": float(now)}, fh)
         os.replace(tmp, _scheduled_run_path())
     except Exception:
-        _LOGGER.warning("metricsarr could not record the scheduled run")
+        _LOGGER.warning("dustarr could not record the scheduled run")
 
 
 def _read_scheduled_run_ts():
@@ -604,7 +604,7 @@ def _notifier_alive():
 
 
 def _schedule_health():
-    """Facts about metricsarr's OWN Beat row plus the last real scheduled run.
+    """Facts about dustarr's OWN Beat row plus the last real scheduled run.
 
     `total_run_count` is deliberately NOT consulted: Beat counts messages SENT,
     not executed, so it reads healthy for a task the worker rejects -- which is
@@ -645,7 +645,7 @@ def _delete_periodic_task(*args, **kwargs):
 
 
 def _periodic_task_qs():
-    """The Beat row manager for metricsarr's OWN schedule row."""
+    """The Beat row manager for dustarr's OWN schedule row."""
     from django_celery_beat.models import PeriodicTask
     return PeriodicTask.objects
 
@@ -671,10 +671,10 @@ def sync_schedule(settings):
         return
     _create_or_update_periodic_task(
         TASK_NAME,
-        "_dispatcharr_plugin_metricsarr.plugin.build_report_task",
+        "_dispatcharr_plugin_dustarr.plugin.build_report_task",
         cron_expression=cron,
         enabled=True)
-    # Writes metricsarr's OWN schedule row, never Dispatcharr content. Bound to
+    # Writes dustarr's OWN schedule row, never Dispatcharr content. Bound to
     # a name so the AST guard can key its narrow allowance on the receiver --
     # see SAFE_UPDATE_RECEIVERS in tests/test_no_mutations.py.
     _schedule_row = _periodic_task_qs().filter(name=TASK_NAME)
@@ -682,7 +682,7 @@ def sync_schedule(settings):
 
 
 class Plugin:
-    name = "Metricsarr"
+    name = "Dustarr"
     version = PLUGIN_VERSION
     description = "Channel usage metrics: which channels are watched, which never are."
     fields = FIELDS
@@ -736,7 +736,7 @@ class Plugin:
         try:
             for thread in threading.enumerate():
                 if thread.name == THREAD_NAME:
-                    getattr(thread, "metricsarr_stop", threading.Event()).set()
+                    getattr(thread, "dustarr_stop", threading.Event()).set()
         except Exception:
             pass
 

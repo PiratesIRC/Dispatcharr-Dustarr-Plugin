@@ -1,6 +1,6 @@
 {
-  "id": "metricsarr",
-  "name": "Metricsarr",
+  "id": "dustarr",
+  "name": "Dustarr",
   "version": "1.26.2071812",
   "description": "Channel usage metrics: which channels are watched, which never are.",
   "author": "PiratesIRC",

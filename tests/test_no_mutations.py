@@ -116,7 +116,7 @@ SAFE_DELETE_RECEIVERS = {"self.r"}
 # including a differently-named receiver in this same file.
 #
 # Why this one is legitimate: the invariant is "Phase 1 mutates nothing in
-# DISPATCHARR". `sync_schedule` writes `queue` on METRICSARR'S OWN Celery Beat
+# DISPATCHARR". `sync_schedule` writes `queue` on DUSTARR'S OWN Celery Beat
 # row -- the same row this module already creates and deletes through
 # `create_or_update_periodic_task` / `delete_periodic_task`, which pass this
 # guard only because they are bare Name calls, NOT because Beat-schedule writes
@@ -682,9 +682,9 @@ LEGITIMATE_NON_ORM_PATTERNS = {
     # never attribute calls on a model -- confirm the guard leaves them alone
     # even though "update"/"periodic" appear in the function's own name.
     "beat_create_or_update": (
-        'create_or_update_periodic_task("metricsarr_build_report", '
+        'create_or_update_periodic_task("dustarr_build_report", '
         '"tasks.build_report", cron_expression="0 3 * * *", enabled=True)'),
-    "beat_delete": 'delete_periodic_task("metricsarr_build_report")',
+    "beat_delete": 'delete_periodic_task("dustarr_build_report")',
     # I7 re-verification checklist: os.replace/os.makedirs (already covered
     # for the I/O guard below, re-checked here against the ORM-write guard
     # too) and a urllib POST to a non-provider endpoint.

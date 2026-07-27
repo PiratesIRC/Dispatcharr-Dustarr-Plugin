@@ -1,4 +1,4 @@
-"""Shared fixtures for Metricsarr tests.
+"""Shared fixtures for Dustarr tests.
 
 sessionizer.py / storage.py / collector.py / gates.py are stdlib-only and are
 loaded directly from file paths (no stubs). plugin.py / gateway.py / reports.py
@@ -14,8 +14,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-PLUGIN_DIR = Path(__file__).resolve().parent.parent / "metricsarr"
-_PKG = "metricsarr_under_test"
+PLUGIN_DIR = Path(__file__).resolve().parent.parent / "dustarr"
+_PKG = "dustarr_under_test"
 
 
 def _install_runtime_stubs():
@@ -42,7 +42,7 @@ def _install_runtime_stubs():
     # function-local import inside gateway.py resolves in tests.
     core_models = types.ModuleType("core.models")
     core_models.CoreSettings = MagicMock(name="CoreSettings")
-    # sync_schedule re-asserts `queue='dvr'` on metricsarr's OWN Beat row
+    # sync_schedule re-asserts `queue='dvr'` on dustarr's OWN Beat row
     # (bug-075; the 2026-07-25 outage), reaching django_celery_beat through
     # plugin._periodic_task_qs(). Stubbed here rather than monkeypatched per
     # test, so the REAL code path runs under test instead of being bypassed.
@@ -158,7 +158,7 @@ class FakePipeline:
 
 
 class FakeRedis:
-    """Dict-backed stub of the Redis commands Metricsarr uses."""
+    """Dict-backed stub of the Redis commands Dustarr uses."""
 
     def __init__(self, clock=None, bytes_mode=False):
         self.clock = clock or FakeClock()
@@ -287,9 +287,9 @@ def model(rp, gw, n=5, watched=2):
 
 @pytest.fixture()
 def rp():
-    return sys.modules["metricsarr_under_test.reports"]
+    return sys.modules["dustarr_under_test.reports"]
 
 
 @pytest.fixture()
 def gw():
-    return sys.modules["metricsarr_under_test.gateway"]
+    return sys.modules["dustarr_under_test.gateway"]

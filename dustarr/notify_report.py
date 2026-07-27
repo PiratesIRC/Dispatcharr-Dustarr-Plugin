@@ -1,4 +1,4 @@
-"""Pure emit + gate-state logic for Metricsarr's Newsflasharr integration.
+"""Pure emit + gate-state logic for Dustarr's Newsflasharr integration.
 
 Consumes the report `model` dict (`model["gate"]["ok"|"alerts"]`,
 `model["tracked_days"]`, `model["counts"]`, `model["coverage"]`,
@@ -7,7 +7,7 @@ tracked_days, coverage, total_channels, never_watched,
 tuned_never_qualified, top, report_url, alerts). Produces the two builder
 functions a later task wires into the Celery report task, plus tiny
 file-backed state for the honesty-gate alert/resolve pairing. Stdlib only,
-no imports of any other metricsarr module, no Django -- `notify_fn` is
+no imports of any other dustarr module, no Django -- `notify_fn` is
 injected so this module never imports notify_client either.
 
 SENSOR-BLIND CLASSIFICATION (spec Sec6.1 / rev-1 error 3) -- why this needs
@@ -129,9 +129,9 @@ def emit_report_result(notify_fn, summary, url, attachment_path):
                          f"qualified - likely broken")
         for alert in (s.get("alerts") or []):
             lines.append(f"! {alert}")
-        kwargs = {"source": "metricsarr", "event": "usage_report",
+        kwargs = {"source": "dustarr", "event": "usage_report",
                   "severity": "info", "kind": "event",
-                  "title": "Metricsarr usage report",
+                  "title": "Dustarr usage report",
                   "body": "\n".join(lines)}
         if url:
             kwargs["url"] = url
@@ -149,10 +149,10 @@ def emit_gate(notify_fn, model, thresholds, prev_ok):
     try:
         if sensor_blind(model, thresholds):
             alerts = ((model or {}).get("gate") or {}).get("alerts") or []
-            sent = notify_fn(source="metricsarr", event="honesty_gate",
+            sent = notify_fn(source="dustarr", event="honesty_gate",
                              severity="critical", kind="event",
                              dedup_key=_DEDUP_KEY,
-                             title="Metricsarr: usage sensor not trustworthy",
+                             title="Dustarr: usage sensor not trustworthy",
                              body="\n".join(str(a) for a in alerts))
             # notify() NEVER RAISES -- it RETURNS False when the spool refuses
             # it (spool full, redaction failure, Newsflasharr not installed).
@@ -164,10 +164,10 @@ def emit_gate(notify_fn, model, thresholds, prev_ok):
                 return bool(prev_ok), None
             return False, "alert"
         if not prev_ok:
-            sent = notify_fn(source="metricsarr", event="honesty_gate",
+            sent = notify_fn(source="dustarr", event="honesty_gate",
                              severity="info", kind="resolve",
                              dedup_key=_DEDUP_KEY,
-                             title="Metricsarr: usage sensor trustworthy again",
+                             title="Dustarr: usage sensor trustworthy again",
                              body="honesty gate passing again")
             # Same rule the other way round: a resolve that never landed must
             # leave the alert OUTSTANDING, or the pairing is lost in silence.

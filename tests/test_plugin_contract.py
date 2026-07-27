@@ -96,10 +96,10 @@ def test_webhook_surface_is_gone_and_notify_toggle_present():
     assert nf["type"] == "boolean" and nf["default"] is False
 
 
-# -- ACTION contract (metricsarr had NONE -- only a subset check) -------------
+# -- ACTION contract (dustarr had NONE -- only a subset check) -------------
 # A field or action that fails Dispatcharr's serializer is SILENTLY DROPPED
 # (logger.warning only, and the plugin still loads) -- how smtp_security shipped
-# declared-but-never-rendered in Newsflasharr. The only assertion metricsarr had
+# declared-but-never-rendered in Newsflasharr. The only assertion dustarr had
 # was a SUBSET check, so a dropped, renamed or misspelt action passed.
 
 VALID_ACTION_KEYS = {"id", "label", "description", "confirm", "button_label",

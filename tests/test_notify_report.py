@@ -149,11 +149,11 @@ def test_emit_report_carries_the_attachment_and_never_raises(nr):
                "never_watched": 400, "tuned_never_qualified": 20,
                "top": [], "report_url": "http://x/r.html", "alerts": []}
     assert nr.emit_report(fn, summary, "http://x/report-1.html",
-                          "/data/logos/metricsarr/report-1.html") is True
+                          "/data/logos/dustarr/report-1.html") is True
     kw = calls[0]
-    assert kw["source"] == "metricsarr" and kw["event"] == "usage_report"
+    assert kw["source"] == "dustarr" and kw["event"] == "usage_report"
     assert kw["severity"] == "info" and "dedup_key" not in kw
-    assert kw["attachment"] == "/data/logos/metricsarr/report-1.html"
+    assert kw["attachment"] == "/data/logos/dustarr/report-1.html"
     assert "400" in kw["body"]                  # counts reach the body
 
     def boom(**kw):
