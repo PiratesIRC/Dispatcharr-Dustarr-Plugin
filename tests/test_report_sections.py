@@ -153,4 +153,33 @@ def test_every_collapsed_section_carries_the_find_in_page_hint(rp, gw):
     bodies = re.findall(r"</summary>(.*?)</details>", html, re.DOTALL)
     assert len(bodies) == len(EXPECTED_OPEN)
     for body in bodies:
-        assert "find-in-page" in body
+        assert "find-in-page" in body.lower()
+
+
+def test_every_section_carries_a_description(rp, gw):
+    """Every section is collapsed, so the summary line plus one short
+    description is all the reader has to decide whether to expand. The
+    rankings/least-used notes are CONDITIONAL, so they cannot stand in for
+    this: build a model where neither fires."""
+    built = model(rp, gw, n=5, watched=5)
+    html = rp.render_html(built)
+    bodies = re.findall(r"</summary>(.*?)</details>", html, re.DOTALL)
+    assert len(bodies) == len(EXPECTED_OPEN)
+    for title, body in zip(_sections(html), bodies, strict=True):
+        assert "<p class='sub'>" in body, title
+
+
+def test_report_copy_has_no_em_dashes_or_contractions(rp, gw):
+    """Standing operator instruction. `--` reads as an em dash in rendered
+    text, so it counts; comments and docstrings are not rendered and are out
+    of scope here."""
+    html = rp.render_html(model(rp, gw))
+    body = html[html.index("<body>"):]
+    body = re.sub(r"<script.*?</script>|<style.*?</style>|<svg.*?</svg>", " ",
+                  body, flags=re.DOTALL)
+    text = re.sub(r"<[^>]+>", " ", body)
+    assert "â€”" not in text
+    assert "â€“" not in text
+    assert "--" not in text
+    found = re.findall(r"\b\w+['â€™]\w+\b", text)
+    assert not found, found

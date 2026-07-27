@@ -773,8 +773,8 @@ def render_html(model):
     banner = ""
     if not gate["ok"]:
         items = "".join(f"<li>{_esc(a)}</li>" for a in gate["alerts"])
-        banner = (f"<div class='banner'><b>These numbers are not trustworthy yet"
-                  f" -- the collector may have been blind.</b><ul>{items}</ul></div>")
+        banner = (f"<div class='banner'><b>These numbers are not trustworthy yet. "
+                  f"The collector may have been blind.</b><ul>{items}</ul></div>")
 
     rollup_rows = "".join(
         f"<tr><td>{_esc(g['group'])}</td>"
@@ -816,7 +816,7 @@ def render_html(model):
             f"<p class='sub'>{watched_excluded} watched channel{plural} "
             f"{'is' if watched_excluded == 1 else 'are'} <b>excluded from these "
             f"rankings</b>. These lists answer &quot;what can I turn off&quot;, "
-            f"not &quot;what do I watch most&quot; -- excluded channels are "
+            f"not &quot;what do I watch most&quot;. Excluded channels are "
             f"never judged, however much they are watched.</p>")
 
     judged = sum(counts[key] for _, key, _ in _SEGMENT_ORDER)
@@ -841,35 +841,52 @@ def render_html(model):
     # Every section is CLOSED by default (see EXPECTED_OPEN in the test
     # suite), so every one carries this note -- find-in-page cannot reach
     # inside a closed <details> on some browsers.
-    find_hint = ("<p class='hint'>Expand to search these -- find-in-page does not "
+    find_hint = ("<p class='hint'>Expand to search these. Find-in-page does not "
                 "reach inside a collapsed section on some browsers.</p>")
 
+    # Every section opens with one short <p class='sub'> saying what it is and
+    # what to do about it, because every section is collapsed and the summary
+    # line is all the reader has to decide whether to expand. The notes that
+    # follow (rankings_note, least_used_note) are CONDITIONAL, so they can
+    # never be the only description a section carries.
     sections = "".join([
         _section("Never watched", counts["never_watched"],
-                 find_hint + never_body,
+                 "<p class='sub'>Not watched once in the tracked window. This is "
+                 "the dead weight the report exists to find, and the first place "
+                 "to look for something to turn off.</p>"
+                 + find_hint + never_body,
                  False, "dot-never"),
         _section("Too new to judge", counts["too_new"],
-                 find_hint +
-                 "<p class='sub'>Created less than the unused threshold ago -- not "
-                 "enough time has passed to fairly call these unused. Not dead "
-                 "weight; just wait.</p>" + _table(too_new_only),
+                 "<p class='sub'>Created less than the unused threshold ago, so "
+                 "not enough time has passed to fairly call these unused. Not "
+                 "dead weight; just wait.</p>"
+                 + find_hint + _table(too_new_only),
                  False, "dot-toonew"),
         _section("Tuned but never qualified", counts["tuned_never_qualified"],
-                 find_hint +
                  "<p class='sub'>You tried to watch these and gave up quickly. They "
                  "are probably <b>broken</b> (dead source, black screen, provider "
-                 "kick), not unused.</p>" + _table(model["tuned_never_qualified"]),
+                 "kick), not unused. Fix them rather than remove them.</p>"
+                 + find_hint + _table(model["tuned_never_qualified"]),
                  False, "dot-tuned"),
         _section("Least used", None,
-                 find_hint + rankings_note + least_used_note
+                 "<p class='sub'>The judged channels you watched least. They "
+                 "earned a real watch, so they are weaker candidates to turn off "
+                 "than the never watched list.</p>"
+                 + find_hint + rankings_note + least_used_note
                  + _table(model["least_used"]),
                  False, "dot-neutral"),
         _section("Most used", None,
-                 find_hint + rankings_note + _table(model["most_used"]),
+                 "<p class='sub'>The judged channels you watched most. Keep "
+                 "these.</p>"
+                 + find_hint + rankings_note + _table(model["most_used"]),
                  False, "dot-watched"),
         _section("Excluded and unobservable",
                  counts["excluded"] + counts["unobservable"],
-                 find_hint + _table(model["excluded"] + model["unobservable"]),
+                 "<p class='sub'>Held back from judgment by your exclusion "
+                 "settings, or carried by a stream the collector cannot observe. "
+                 "Neither group is ever called unused, however little it is "
+                 "watched.</p>"
+                 + find_hint + _table(model["excluded"] + model["unobservable"]),
                  False, "dot-neutral"),
     ])
 
