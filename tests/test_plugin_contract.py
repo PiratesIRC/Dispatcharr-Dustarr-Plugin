@@ -131,3 +131,15 @@ def test_action_text_fields_are_non_empty_strings():
         for key in ("id", "label", "description"):
             assert isinstance(action.get(key), str) and action[key].strip(), \
                 f"{action.get('id')}.{key}"
+
+
+def test_task_path_matches_the_real_package_directory():
+    """Dispatcharr derives the import path from the package DIRECTORY name.
+
+    A mismatch fails invisibly: Beat's total_run_count counts messages sent,
+    not executed, so a row dispatching a nonexistent task looks healthy
+    forever (bug-075). Nothing else in the suite pins this literal.
+    """
+    plugin = load_plugin()
+    expected = f"_dispatcharr_plugin_{PLUGIN_DIR.name}.plugin.build_report_task"
+    assert plugin.TASK_PATH == expected

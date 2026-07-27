@@ -1,7 +1,7 @@
 """Dustarr — channel usage metrics for Dispatcharr. READ-ONLY.
 
 Phase 1 mutates NOTHING in Dispatcharr: it polls Redis, writes its own files, and
-reports. Spec: docs/superpowers/specs/ (the original design doc predates this plugin's rename).
+reports. Spec: docs/superpowers/specs/2026-07-12-*-design.md (filed before the rename).
 
 Plugin.__init__ is O(ms) and I/O-free. (The procfs read that gates the collector
 to uWSGI workers lives in ensure_collector, not here.) Django imports are
@@ -44,6 +44,11 @@ CSV_DIR = "/config/dustarr"          # bind mount -> <config-mount>
 
 THREAD_NAME = "dustarr-collector"
 TASK_NAME = "dustarr_build_report"
+# Dispatcharr imports a plugin as `_dispatcharr_plugin_<package dir>`, so this
+# path is only correct while the package directory is named `dustarr`. A wrong
+# path fails INVISIBLY: Beat keeps counting dispatches it never executed.
+# tests/test_plugin_contract.py binds it to the real directory name.
+TASK_PATH = "_dispatcharr_plugin_dustarr.plugin.build_report_task"
 # bug-075: plugin @shared_tasks register ONLY on the threads `dvr` worker,
 # never on the prefork `celery` worker. A row without this queue is rejected.
 SCHEDULE_QUEUE = "dvr"
@@ -671,7 +676,7 @@ def sync_schedule(settings):
         return
     _create_or_update_periodic_task(
         TASK_NAME,
-        "_dispatcharr_plugin_dustarr.plugin.build_report_task",
+        TASK_PATH,
         cron_expression=cron,
         enabled=True)
     # Writes dustarr's OWN schedule row, never Dispatcharr content. Bound to

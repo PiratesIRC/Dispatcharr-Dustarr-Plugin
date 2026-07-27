@@ -17,7 +17,7 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 LEGACY = re.compile(r"metricsarr", re.IGNORECASE)
 
 # Everything whose contents can still bind something at runtime or in CI.
-SCANNED_DIRS = ("dustarr", "tests", "scripts")
+SCANNED_DIRS = ("dustarr", "tests", "scripts", ".github")
 SCANNED_FILES = ("bump_version.py", "ruff.toml", "README.md", "CLAUDE.md",
                  "pytest.ini", "requirements-dev.txt")
 SKIP_SUFFIXES = (".pyc",)
