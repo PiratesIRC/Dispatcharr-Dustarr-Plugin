@@ -32,14 +32,13 @@ separate scheduled task, not inline with the collector.
 
 ## Reading the report
 
-The page opens on the three sections you can act on — **Never watched**, **Tuned
-but never qualified**, and **Most used**. **Too new to judge**, **Least used**
-and **Excluded and unobservable** start collapsed; click a heading to open one.
-(That last section is usually the biggest by far, and it is the one you least
-often need.) Collapsing is plain HTML, so it works with JavaScript off — and if
-a browser doesn't support it, everything simply renders expanded. One caveat
-worth knowing: on some browsers find-in-page won't reach text inside a
-*collapsed* section, so expand a section before searching it.
+Every section starts collapsed, so the page opens as an index rather than a wall
+of tables: six headings, each with its count and a one-line description of what
+it holds and what to do about it. Click a heading to open one. Collapsing is
+plain HTML, so it works with JavaScript off, and a browser that does not support
+it simply renders everything expanded. One caveat worth knowing: on some
+browsers find-in-page will not reach text inside a *collapsed* section, so
+expand a section before searching it. Every section says so itself.
 
 Three charts, all drawn inline — nothing is fetched from the internet, so the
 report renders the same offline, on a TV, or as an email attachment:

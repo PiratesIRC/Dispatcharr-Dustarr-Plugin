@@ -1,5 +1,27 @@
 # Changelog
 
+## v1.26.2082008 (July 27, 2026)
+
+Report presentation, and the rename went live.
+
+- **Every section now starts collapsed.** `Never watched`, `Tuned but never
+  qualified` and `Most used` were open by default; all six are closed, so the
+  page opens as an index rather than a wall of tables.
+- **Every section carries a short description** saying what it holds and what
+  to do about it. Four had none. The two notes that could have served as one
+  (`rankings_note`, `least_used_note`) are CONDITIONAL and render only on some
+  boxes, so they can never be relied on for this; the test builds a model where
+  neither fires.
+- **Rendered copy carries no em dashes, en dashes, double hyphens or
+  contractions.** Four places used `--` where prose wanted a full stop: the
+  untrustworthy banner, the find-in-page hint, the rankings note and the
+  too-new description. In rendered text a `--` reads as an em dash.
+- Both rules are bound by tests in `tests/test_report_sections.py`, and both
+  were mutation-checked rather than trusted on a first pass.
+- `plugin.TASK_PATH` replaces the inline Celery task-path literal, bound by a
+  test to the real package directory name. It was the one renamed string
+  nothing asserted on, and a wrong path fails invisibly.
+
 ## v1.26.2081551 (July 27, 2026)
 
 Renamed the plugin from Metricsarr to Dustarr. The old name promised analytics;
