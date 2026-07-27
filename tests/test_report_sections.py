@@ -121,6 +121,18 @@ def test_render_is_newline_agnostic(rp, gw):
     assert html.replace("\r\n", "\n").count("<details") == 6
 
 
+# `%Y-%m-%d %H:%M %Z` rendered through time.localtime(): both the hour and the
+# zone name depend on the machine. The committed fixture is generated on
+# whichever box ran the script, so comparing these verbatim makes the test pass
+# only in the generating machine's timezone. CI runs in UTC and could never
+# pass. Mask them; everything else in the page is still compared byte for byte.
+_LOCAL_STAMP = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2} [A-Za-z][A-Za-z ]*")
+
+
+def _tz_agnostic(text):
+    return _LOCAL_STAMP.sub("<LOCAL-TIMESTAMP>", text.replace("\r\n", "\n"))
+
+
 def test_regenerate_the_committed_fixture(rp, gw, tmp_path):
     """The visual check leaves an artifact a later session can diff, rather
     than an unfalsifiable `I looked at it`."""
@@ -131,9 +143,23 @@ def test_regenerate_the_committed_fixture(rp, gw, tmp_path):
         "tests/fixtures/sample_report.html is missing -- regenerate it with: "
         "python scripts/render_sample.py")
     on_disk = fixture.read_text(encoding="utf-8")
-    assert on_disk.replace("\r\n", "\n") == html.replace("\r\n", "\n"), (
+    assert _tz_agnostic(on_disk) == _tz_agnostic(html), (
         "tests/fixtures/sample_report.html is stale (renderer changed) -- "
         "regenerate and commit it with: python scripts/render_sample.py")
+
+
+def test_the_fixture_comparison_is_timezone_agnostic(rp, gw):
+    """The mask above is the only reason this suite can pass off this box.
+
+    Prove it actually neutralises a zone difference rather than happening to
+    match: rewrite a rendered page as if it came from a UTC machine, and the
+    comparison must still hold.
+    """
+    html = rp.render_html(model(rp, gw, n=12, watched=4))
+    assert _LOCAL_STAMP.search(html), "no local timestamp in the page to mask"
+    as_utc = _LOCAL_STAMP.sub("1999-01-01 00:00 UTC", html)
+    assert as_utc != html
+    assert _tz_agnostic(as_utc) == _tz_agnostic(html)
 
 
 def test_every_section_starts_collapsed(rp, gw):
