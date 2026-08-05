@@ -1,6 +1,6 @@
 # Ruff config for the Dustarr plugin repo.
 #
-# Mirrors the workspace-wide <workspace>\ruff.toml conventions so
+# Mirrors the workspace-wide ruff.toml conventions so
 # `ruff check .` behaves identically whether run from inside this repo alone
 # (as CI does -- it checks out only this repo) or from within the parent
 # workspace. Do not remove: without this file, CI falls back to ruff's bare

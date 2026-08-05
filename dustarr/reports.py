@@ -341,8 +341,8 @@ def _summary_body(model):
 # written into /data/logos/, which Dispatcharr's nginx serves to the whole
 # LAN with no authentication at all -- convenient, and an unauthenticated
 # listing of every channel this household watches. It is now written next to
-# the CSV in /config/dustarr/, a bind mount the operator opens from Windows
-# (<config-mount>\dustarr\). Do not move it back under
+# the CSV in /config/dustarr/, which sits under Dispatcharr's existing bind
+# mount and so is a real folder on the host. Do not move it back under
 # /data/logos/, and do not add a URL field that would invite someone to.
 #
 # The page must still be fully self-contained (inline CSS/JS, no external

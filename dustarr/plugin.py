@@ -39,12 +39,13 @@ _LOGGER = logging.getLogger(__name__)
 PLUGIN_VERSION = "1.26.2171121"
 
 DATA_DIR = "/data/dustarr"           # plugin state (named volume)
-# Both outputs go to the SAME bind-mounted directory, which the operator opens
-# from Windows at <config-mount>\dustarr\. The HTML report used
-# to live in /data/logos/dustarr, which Dispatcharr's nginx serves to the whole
-# LAN with no authentication -- an unauthenticated listing of every channel
-# this household watches. Do not move it back.
-REPORT_DIR = "/config/dustarr"       # bind mount -> <config-mount>
+# Both outputs go to the SAME directory, under Dispatcharr's existing /config
+# bind mount, so they land in a real folder on the host that the operator can
+# open directly. The HTML report used to live in /data/logos/dustarr, which
+# Dispatcharr's nginx serves to the whole LAN with no authentication -- an
+# unauthenticated listing of every channel this household watches. Do not move
+# it back.
+REPORT_DIR = "/config/dustarr"       # bind-mounted, so reachable from the host
 CSV_DIR = "/config/dustarr"          # same directory; suffix keeps the archives apart
 
 THREAD_NAME = "dustarr-collector"
