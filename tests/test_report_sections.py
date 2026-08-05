@@ -18,12 +18,23 @@ EXPECTED_OPEN = {
 }
 
 
+def _summary_text(summary):
+    """The words in a summary line, with markup and decoration removed.
+
+    Stripping tags is not enough any more: a section heading carries an
+    aria-hidden emoji INSIDE a span, so the tag strip leaves the glyph behind
+    and every `startswith(title)` check fails. Drop anything before the first
+    ASCII letter, which is where the real title starts."""
+    text = re.sub(r"<[^>]+>", "", summary)
+    return re.sub(r"^[^A-Za-z]+", "", text).strip()
+
+
 def _sections(html):
     """Map section title -> the raw `<details ...>` open tag that introduces it."""
     out = {}
     for tag, summary in re.findall(r"(<details[^>]*>)\s*<summary>(.*?)</summary>",
                                    html, re.DOTALL):
-        text = re.sub(r"<[^>]+>", "", summary).strip()
+        text = _summary_text(summary)
         for title in EXPECTED_OPEN:
             if text.startswith(title):
                 out[title] = tag

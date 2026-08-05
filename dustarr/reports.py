@@ -21,6 +21,7 @@ Task 9 can render them there. `counts` sums to `total_channels`:
 """
 from __future__ import annotations
 
+import base64
 import csv
 import html as html_mod
 import io
@@ -302,13 +303,25 @@ def build_model(rows, usage, settings, now):
     }
 
 
-def summary_for_notify(model):
+def summary_for_notify(model, reports_built=None):
     """The allowlisted notification summary.
 
     It used to carry a `report_url` pointing at the nginx-served copy of the
     report. That copy no longer exists (see the renderer note below), so the
     key is gone rather than left holding a dead link.
+
+    `reports_built` is the running total of reports this plugin has PUBLISHED,
+    for a consumer that wants to display it. It is OMITTED rather than sent as
+    0 when the caller does not supply one: a missing key reads as "this sender
+    does not report the number", while a 0 reads as "it has never built one",
+    and a badge cannot tell those apart if the absent case is spelled 0.
     """
+    if reports_built is not None:
+        return dict(_summary_body(model), reports_built=int(reports_built))
+    return _summary_body(model)
+
+
+def _summary_body(model):
     return {
         "tracked_days": model["tracked_days"],
         "coverage": model["coverage"],
@@ -344,6 +357,46 @@ def summary_for_notify(model):
 # --------------------------------------------------------------------------
 
 REPORT_HTML = "report.html"
+
+# The project's own issue tracker, shown in the report footer. Duplicated from
+# plugin.py's ISSUES_URL rather than imported: this module must not import
+# plugin.py (that is the direction the loader depends on), and a test binds the
+# two strings together so they cannot drift apart silently.
+ISSUES_URL = "https://github.com/PiratesIRC/Dispatcharr-Dustarr-Plugin/issues"
+REPO_URL = "https://github.com/PiratesIRC/Dispatcharr-Dustarr-Plugin"
+
+LOGO_FILE = "logo.png"
+_logo_cache = []        # one-slot cache: [] not consulted yet, [value] resolved
+
+
+def logo_data_uri():
+    """-> a `data:image/png;base64,...` string, or "" if the file is unusable.
+
+    EMBEDDED, never linked. This page is opened off disk as a file:// URL and
+    is also mailed as an attachment, so a relative path resolves against
+    nothing and a remote URL is blocked by default in most mail clients (and
+    this project's repository is private, so a raw GitHub link would 404 for
+    everyone anyway). A data URI is the only form that survives both.
+
+    Returns "" rather than raising on any failure. `render_html` has no safety
+    net -- `write_report` catches OSError only -- so a missing or unreadable
+    logo must cost the header image and nothing else.
+
+    Cached because `render_html` is called per build and the file is 45 KB.
+    The cache holds the FAILURE too: a missing file should not be re-read on
+    every render.
+    """
+    if not _logo_cache:
+        try:
+            path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                LOGO_FILE)
+            with open(path, "rb") as fh:
+                encoded = base64.b64encode(fh.read()).decode("ascii")
+            _logo_cache.append(f"data:image/png;base64,{encoded}")
+        except Exception:
+            _logo_cache.append("")
+    return _logo_cache[0]
+
 
 GAP_PX = 2          # surface gap between adjacent segments
 MIN_SEG_PX = 2      # a real category must never vanish sub-pixel
@@ -621,11 +674,22 @@ _CSS = """
 }
 body { font: 15px/1.5 system-ui, -apple-system, Segoe UI, sans-serif;
        margin: 0; padding: var(--s5); background: var(--bg); color: var(--ink); }
+/* The logo sits beside the title rather than above it, so the masthead costs
+   one line of vertical space instead of three. `align-items: center` keeps the
+   disc optically centred against the two-line title block. */
+.masthead { display: flex; align-items: center; gap: var(--s3);
+            margin-bottom: var(--s5); }
+.mark { flex: none; width: 48px; height: 48px; display: block; }
 /* Headline: large type wants a tighter line box and slightly tighter
    tracking. Body copy keeps 1.5, which is where 15px over this measure is
    comfortable. */
 h1 { font-size: 22px; line-height: 1.2; letter-spacing: -.01em;
      margin: 0 0 var(--s1); }
+.masthead .sub { margin-bottom: 0; }
+.colophon { margin-top: var(--s5); padding-top: var(--s4);
+            border-top: 1px solid var(--track); color: var(--ink-dim); }
+.colophon p { margin: 0 0 var(--s1); }
+.colophon a { color: var(--never); }
 .sub { color: var(--ink-muted); font-size: 15px; margin-bottom: var(--s5); }
 .card { background: var(--raised); border: 1px solid var(--line);
         border-radius: 10px; box-shadow: var(--lift);
@@ -722,6 +786,9 @@ details[open] > summary::before { transform: rotate(90deg); }
    the number reads as data rather than as part of the label. */
 .count { font-weight: 400; color: var(--ink-dim);
          font-variant-numeric: tabular-nums; }
+/* Emoji ignore `color`, so this cannot be used to carry meaning even by
+   accident. It is spacing only. */
+.glyph { margin-right: var(--s2); }
 .hint { font-size: 15px; color: var(--ink-dim); margin: 0 0 var(--s2); }
 """
 
@@ -789,6 +856,21 @@ def _table(entries):
             f"<tbody>{''.join(body)}</tbody></table></div>")
 
 
+# Keyed on the dot class rather than the title, so a section cannot end up
+# with a glyph that disagrees with its colour. Chosen to say what the section
+# MEANS, not to decorate: the broken-channel section gets a warning rather than
+# a sad face, because those channels want fixing rather than sympathy.
+_SECTION_GLYPH = {
+    "dot-never": "\N{WASTEBASKET}",             # dead weight, the turn-off list
+    "dot-toonew": "\N{HOURGLASS WITH FLOWING SAND}",   # wait, do not judge yet
+    "dot-tuned": "\N{WARNING SIGN}",            # probably broken, not unused
+    "dot-watched": "\N{GLOWING STAR}",          # keep these
+    "dot-neutral": "",                          # two different sections share
+                                                # this class; no honest glyph
+                                                # fits both, so neither gets one
+}
+
+
 def _section(title, count, body, open_by_default, dot_class):
     """One report section as a collapsible <details>.
 
@@ -807,9 +889,16 @@ def _section(title, count, body, open_by_default, dot_class):
     """
     open_attr = " open" if open_by_default else ""
     number = "" if count is None else f' <span class="count">{int(count)}</span>'
+    # The emoji is decoration on top of the coloured dot and the words, never
+    # the only thing carrying the meaning -- same rule the palette follows, and
+    # the reason it is aria-hidden. A client with no emoji font shows a box or
+    # nothing, and the heading still reads correctly.
+    glyph = _SECTION_GLYPH.get(dot_class, "")
+    badge = (f'<span class="glyph" aria-hidden="true">{glyph}</span>'
+             if glyph else "")
     return (f'<details{open_attr}><summary>'
             f'<span class="dot {_esc(dot_class)}" aria-hidden="true"></span>'
-            f'{_esc(title)}{number}</summary>{body}</details>')
+            f'{badge}{_esc(title)}{number}</summary>{body}</details>')
 
 
 def render_html(model):
@@ -950,6 +1039,12 @@ def render_html(model):
                  False, "dot-neutral"),
     ])
 
+    # The logo is optional by construction: an empty data URI renders no <img>
+    # at all rather than a broken-image icon.
+    logo = logo_data_uri()
+    mark = (f'<img class="mark" src="{logo}" alt="" width="48" height="48">'
+            if logo else "")
+
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -959,6 +1054,9 @@ def render_html(model):
 <style>{_CSS}</style>
 </head>
 <body>
+<header class="masthead">
+{mark}
+<div>
 <h1>Dustarr - channel usage</h1>
 <div class="sub">
   Tracking since {_esc(_fmt_local(model['stats_since']))} ·
@@ -966,12 +1064,20 @@ def render_html(model):
   coverage {model['coverage']:.1%} ·
   {model['total_channels']} channels
 </div>
+</div>
+</header>
 {bar_svg}
 {bar_legend}
 <div class="caption">{caption}</div>
 {meter_row}
 {banner}
 {sections}
+<footer class="colophon">
+  <p>Built by Dustarr, a read only usage reporter for Dispatcharr. It records
+  what you watch and never changes a channel.</p>
+  <p><a href="{REPO_URL}">Source and documentation</a> ·
+  <a href="{ISSUES_URL}">Report a problem</a></p>
+</footer>
 
 <script>{_SORT_JS}</script>
 </body>

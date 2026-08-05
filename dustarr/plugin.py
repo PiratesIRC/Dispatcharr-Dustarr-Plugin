@@ -36,7 +36,7 @@ except ImportError:                     # standalone (non-package) import path
 
 _LOGGER = logging.getLogger(__name__)
 
-PLUGIN_VERSION = "1.26.2171100"
+PLUGIN_VERSION = "1.26.2171121"
 
 DATA_DIR = "/data/dustarr"           # plugin state (named volume)
 # Both outputs go to the SAME bind-mounted directory, which the operator opens
@@ -402,6 +402,12 @@ def _build_report(settings):
     # convenience export.
     published = bool(written.get("html_path"))
     html_path = written.get("html_path")
+    # Counted here and nowhere else, and ONLY on a confirmed publish, so the
+    # number means "reports that exist" rather than "times the button was
+    # pressed". Both entry points (the action and the Celery task) reach this
+    # function, so both count.
+    if published:
+        written["reports_built"] = bump_report_count()
     # A filesystem path, never a URL: the report is not served over HTTP. The
     # directory is bind-mounted, so this path is openable from Windows.
     where = html_path or REPORT_DIR
@@ -457,7 +463,7 @@ def _emit_notifications(settings, model, written):
         result["enabled"] = True
         nc = _notify_client()
         archive = written.get("archive_path")
-        summary = reports.summary_for_notify(model)
+        summary = reports.summary_for_notify(model, written.get("reports_built"))
         # `url=None`, always: the report is not published over HTTP, so there
         # is no link to send. The report reaches the operator as the emailed
         # ATTACHMENT (`archive`) and as a file on the bind mount.
@@ -604,6 +610,63 @@ def _read_scheduled_run_ts():
         return float(value) if value is not None else None
     except Exception:
         return None
+
+
+REPORT_COUNT_FILE = "report_count.json"
+
+
+def _report_count_path():
+    return os.path.join(DATA_DIR, REPORT_COUNT_FILE)
+
+
+def read_report_count():
+    """-> int, the number of reports this plugin has successfully PUBLISHED.
+
+    Degrades to 0 on a missing, unreadable or corrupt file, and on a negative
+    or non-numeric stored value. A counter is a cosmetic signal; it must never
+    be the reason a report fails to build.
+
+    Zero is the SAFE degradation here, which is the opposite of
+    `_read_scheduled_run_ts` above and worth stating so the asymmetry does not
+    read as an oversight. That function reports a PROBLEM, so an unreadable
+    file must not hide one and it degrades toward "never ran". This one feeds a
+    badge, so an unreadable file must not INVENT activity.
+    """
+    try:
+        with open(_report_count_path(), encoding="utf-8") as fh:
+            value = int(json.load(fh).get("reports_built", 0))
+        return value if value >= 0 else 0
+    except Exception:
+        return 0
+
+
+def bump_report_count():
+    """Increment the published-report counter and return the new value.
+
+    Call this ONLY after the HTML file is confirmed on disk (a truthy
+    `html_path`). `write_report` degrades rather than raising, so counting
+    before that check would count reports that do not exist -- the same shape
+    as bug-078, where a run that published nothing returned a healthy summary.
+
+    Never raises: on any failure the caller gets the value it would have had,
+    so a broken counter costs a badge increment and nothing else.
+
+    KNOWN LIMIT, deliberately not solved: this is a read-modify-write with no
+    lock, and Dispatcharr runs several uWSGI and Celery workers. Two reports
+    finishing in the same instant can lose one increment. A lock spanning file
+    I/O on the request path is a worse trade than an occasional undercount in
+    a cosmetic number, and reports are minutes apart in practice.
+    """
+    current = read_report_count()
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp = _report_count_path() + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"reports_built": current + 1}, fh)
+        os.replace(tmp, _report_count_path())
+        return current + 1
+    except Exception:
+        return current
 
 
 NOTIFY_SOURCE = "dustarr"

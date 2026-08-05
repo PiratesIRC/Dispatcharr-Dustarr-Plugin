@@ -127,6 +127,14 @@ def emit_report_result(notify_fn, summary, url, attachment_path):
         if s.get("tuned_never_qualified"):
             lines.append(f"{s['tuned_never_qualified']} tuned but never "
                          f"qualified - likely broken")
+        # The running total of reports that exist. This line is for a HUMAN
+        # reading the mail. A consumer that wants the number as data should
+        # read /data/dustarr/report_count.json instead: the vendored
+        # notify_client has a FIXED payload schema with no field for arbitrary
+        # data, so nothing structured can travel this path, and parsing prose
+        # out of a body is not a contract worth depending on.
+        if s.get("reports_built"):
+            lines.append(f"report number {s['reports_built']}")
         for alert in (s.get("alerts") or []):
             lines.append(f"! {alert}")
         kwargs = {"source": "dustarr", "event": "usage_report",

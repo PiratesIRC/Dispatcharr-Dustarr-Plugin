@@ -1,6 +1,7 @@
 import csv
 import io
 import os
+import re
 import time
 
 import pytest
@@ -366,3 +367,77 @@ def test_prune_never_touches_the_live_report(rp, gw, tmp_path):
     rdir = str(tmp_path / "r")
     rp.write_report(model(rp, gw), rdir, str(tmp_path / "c"), 1_752_770_000.0)
     assert "report.html" in os.listdir(rdir)
+
+
+# -- Logo, links and section glyphs (2026-08-05) -----------------------------
+
+def test_the_logo_is_embedded_as_a_data_uri_not_linked(rp, gw):
+    """This page opens off disk as a file:// URL and is also mailed as an
+    attachment. A relative path resolves against nothing, a remote URL is
+    blocked by default in most mail clients, and this project's repository is
+    private so a raw GitHub link would 404 for everyone. Only an embedded
+    image survives all three."""
+    html = rp.render_html(model(rp, gw))
+    assert 'src="data:image/png;base64,' in html
+    assert rp.logo_data_uri().startswith("data:image/png;base64,")
+
+
+def test_the_page_pulls_no_subresource_over_the_network(rp, gw):
+    """Links the reader can CLICK are fine. An asset the page needs in order
+    to RENDER is not: it would be missing on a TV browser with no route to the
+    internet, and stripped or blocked in mail."""
+    html = rp.render_html(model(rp, gw))
+    external = [u for u in re.findall(r'src="([^"]+)"', html)
+                if not u.startswith("data:")]
+    assert not external, external
+    assert "<link" not in html
+    assert "url(" not in html          # no CSS-referenced font or image
+
+
+def test_a_missing_logo_costs_the_image_and_nothing_else(rp, gw, monkeypatch):
+    """render_html has NO safety net: write_report catches OSError only, so
+    anything else escapes to run(). A logo that cannot be read must degrade to
+    no header image, never to a failed report."""
+    monkeypatch.setattr(rp, "LOGO_FILE", "does-not-exist.png")
+    monkeypatch.setattr(rp, "_logo_cache", [])
+    assert rp.logo_data_uri() == ""
+    html = rp.render_html(model(rp, gw))          # must not raise
+    assert "<img" not in html, "an empty data URI must render no img at all"
+    assert "Dustarr" in html
+
+
+def test_the_footer_links_to_the_repository_and_the_issue_tracker(rp, gw):
+    html = rp.render_html(model(rp, gw))
+    assert f'href="{rp.REPO_URL}"' in html
+    assert f'href="{rp.ISSUES_URL}"' in html
+
+
+def test_the_report_issue_url_matches_the_plugins_own(rp):
+    """reports.py deliberately does NOT import plugin.py (that is the
+    direction the loader depends on), so the string is duplicated. Bind the
+    two together here or they drift apart silently."""
+    import sys
+    plugin = sys.modules["dustarr_under_test.plugin"]
+    assert rp.ISSUES_URL == plugin.ISSUES_URL
+    assert rp.REPO_URL == plugin.ISSUES_URL.rsplit("/", 1)[0]
+
+
+def test_section_glyphs_are_decoration_and_never_the_only_signal(rp, gw):
+    """Same rule the palette follows. A client with no emoji font shows a box
+    or nothing, so the coloured dot and the words have to carry the meaning on
+    their own."""
+    html = rp.render_html(model(rp, gw, n=8, watched=6))
+    for summary in re.findall(r"<summary>(.*?)</summary>", html, re.DOTALL):
+        for glyph in rp._SECTION_GLYPH.values():
+            if glyph and glyph in summary:
+                assert f'aria-hidden="true">{glyph}' in summary, summary
+        # the dot is the non-emoji carrier and must be on every heading
+        assert 'class="dot ' in summary
+
+
+def test_every_glyph_is_keyed_on_a_dot_class_that_exists_in_the_css(rp):
+    """Keying on the dot class rather than the title is what stops a section
+    getting a glyph that disagrees with its colour. A typo in the key would
+    silently render no glyph at all."""
+    for dot_class in rp._SECTION_GLYPH:
+        assert f".{dot_class} {{" in rp._CSS, dot_class

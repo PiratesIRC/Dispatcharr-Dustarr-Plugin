@@ -1,5 +1,43 @@
 # Changelog
 
+## v1.26.2171121 (August 5, 2026)
+
+Branding on the report, and a counter another plugin can turn into a badge.
+
+- **The logo appears in the report header**, embedded as a base64 data URI
+  rather than linked. The page is opened off disk as a `file://` URL and is
+  also mailed as an attachment, so a relative path resolves against nothing, a
+  remote URL is blocked by default in most mail clients, and this repository
+  is private so a raw GitHub link would return 404 for everyone. Embedding is
+  the only form that survives all three. It adds about 61 KB, taking a real
+  report to roughly 546 KB against Newsflasharr's 1 MiB attachment cap.
+  A logo that cannot be read renders no image at all and never fails a build.
+- **A footer links to the repository and the issue tracker.** The URL string
+  is duplicated in `dustarr/reports.py` rather than imported from
+  `dustarr/plugin.py`, because the loader depends on that import direction; a
+  test binds the two strings together so they cannot drift.
+- **Each section heading carries an emoji**, keyed on the section's colour
+  class rather than its title so a glyph cannot disagree with its colour. They
+  are `aria-hidden` decoration on top of the coloured dot and the words, never
+  the only thing carrying the meaning, which is the same rule the palette
+  follows. The two sections sharing the neutral colour get no glyph, because
+  no honest one fits both.
+- **A published-report counter**, written to `/data/dustarr/report_count.json`
+  as `{"reports_built": N}`. It increments once per report whose HTML file was
+  confirmed on disk, from either the button or the schedule. A build that
+  failed to write does not count, which matters because the report writer
+  degrades rather than raising. It degrades to 0 on a missing, corrupt or
+  negative value, and an unwritable counter never breaks a build.
+- The notification body gained a `report number N` line for a human reading
+  the mail. **A consumer should read the file, not parse that line.**
+  `notify_client.notify()` takes a closed set of keywords and writes a fixed
+  spool schema, and it is vendored byte-identically into five projects with a
+  hash pin, so there is no structured field to put the number in and adding
+  one would be a five-project change.
+- New: `docs/newsflasharr-report-count-spec.md`, a handoff describing what
+  Newsflasharr would need to do to surface the count as a badge. Nothing in
+  Newsflasharr was changed.
+
 ## v1.26.2171100 (August 5, 2026)
 
 A visual pass over the HTML report following the Refactoring UI guidance

@@ -1667,3 +1667,99 @@ def test_report_issue_returns_the_url_persistently(plugin):
     assert r["status"] == "ok"
     assert r["file"] == plugin.ISSUES_URL
     assert plugin.ISSUES_URL in r["message"]
+
+
+# ---- The published-report counter (2026-08-05) ----------------------------
+#
+# A running total of reports that EXIST, emitted in the Newsflasharr payload so
+# a consumer can display it. Cosmetic by design: it must never be the reason a
+# report fails to build.
+
+def test_the_counter_starts_at_zero_and_increments(plugin, tmp_path, monkeypatch):
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
+    assert plugin.read_report_count() == 0
+    assert plugin.bump_report_count() == 1
+    assert plugin.bump_report_count() == 2
+    assert plugin.read_report_count() == 2
+
+
+def test_the_counter_degrades_to_zero_on_a_corrupt_file(plugin, tmp_path, monkeypatch):
+    """Zero is the SAFE degradation for a badge: an unreadable file must not
+    INVENT activity. Note this is the opposite direction from
+    _read_scheduled_run_ts, which reports a problem and so must not hide one."""
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
+    (tmp_path / plugin.REPORT_COUNT_FILE).write_text("{not json", encoding="utf-8")
+    assert plugin.read_report_count() == 0
+
+
+def test_the_counter_rejects_a_negative_stored_value(plugin, tmp_path, monkeypatch):
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
+    (tmp_path / plugin.REPORT_COUNT_FILE).write_text(
+        '{"reports_built": -5}', encoding="utf-8")
+    assert plugin.read_report_count() == 0
+
+
+def test_an_unwritable_counter_never_breaks_the_build(plugin, tmp_path, monkeypatch):
+    """The whole point of the guard: a badge is worth less than a report."""
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
+    def boom(*a, **k):
+        raise OSError("read-only")
+    monkeypatch.setattr(plugin.os, "makedirs", boom)
+    assert plugin.bump_report_count() == 0       # returns what it would have had
+
+
+def test_a_published_report_increments_the_counter(plugin, tmp_path, monkeypatch):
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(plugin, "REPORT_DIR", str(tmp_path / "config"))
+    monkeypatch.setattr(plugin, "CSV_DIR", str(tmp_path / "config"))
+    monkeypatch.setattr(plugin, "_gateway", _fake_gateway_with_no_channels)
+
+    plugin.Plugin().run("build_report", {}, {"settings": {}})
+    assert plugin.read_report_count() == 1
+    plugin.Plugin().run("build_report", {}, {"settings": {}})
+    assert plugin.read_report_count() == 2
+
+
+def test_a_report_that_was_never_published_does_not_count(plugin, monkeypatch, tmp_path):
+    """bug-078's shape: write_report DEGRADES rather than raising, so counting
+    before the html_path check would count reports that do not exist."""
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
+    _fail_html_writes(plugin, monkeypatch, tmp_path)
+    result, _, written = plugin._build_report({})
+    assert result["status"] == "error"
+    assert "reports_built" not in written
+    assert plugin.read_report_count() == 0
+
+
+def test_the_count_reaches_the_notification_payload(plugin, tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(plugin, "_notify_client", lambda: _FakeNotifyClient(calls))
+    _patch_report_dirs(plugin, monkeypatch, tmp_path)
+    monkeypatch.setattr(plugin, "_load_settings", lambda: {"notify_enabled": True})
+
+    plugin.build_report_task()
+    assert len(calls) == 1
+    assert plugin.read_report_count() == 1
+    # The vendored notify_client has a FIXED payload schema with no field for
+    # arbitrary data, so the number can only travel this path as prose. It is
+    # here for a human reading the mail; a CONSUMER reads the counter file.
+    assert "report number 1" in calls[0]["body"], calls[0]["body"]
+
+
+def test_the_counter_file_is_the_machine_readable_contract(plugin, tmp_path,
+                                                           monkeypatch):
+    """The file, not the notification, is what another plugin should read.
+
+    notify_client.notify() accepts a closed set of keywords and writes a fixed
+    spool schema, and it is vendored byte-identically into five projects with a
+    hash pin, so adding a data field there is a five-project change. A JSON
+    file in this plugin's own data directory is a contract with none of that
+    coupling: one writer, any number of readers, no schema negotiation.
+    """
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
+    plugin.bump_report_count()
+    plugin.bump_report_count()
+    import json
+    on_disk = json.loads(
+        (tmp_path / plugin.REPORT_COUNT_FILE).read_text(encoding="utf-8"))
+    assert on_disk == {"reports_built": 2}, "the file shape IS the contract"

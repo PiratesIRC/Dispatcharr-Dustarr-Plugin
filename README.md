@@ -30,6 +30,7 @@ separate scheduled task, not inline with the collector.
 | `/config/dustarr/report-<timestamp>.html` | The same report, kept as a dated archive. The last eight are retained. |
 | `/config/dustarr/report-<timestamp>.csv` | The same data as CSV, for a spreadsheet. The last eight are retained. |
 | Newsflasharr (optional) | A short message with the headline numbers, with the full HTML report attached, sent on whatever schedule you configure. See "Notifications via Newsflasharr" below. |
+| `/data/dustarr/report_count.json` | A running total of reports that have been successfully written, as `{"reports_built": N}`. It is there for another tool to read; you never need to look at it. See "Counting reports" below. |
 
 **Nothing is served over HTTP, deliberately.** Earlier versions wrote the report
 into `/data/logos/`, which Dispatcharr's own nginx serves to your whole local
@@ -199,6 +200,36 @@ Everything lives in the plugin's settings card in the Dispatcharr UI:
 - **Send notifications to Newsflasharr**: off by default. See "Notifications via
   Newsflasharr" below.
 - **Scheduled report**: off / daily / weekly / monthly, run by Celery Beat.
+
+## Counting reports
+
+Dustarr keeps a running total of the reports it has successfully written, in
+`/data/dustarr/report_count.json`:
+
+```json
+{"reports_built": 42}
+```
+
+It increments once per report whose HTML file actually reached the disk,
+whether you pressed the button or the schedule ran it. A build that failed to
+write does not count, which matters more than it sounds: the report writer
+degrades rather than raising, so a failed publish otherwise looks the same as
+a good one.
+
+It exists so another tool can display the number, for example as a badge. The
+notification email also carries a `report number N` line, but that is for a
+person reading the mail. Anything counting the number should read the file:
+the shared notification client has a fixed payload with no field for extra
+data, so nothing structured can travel that path.
+
+One honest limitation: the counter can undercount. Incrementing it is a
+read-then-write with no lock, and Dispatcharr runs several worker processes,
+so two reports finishing in the same instant can lose one increment. Locking a
+file on the request path is a worse trade than an occasional miss in a
+cosmetic number, and in practice reports are minutes apart.
+
+`docs/newsflasharr-report-count-spec.md` describes what the Newsflasharr
+plugin would need in order to turn this into a badge.
 
 ## Notifications via Newsflasharr
 
