@@ -36,11 +36,16 @@ except ImportError:                     # standalone (non-package) import path
 
 _LOGGER = logging.getLogger(__name__)
 
-PLUGIN_VERSION = "1.26.2082129"
+PLUGIN_VERSION = "1.26.2171100"
 
 DATA_DIR = "/data/dustarr"           # plugin state (named volume)
-REPORT_DIR = "/data/logos/dustarr"   # nginx serves /data/logos/** at /logos/**
-CSV_DIR = "/config/dustarr"          # bind mount -> <config-mount>
+# Both outputs go to the SAME bind-mounted directory, which the operator opens
+# from Windows at <config-mount>\dustarr\. The HTML report used
+# to live in /data/logos/dustarr, which Dispatcharr's nginx serves to the whole
+# LAN with no authentication -- an unauthenticated listing of every channel
+# this household watches. Do not move it back.
+REPORT_DIR = "/config/dustarr"       # bind mount -> <config-mount>
+CSV_DIR = "/config/dustarr"          # same directory; suffix keeps the archives apart
 
 THREAD_NAME = "dustarr-collector"
 TASK_NAME = "dustarr_build_report"
@@ -78,12 +83,13 @@ FIELDS = [
                     "collector, the schedule and whether email can actually go "
                     "out. 2) Show summary prints the headline numbers without "
                     "writing anything. 3) Build report writes the HTML report "
-                    "plus the CSV export. 4) Email report now sends that report "
-                    "through Newsflasharr, which must be installed and enabled "
-                    "with its SMTP set up and a routing rule pointing dustarr "
-                    "at smtp, and the button refuses up front if any of that is "
-                    "missing. Report an issue shows the link to the issue "
-                    "tracker. Expect a "
+                    "plus the CSV export into the config folder, and also "
+                    "emails it if Send notifications to Newsflasharr is on, "
+                    "which needs Newsflasharr installed and enabled with its "
+                    "SMTP set up and a routing rule pointing dustarr at smtp. "
+                    "The report is written either way, and the button names "
+                    "anything that stopped the mail. Report an issue shows the "
+                    "link to the issue tracker. Expect a "
                     "'not trustworthy' banner for the first 30 days: the "
                     "dataset has to be older than the unused threshold before "
                     "anything can fairly be called unused, so that banner is "
@@ -137,13 +143,6 @@ FIELDS = [
      "help_text": "Requires the Newsflasharr plugin. What routes where is "
                   "configured in Newsflasharr's routing rules, keyed on this "
                   "plugin's name."},
-    {"id": "report_base_url", "label": "Report base URL", "type": "string",
-     "default": "",
-     "description": "Base URL of your Dispatcharr UI, e.g. "
-                    "http://192.168.1.53:9191. When set, the report link "
-                    "becomes a real clickable URL instead of a bare path "
-                    "(some notification channels render a bare path as inert "
-                    "text). Leave blank to keep the bare path."},
     {"id": "report_schedule", "label": "Scheduled report", "type": "select",
      "default": "weekly",
      "options": [{"value": "off", "label": "Off"},
@@ -169,21 +168,17 @@ ACTIONS = [
      "button_label": "📊 Summary",
      "button_variant": "outline", "button_color": "blue"},
     {"id": "build_report", "label": "Build report",
-     "description": "Write the HTML report and CSV now. Does not send "
-                    "notifications - the scheduled report does.",
-     "button_label": "📈 Build",
+     "description": "Write the HTML report and CSV now, and email it with the "
+                    "file attached if notifications are on. This is the same "
+                    "job the schedule runs. With notifications off it simply "
+                    "writes the files and says so. With them on it needs "
+                    "Newsflasharr installed and enabled, with its SMTP "
+                    "configured and a routing rule sending dustarr to smtp, "
+                    "and it names anything missing. The report is written "
+                    "either way. Does NOT prove the SCHEDULE works: this runs "
+                    "in the web worker, the schedule runs on a Celery worker.",
+     "button_label": "📈 Build report",
      "button_variant": "filled", "button_color": "orange"},
-    {"id": "email_report_now", "label": "Email report now",
-     "description": "Build the report now and email it with the file attached "
-                    "- the same job the schedule runs. REQUIRES Newsflasharr "
-                    "installed and enabled, with its SMTP configured and a "
-                    "routing rule sending dustarr to smtp; this button checks "
-                    "all of that first and refuses rather than building a "
-                    "report nobody receives. Does NOT prove the SCHEDULE "
-                    "works: this runs in the web worker, the schedule runs on "
-                    "a Celery worker.",
-     "button_label": "📧 Email now",
-     "button_variant": "filled", "button_color": "cyan"},
     {"id": "report_issue", "label": "Report an issue",
      "description": "Show the link to this plugin's GitHub issue tracker. A "
                     "plugin action cannot open a browser tab, so it prints the "
@@ -394,28 +389,25 @@ def _build_report(settings):
     if not model["gate"]["ok"]:
         message += f" NOT TRUSTWORTHY: {model['gate']['alerts'][0]}"
 
-    # I4: written["url"] is always the bare REPORT_URL_PATH -- combine it with
-    # the optional report_base_url setting so the toast (and, once notify_enabled
-    # is wired up, the Newsflasharr notification) can carry a REAL clickable link
-    # instead of a bare path some notification channels render as inert text.
-    url = reports.full_report_url(thresholds.get("report_base_url"),
-                                  written.get("url") or reports.REPORT_URL_PATH)
-
     # bug-078: the counts above are computed BEFORE the write, and write_report
     # never raises (it degrades, by design), so a hardcoded "ok" here reported a
     # perfectly healthy-looking summary for a run that published NOTHING -- the
-    # live symptom when /data/logos/dustarr was root-owned and the Celery
+    # live symptom when the report directory was root-owned and the Celery
     # worker runs as `dispatch`. The only evidence was report.html's unmoved
     # mtime. Status must reflect the PUBLISH, not the computation.
     #
     # write_report returns early on an HTML failure, so a falsy html_path is the
     # reliable "nothing was published" signal. A CSV-only failure stays a
-    # degraded success on purpose: the nginx-served HTML report is the product,
-    # the CSV is a convenience export to a bind mount.
+    # degraded success on purpose: the HTML report is the product, the CSV is a
+    # convenience export.
     published = bool(written.get("html_path"))
+    html_path = written.get("html_path")
+    # A filesystem path, never a URL: the report is not served over HTTP. The
+    # directory is bind-mounted, so this path is openable from Windows.
+    where = html_path or REPORT_DIR
     result = {"status": "ok" if published else "error",
-              "message": message + f" Report: {url}",
-              "file": written.get("html_path") or url}
+              "message": message + f" Report: {where}",
+              "file": where}
     if written.get("error"):
         result["message"] += f" ({written['error']})"
     if not published:
@@ -464,15 +456,13 @@ def _emit_notifications(settings, model, written):
             return result
         result["enabled"] = True
         nc = _notify_client()
-        base = (thresholds.get("report_base_url") or "").strip()
         archive = written.get("archive_path")
-        url = None
-        if base and archive:
-            url = base.rstrip("/") + "/logos/dustarr/" + os.path.basename(archive)
-        summary = reports.summary_for_notify(
-            model, reports.full_report_url(base, reports.REPORT_URL_PATH))
+        summary = reports.summary_for_notify(model)
+        # `url=None`, always: the report is not published over HTTP, so there
+        # is no link to send. The report reaches the operator as the emailed
+        # ATTACHMENT (`archive`) and as a file on the bind mount.
         emitted, why = notify_report.emit_report_result(
-            nc.notify, summary, url, archive)
+            nc.notify, summary, None, archive)
         result["report_emitted"] = bool(emitted)
         if not emitted:
             # `error` was previously set ONLY by this function's own except,
@@ -866,12 +856,9 @@ class Plugin:
 
         try:
             if action == "build_report":
-                result, _, _ = _build_report(settings)
-                return result
+                return self._build_and_email(settings)
             if action == "show_summary":
                 return self._show_summary(settings)
-            if action == "email_report_now":
-                return self._email_report_now(settings)
             if action == "validate_settings":
                 return self._validate(settings)
             if action == "report_issue":
@@ -898,67 +885,79 @@ class Plugin:
                 "message": f"Report a bug or request a feature: {ISSUES_URL}",
                 "file": ISSUES_URL}
 
-    def _email_report_now(self, settings):
+    def _build_and_email(self, settings):
         """The scheduled job, on demand: build -> verify it published -> emit.
 
-        Deliberately the SAME three steps as build_report_task, so a manual send
+        This was two buttons, `Build report` and `Email report now`, whose only
+        difference was whether the emit step ran. Two buttons for one job made
+        the operator decide something the settings already answer: the
+        `notify_enabled` toggle says whether this box emails its reports, so
+        the button does not need to ask again.
+
+        Deliberately the SAME three steps as build_report_task, so a manual run
         is a REAL report rather than a re-send of an old file. It does NOT write
         `last_scheduled_run_ts` -- only the scheduled task may, or this button
         would mask a dead scheduler exactly as Newsflasharr's provenance-blind
         `last_attachment_delivered_ts` already does.
 
+        WHAT CHANGED WITH THE MERGE, and it is a real behaviour change: the old
+        email button ran its readiness PREFLIGHT before building and refused
+        outright, because building a report nobody could receive was wasted
+        work. Here the report is the point and is never wasted, so the report
+        is ALWAYS written first and the readiness problems are reported
+        afterwards, next to a `file` the operator can still open. Notifications
+        being OFF is therefore no longer an error at all -- the operator did
+        not ask for mail -- where the old email button had to call it one.
+
         The result rows are evaluated IN ORDER and are not mutually exclusive:
         `report_emitted=True` with `error` set is reachable (the report emit
         succeeds, then the gate/state block raises), so `error` outranks it.
         """
-        # PREFLIGHT, before any work. Building a report and then discovering
-        # nothing can send it wastes the run and reads as success in the two
-        # cases that matter most: notifications off, and a missing routing rule
-        # (which spools happily and delivers elsewhere).
-        blockers = []
+        result, model, written = _build_report(settings)
+        html_path = written.get("html_path")
+
+        # bug-078: never notify about a report that does not exist. `result`
+        # already carries the red `error` key for this case, so return it whole
+        # rather than rebuilding the wording here.
+        if not html_path:
+            return result
+
+        # Notifications off is the normal state for an operator who just wants
+        # the file. Say what happened and stop; nothing is wrong.
         if not coerce_settings(settings).get("notify_enabled"):
-            blockers.append("Notifications are off: turn on 'Send "
-                            "notifications to Newsflasharr'.")
-        blockers.extend(_newsflasharr_readiness())
+            return {"status": "ok",
+                    "message": (result["message"] + " Notifications are off, "
+                                "so nothing was emailed."),
+                    "file": html_path}
+
+        # Notifications ARE on, so the operator expects mail. Everything below
+        # is a way for that to fail silently, which is why each one is `error`
+        # (the only persistent red surface) rather than just `status`.
+        blockers = _newsflasharr_readiness()
         if not blockers and not _notifier_alive():
             blockers.append("Newsflasharr's collector has not ticked recently, "
                             "so a spooled event would sit unsent.")
         if blockers:
-            msg = ("Cannot email the report yet. " + " ".join(blockers)
-                   + " Nothing was built or sent.")
-            return {"status": "error", "message": msg, "error": msg}
-
-        result, model, written = _build_report(settings)
-
-        # bug-078: never notify about a report that does not exist.
-        if not written.get("html_path"):
-            reason = written.get("error") or "unknown write failure"
-            return {"status": "error",
-                    "message": f"Report was NOT published: {reason}",
-                    "error": f"Report was NOT published: {reason}. Nothing was "
-                             f"emailed."}
+            msg = ("Report built, but it cannot be emailed. "
+                   + " ".join(blockers))
+            return {"status": "error", "message": msg, "error": msg,
+                    "file": html_path}
 
         emit = _emit_notifications(settings, model, written) or {}
 
         if emit.get("error"):
             msg = f"Report built, but the notification failed: {emit['error']}"
             return {"status": "error", "message": msg, "error": msg,
-                    "file": written.get("html_path")}
-        if not emit.get("enabled"):
-            msg = ("Report built and published, but notifications are off -- "
-                   "nothing was emailed. Turn on 'Send notifications to "
-                   "Newsflasharr'.")
-            return {"status": "error", "message": msg, "error": msg,
-                    "file": written.get("html_path")}
+                    "file": html_path}
         if not emit.get("report_emitted"):
             msg = "Report built, but Newsflasharr did not accept the event."
             return {"status": "error", "message": msg, "error": msg,
-                    "file": written.get("html_path")}
+                    "file": html_path}
         if not _notifier_alive():
             msg = ("Report spooled, but Newsflasharr's collector has not ticked "
-                   "recently -- nothing will send it.")
+                   "recently, so nothing will send it.")
             return {"status": "error", "message": msg, "error": msg,
-                    "file": written.get("html_path")}
+                    "file": html_path}
 
         # QUEUED, never "sent": notify() returning True means durably spooled;
         # Newsflasharr's collector delivers later on its own retry ladder, and
@@ -967,7 +966,7 @@ class Plugin:
                 "message": ("Report built and queued for delivery to "
                             "Newsflasharr. The honesty-gate check ran too, as "
                             "it does on the schedule."),
-                "file": written.get("html_path")}
+                "file": html_path}
 
     def _show_summary(self, settings):
         thresholds = coerce_settings(settings)
@@ -1009,11 +1008,6 @@ class Plugin:
                 msg = redaction.redact(
                     f"Excluded name regex does not compile: {exc}")
                 return {"status": "error", "message": msg, "error": msg}
-
-        base_url = (thresholds.get("report_base_url") or "").strip()
-        if base_url and not base_url.startswith(("http://", "https://")):
-            msg = "Report base URL must start with http:// or https://"
-            return {"status": "error", "message": msg, "error": msg}
 
         # sync_schedule already ran once in run() before dispatch (I3) -- that
         # is the single arming site. Calling it again here would just arm the

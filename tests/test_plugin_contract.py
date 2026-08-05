@@ -89,7 +89,9 @@ def test_webhook_surface_is_gone_and_notify_toggle_present():
     assert "notify_enabled" in field_ids
     assert "webhook_url" not in field_ids
     assert "webhook_format" not in field_ids
-    assert "report_base_url" in field_ids          # kept: the notify url uses it
+    # Removed with the HTTP hosting: there is no report URL to build a base
+    # for, and a leftover field would invite someone to serve the report again.
+    assert "report_base_url" not in field_ids
     action_ids = [a["id"] for a in plugin.ACTIONS]
     assert "send_webhook_now" not in action_ids
     nf = next(f for f in plugin.FIELDS if f["id"] == "notify_enabled")
@@ -104,7 +106,9 @@ def test_webhook_surface_is_gone_and_notify_toggle_present():
 
 VALID_ACTION_KEYS = {"id", "label", "description", "confirm", "button_label",
                      "button_variant", "button_color", "events"}
-ACTION_IDS = {"build_report", "email_report_now", "show_summary",
+# `email_report_now` merged into `build_report`: one job, one button. The
+# notify_enabled setting already says whether this box emails its reports.
+ACTION_IDS = {"build_report", "show_summary",
               "validate_settings", "report_issue"}
 
 
@@ -159,11 +163,12 @@ def test_report_issue_action_carries_the_real_repository_url():
     assert any(a["id"] == "report_issue" for a in plugin.ACTIONS)
 
 
-def test_email_action_states_its_newsflasharr_requirement():
+def test_build_report_action_states_its_newsflasharr_requirement():
     """If the checks were ever removed, the description is the fallback the
-    operator reads. It must name what is required either way."""
+    operator reads. It must name what is required either way. This moved from
+    the separate `email_report_now` action when the two buttons were merged."""
     plugin = load_plugin()
     desc = next(a for a in plugin.ACTIONS
-                if a["id"] == "email_report_now")["description"].lower()
+                if a["id"] == "build_report")["description"].lower()
     assert "newsflasharr" in desc
     assert "smtp" in desc

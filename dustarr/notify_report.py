@@ -4,7 +4,7 @@ Consumes the report `model` dict (`model["gate"]["ok"|"alerts"]`,
 `model["tracked_days"]`, `model["counts"]`, `model["coverage"]`,
 `model["total_channels"]`) and a `summary` dict (`reports.summary_for_notify`:
 tracked_days, coverage, total_channels, never_watched,
-tuned_never_qualified, top, report_url, alerts). Produces the two builder
+tuned_never_qualified, top, alerts). Produces the two builder
 functions a later task wires into the Celery report task, plus tiny
 file-backed state for the honesty-gate alert/resolve pairing. Stdlib only,
 no imports of any other dustarr module, no Django -- `notify_fn` is

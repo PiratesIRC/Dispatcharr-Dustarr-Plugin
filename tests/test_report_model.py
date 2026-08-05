@@ -157,12 +157,14 @@ def test_gate_result_is_attached_to_the_model(rp, gw):
 
 def test_summary_for_notify_is_allowlisted(rp, gw):
     model = rp.build_model(rows(gw, 10), watched(6), SETTINGS, NOW)
-    summary = rp.summary_for_notify(model, "http://x/report.html")
+    summary = rp.summary_for_notify(model)
     assert set(summary) <= {"tracked_days", "coverage", "total_channels",
                             "never_watched", "tuned_never_qualified", "top",
-                            "report_url", "alerts"}
+                            "alerts"}
     assert isinstance(summary["never_watched"], int)   # a COUNT, not the list
-    assert summary["report_url"] == "http://x/report.html"
+    # No report_url: the report is not published over HTTP, so there is no
+    # link to send and no dead one to send either.
+    assert "report_url" not in summary
     # I2: the per-entry shape of `top` is unprotected by the top-level check
     # above -- lock it down explicitly so uuid/group/last_watched/tune_count/
     # reason (which could carry provider-adjacent identifiers) can never leak
@@ -266,7 +268,7 @@ def test_too_new_is_a_peer_count_excluded_from_never_watched(rp, gw):
             + model["counts"]["tuned_never_qualified"] + model["counts"]["watched"]
             + model["counts"]["excluded"] + model["counts"]["unobservable"]) == 7
 
-    summary = rp.summary_for_notify(model, "http://x/report.html")
+    summary = rp.summary_for_notify(model)
     assert summary["never_watched"] == 2
 
 

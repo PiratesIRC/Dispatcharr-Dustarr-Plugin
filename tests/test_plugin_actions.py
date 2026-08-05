@@ -108,9 +108,12 @@ def test_fields_include_every_setting_the_code_reads(plugin):
     required = {"poll_interval_s", "min_watch_seconds", "client_gap_grace_s",
                 "merge_gap_s", "top_n", "never_watched_ceiling",
                 "unused_threshold_days", "exclude_auto_created", "exclude_groups",
-                "exclude_name_regex", "notify_enabled", "report_base_url",
+                "exclude_name_regex", "notify_enabled",
                 "report_schedule"}
     assert required <= ids
+    # The report is no longer published over HTTP, so there is no base URL to
+    # configure and no link for the setting to build.
+    assert "report_base_url" not in ids
 
 
 def test_select_fields_use_string_option_values(plugin):
@@ -138,25 +141,14 @@ def test_validate_settings_passes_on_defaults(plugin, monkeypatch):
     assert result["status"] == "ok"
 
 
-def test_validate_settings_rejects_report_base_url_without_scheme(plugin):
-    result = plugin.Plugin().run("validate_settings", {},
-                                 {"settings": {"report_base_url": "192.168.1.53:9191"}})
-    assert result["status"] == "error"
-    assert "report base url" in result["message"].lower()
-    assert "http" in result["message"].lower()
-
-
-def test_validate_settings_accepts_report_base_url_with_http_scheme(plugin, monkeypatch):
+def test_validate_settings_ignores_a_stale_stored_report_base_url(plugin, monkeypatch):
+    """Dispatcharr never prunes a stored setting when its field is removed, so
+    the old value survives in the DB forever. It must be inert, not an error:
+    there is nothing the operator could do about it from the UI."""
     _stub_health(plugin, monkeypatch)
-    result = plugin.Plugin().run("validate_settings", {},
-                                 {"settings": {"report_base_url": "http://192.168.1.53:9191"}})
-    assert result["status"] == "ok"
-
-
-def test_validate_settings_accepts_report_base_url_with_https_scheme(plugin, monkeypatch):
-    _stub_health(plugin, monkeypatch)
-    result = plugin.Plugin().run("validate_settings", {},
-                                 {"settings": {"report_base_url": "https://example.com"}})
+    result = plugin.Plugin().run(
+        "validate_settings", {},
+        {"settings": {"report_base_url": "192.168.1.53:9191"}})
     assert result["status"] == "ok"
 
 
@@ -236,7 +228,9 @@ def test_actions_expose_the_expected_ids(plugin):
     ids = {a["id"] for a in plugin.ACTIONS}
     # EQUALITY, not a subset: a subset check passes when an action is dropped,
     # renamed or silently rejected by Dispatcharr's serializer.
-    assert ids == {"build_report", "email_report_now", "show_summary",
+    # `email_report_now` was merged INTO `build_report`: one job, one button,
+    # and the notify_enabled setting already says whether to email.
+    assert ids == {"build_report", "show_summary",
                    "validate_settings", "report_issue"}
 
 
@@ -749,16 +743,15 @@ def test_coerce_settings_falls_back_to_default_on_negative_infinity(plugin):
     assert out["poll_interval_s"] == 15
 
 
-# ---- I4 (this fix wave): report_base_url turns the report link real -------
+# ---- The report is a file on a bind mount, never an HTTP URL --------------
 #
-# Not to be confused with the "I4" label above (select-value validation) --
-# that was a prior fix wave's finding, kept for its own history.
-
-def test_report_base_url_field_exists_and_defaults_to_empty(plugin):
-    field = next(f for f in plugin.FIELDS if f["id"] == "report_base_url")
-    assert field["default"] == ""
-    assert field["type"] == "string"
-
+# It used to be written into /data/logos/dustarr, which Dispatcharr's nginx
+# serves to the whole LAN with no authentication -- an unauthenticated listing
+# of every channel this household watches. These tests are the guard against
+# it creeping back.
+#
+# (An earlier "I4" fix wave added a report_base_url setting to turn that path
+# into a clickable link; it and its tests are gone with the hosting.)
 
 def _fake_gateway_with_no_channels():
     class FakeGateway:
@@ -771,29 +764,42 @@ def _fake_gateway_with_no_channels():
     return FakeGateway()
 
 
-def test_build_report_message_uses_the_bare_path_when_base_url_is_unset(
-        plugin, tmp_path, monkeypatch):
+def test_the_report_directories_are_not_under_the_nginx_served_logos_path(plugin):
+    """/data/logos/** is served by Dispatcharr's nginx to the whole LAN with no
+    authentication. Nothing this plugin writes may go there."""
+    assert "/logos" not in plugin.REPORT_DIR
+    assert "/logos" not in plugin.CSV_DIR
+
+
+def test_build_report_reports_a_filesystem_path_not_a_url(plugin, tmp_path,
+                                                          monkeypatch):
     monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setattr(plugin, "REPORT_DIR", str(tmp_path / "logos"))
+    monkeypatch.setattr(plugin, "REPORT_DIR", str(tmp_path / "config"))
     monkeypatch.setattr(plugin, "CSV_DIR", str(tmp_path / "config"))
     monkeypatch.setattr(plugin, "_gateway", _fake_gateway_with_no_channels)
 
     result = plugin.Plugin().run("build_report", {}, {"settings": {}})
-    assert result["message"].endswith("Report: " + plugin.reports.REPORT_URL_PATH)
+    written = str(tmp_path / "config" / "report.html")
+    assert result["file"] == written
+    assert "Report: " + written in result["message"]
+    assert "http://" not in result["message"]
+    assert "/logos/" not in result["message"]
 
 
-def test_build_report_message_uses_the_full_url_when_base_is_set(plugin, tmp_path,
-                                                                  monkeypatch):
+def test_build_report_ignores_a_stale_stored_report_base_url(plugin, tmp_path,
+                                                             monkeypatch):
+    """A removed field's value survives in Dispatcharr's DB forever. It must
+    not be able to put a URL back into the message."""
     monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setattr(plugin, "REPORT_DIR", str(tmp_path / "logos"))
+    monkeypatch.setattr(plugin, "REPORT_DIR", str(tmp_path / "config"))
     monkeypatch.setattr(plugin, "CSV_DIR", str(tmp_path / "config"))
     monkeypatch.setattr(plugin, "_gateway", _fake_gateway_with_no_channels)
 
     result = plugin.Plugin().run(
         "build_report", {},
         {"settings": {"report_base_url": "http://192.168.1.53:9191"}})
-    expected = "http://192.168.1.53:9191" + plugin.reports.REPORT_URL_PATH
-    assert expected in result["message"]
+    assert "192.168.1.53" not in result["message"]
+    assert "http://" not in result["message"]
 
 
 # ---- I5: the collector loop has NO observability on an escaping exception --
@@ -916,7 +922,10 @@ def test_toggle_on_emits_report_and_ledgerable_event(plugin, tmp_path, monkeypat
     assert kw["source"] == "dustarr"
     assert kw["event"] == "usage_report"
     assert kw["attachment"]                     # written["archive_path"]
-    assert kw["url"].startswith("http://192.168.1.53:9191")
+    # No `url` key at all: the report is not published over HTTP, so the
+    # attachment is how it reaches the operator. The stale stored
+    # report_base_url above must not be able to reintroduce one.
+    assert "url" not in kw
 
 
 def test_a_raising_notify_never_fails_the_task(plugin, monkeypatch):
@@ -956,15 +965,21 @@ def test_a_raising_notify_fn_never_fails_the_task_either(plugin, monkeypatch):
     plugin._emit_notifications({"notify_enabled": True}, model, written)
 
 
-def test_the_interactive_action_does_not_emit(plugin, tmp_path, monkeypatch):
+def test_the_interactive_action_does_not_emit_when_notifications_are_off(
+        plugin, tmp_path, monkeypatch):
+    """Before the two buttons were merged, `build_report` NEVER emitted and
+    `email_report_now` always did. Now the notify_enabled setting decides, so
+    the no-emit case is the one where the operator turned notifications off."""
     calls = []
     monkeypatch.setattr(plugin, "_notify_client", lambda: _FakeNotifyClient(calls))
     _patch_report_dirs(plugin, monkeypatch, tmp_path)
 
     result = plugin.Plugin().run(
-        "build_report", {}, {"settings": {"notify_enabled": True}})
+        "build_report", {}, {"settings": {"notify_enabled": False}})
     assert result["status"] == "ok"
     assert calls == []
+    assert "notifications are off" in result["message"].lower()
+    assert not result.get("error"), "not emailing was the operator's choice"
 
 
 def test_gate_state_round_trips_through_the_task(plugin, tmp_path, monkeypatch):
@@ -1262,14 +1277,6 @@ def test_the_existing_regex_error_now_sets_the_error_key(plugin, monkeypatch):
     assert r.get("error"), "a failure with no `error` key renders GREEN"
 
 
-def test_the_existing_base_url_error_now_sets_the_error_key(plugin, monkeypatch):
-    _stub_health(plugin, monkeypatch)
-    r = plugin.Plugin().run("validate_settings", {},
-                            {"settings": {"report_base_url": "192.168.1.1:9191"}})
-    assert r["status"] == "error"
-    assert r.get("error")
-
-
 def test_a_failed_publish_sets_the_error_key(plugin, monkeypatch, tmp_path):
     _fail_html_writes(plugin, monkeypatch, tmp_path)
     result, _, _ = plugin._build_report({})
@@ -1371,13 +1378,25 @@ def test_a_refused_emit_now_carries_a_reason(plugin, monkeypatch):
 
 
 def _stub_build(plugin, monkeypatch, html_path="/tmp/report.html", err=None):
+    """Stand in for _build_report, matching its real return contract.
+
+    That contract includes bug-078's guarantee: on a failed publish the result
+    carries an `error` key, because `status` renders nowhere in Dispatcharr's
+    plugin card and a failure without `error` is pixel-identical to success.
+    `_build_and_email` returns that result WHOLE rather than rewording it, so a
+    stub that omitted `error` would quietly test a different contract than the
+    one the real code has (test_a_failed_publish_sets_the_error_key covers the
+    real function).
+    """
     written = {"html_path": html_path, "archive_path": "/tmp/report-1.html"}
     if err:
         written["error"] = err
+    result = {"status": "ok" if html_path else "error", "message": "built",
+              "file": html_path}
+    if not html_path:
+        result["error"] = f"Report was NOT published: {err or 'unknown'}"
     monkeypatch.setattr(plugin, "_build_report", lambda s: (
-        {"status": "ok" if html_path else "error", "message": "built",
-         "file": html_path},
-        _minimal_model(ok=True, tracked_days=45), written))
+        result, _minimal_model(ok=True, tracked_days=45), written))
 
 
 def _stub_email_preflight(plugin, monkeypatch, alive=True):
@@ -1392,7 +1411,7 @@ def _stub_email_preflight(plugin, monkeypatch, alive=True):
     return {"notify_enabled": True}
 
 
-def test_email_report_now_runs_the_job_and_says_queued(plugin, monkeypatch, tmp_path):
+def test_build_report_runs_the_job_and_says_queued(plugin, monkeypatch, tmp_path):
     monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
     _stub_build(plugin, monkeypatch)
     monkeypatch.setattr(plugin, "_emit_notifications", lambda *a, **k: {
@@ -1400,7 +1419,7 @@ def test_email_report_now_runs_the_job_and_says_queued(plugin, monkeypatch, tmp_
     monkeypatch.setattr(plugin, "_notifier_alive", lambda: True)
 
     st = _stub_email_preflight(plugin, monkeypatch)
-    r = plugin.Plugin().run("email_report_now", {}, {"settings": st})
+    r = plugin.Plugin().run("build_report", {}, {"settings": st})
     assert r["status"] == "ok"
     assert not r.get("error")
     import re as _re
@@ -1409,7 +1428,7 @@ def test_email_report_now_runs_the_job_and_says_queued(plugin, monkeypatch, tmp_
         "notify() means SPOOLED, not delivered -- claiming 'sent' is the lie"
 
 
-def test_email_report_now_does_not_stamp_the_schedule(plugin, monkeypatch, tmp_path):
+def test_build_report_does_not_stamp_the_schedule(plugin, monkeypatch, tmp_path):
     """The button must never satisfy the schedule-health signal, or it masks a
     dead scheduler exactly as the attachment timestamp already does."""
     monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
@@ -1418,11 +1437,11 @@ def test_email_report_now_does_not_stamp_the_schedule(plugin, monkeypatch, tmp_p
         "enabled": True, "report_emitted": True, "error": None})
     monkeypatch.setattr(plugin, "_notifier_alive", lambda: True)
     st = _stub_email_preflight(plugin, monkeypatch)
-    plugin.Plugin().run("email_report_now", {}, {"settings": st})
+    plugin.Plugin().run("build_report", {}, {"settings": st})
     assert plugin._read_scheduled_run_ts() is None
 
 
-def test_email_report_now_refuses_to_emit_when_nothing_was_published(
+def test_build_report_refuses_to_emit_when_nothing_was_published(
         plugin, monkeypatch, tmp_path):
     """bug-078: never notify about a report that does not exist."""
     monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
@@ -1431,46 +1450,54 @@ def test_email_report_now_refuses_to_emit_when_nothing_was_published(
     monkeypatch.setattr(plugin, "_emit_notifications",
                         lambda *a, **k: calls.append(a) or {})
     st = _stub_email_preflight(plugin, monkeypatch)
-    r = plugin.Plugin().run("email_report_now", {}, {"settings": st})
+    r = plugin.Plugin().run("build_report", {}, {"settings": st})
     assert calls == [], "it must NOT emit when nothing was published"
     assert r["status"] == "error"
     assert r.get("error") and "Permission denied" in r["error"]
 
 
-def test_email_report_now_reports_that_notifications_are_off(plugin, monkeypatch, tmp_path):
+def test_build_report_says_so_when_notifications_are_off_but_does_not_error(
+        plugin, monkeypatch, tmp_path):
+    """The old `Email report now` button called this an error, correctly: mail
+    was the whole ask. The merged button's ask is the REPORT, so notifications
+    being off is an ordinary outcome to state, not a failure to flag red."""
     monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
     _stub_build(plugin, monkeypatch)
-    monkeypatch.setattr(plugin, "_emit_notifications", lambda *a, **k: {
-        "enabled": False, "report_emitted": False, "error": None})
-    r = plugin.Plugin().run("email_report_now", {}, {"settings": {}})
-    assert r["status"] == "error"
-    assert "notifications are off" in r["error"].lower()
+    emitted = []
+    monkeypatch.setattr(plugin, "_emit_notifications",
+                        lambda *a, **k: emitted.append(1) or {})
+    r = plugin.Plugin().run("build_report", {}, {"settings": {}})
+    assert r["status"] == "ok"
+    assert not r.get("error")
+    assert "notifications are off" in r["message"].lower()
+    assert emitted == [], "nothing should be spooled with notifications off"
+    assert r["file"] == "/tmp/report.html", "the report is still returned"
 
 
-def test_email_report_now_reports_a_refusal_with_its_reason(plugin, monkeypatch, tmp_path):
+def test_build_report_reports_a_refusal_with_its_reason(plugin, monkeypatch, tmp_path):
     monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
     _stub_build(plugin, monkeypatch)
     monkeypatch.setattr(plugin, "_emit_notifications", lambda *a, **k: {
         "enabled": True, "report_emitted": False, "error": "spool full"})
     st = _stub_email_preflight(plugin, monkeypatch)
-    r = plugin.Plugin().run("email_report_now", {}, {"settings": st})
+    r = plugin.Plugin().run("build_report", {}, {"settings": st})
     assert r["status"] == "error"
     assert "spool full" in r["error"]
 
 
-def test_email_report_now_reports_a_dead_collector(plugin, monkeypatch, tmp_path):
+def test_build_report_reports_a_dead_collector(plugin, monkeypatch, tmp_path):
     """Spooled is not queued if nothing will ever collect it."""
     monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
     _stub_build(plugin, monkeypatch)
     monkeypatch.setattr(plugin, "_emit_notifications", lambda *a, **k: {
         "enabled": True, "report_emitted": True, "error": None})
     st = _stub_email_preflight(plugin, monkeypatch, alive=False)
-    r = plugin.Plugin().run("email_report_now", {}, {"settings": st})
+    r = plugin.Plugin().run("build_report", {}, {"settings": st})
     assert r["status"] == "error"
     assert "collector" in r["error"].lower()
 
 
-def test_email_report_now_never_raises(plugin, monkeypatch, tmp_path):
+def test_build_report_never_raises(plugin, monkeypatch, tmp_path):
     """Through run(), so the catch-all's redaction is what is asserted."""
     monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
 
@@ -1478,12 +1505,12 @@ def test_email_report_now_never_raises(plugin, monkeypatch, tmp_path):
         raise RuntimeError("http://host/live/secretuser/secretpass/x")
 
     monkeypatch.setattr(plugin, "_build_report", boom)
-    r = plugin.Plugin().run("email_report_now", {}, {"settings": {}})
+    r = plugin.Plugin().run("build_report", {}, {"settings": {}})
     assert r["status"] == "error"
     assert "secretpass" not in r["message"]
 
 
-def test_email_report_now_still_errors_on_a_refusal_with_NO_reason(plugin, monkeypatch, tmp_path):
+def test_build_report_still_errors_on_a_refusal_with_NO_reason(plugin, monkeypatch, tmp_path):
     """The `report_emitted` row is a BACKSTOP: today every refusal carries a
     reason, so the `error` row above catches it first (a mutation deleting this
     branch survived until this test existed). It guards the shape where a future
@@ -1495,7 +1522,7 @@ def test_email_report_now_still_errors_on_a_refusal_with_NO_reason(plugin, monke
         "enabled": True, "report_emitted": False, "error": None})
     monkeypatch.setattr(plugin, "_notifier_alive", lambda: True)
     st = _stub_email_preflight(plugin, monkeypatch)
-    r = plugin.Plugin().run("email_report_now", {}, {"settings": st})
+    r = plugin.Plugin().run("build_report", {}, {"settings": st})
     assert r["status"] == "error"
     assert r.get("error") and "did not accept" in r["error"]
 
@@ -1611,21 +1638,28 @@ def test_readiness_survives_unparseable_routing_rules(plugin, monkeypatch):
     assert any("routing rule" in p for p in plugin._newsflasharr_readiness())
 
 
-def test_email_preflight_refuses_before_building_anything(plugin, monkeypatch, tmp_path):
-    """The point of the preflight: no report is built when nothing can send it."""
+def test_email_readiness_is_reported_but_the_report_is_still_built(
+        plugin, monkeypatch, tmp_path):
+    """The merge inverted this deliberately. The old `Email report now` button
+    ran the readiness check FIRST and built nothing, because a report nobody
+    could receive was wasted work. The merged button's product IS the report,
+    so it always writes the files and reports the mail problem next to a `file`
+    the operator can open."""
     monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
-    built = []
-    monkeypatch.setattr(plugin, "_build_report",
-                        lambda *a, **k: built.append(1) or (None, None, None))
+    _stub_build(plugin, monkeypatch)
+    emitted = []
+    monkeypatch.setattr(plugin, "_emit_notifications",
+                        lambda *a, **k: emitted.append(1) or {})
     monkeypatch.setattr(plugin, "_newsflasharr_readiness",
                         lambda: ["Newsflasharr is not installed, and it is what "
                                  "actually sends the mail."])
-    r = plugin.Plugin().run("email_report_now", {},
+    r = plugin.Plugin().run("build_report", {},
                             {"settings": {"notify_enabled": True}})
-    assert built == [], "it must not build a report it cannot send"
+    assert emitted == [], "it must not spool an event nothing can send"
     assert r["status"] == "error"
     assert r["error"] == r["message"]
     assert "not installed" in r["error"]
+    assert r["file"] == "/tmp/report.html", "the report was still written"
 
 
 def test_report_issue_returns_the_url_persistently(plugin):

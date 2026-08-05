@@ -1,5 +1,97 @@
 # Changelog
 
+## v1.26.2171100 (August 5, 2026)
+
+A visual pass over the HTML report following the Refactoring UI guidance
+(github.com/LovroPodobnik/refactoring-ui-skill). Structure, copy, charts and
+the pinned colour palette are unchanged; this is the token layer underneath
+them.
+
+- **Spacing is a scale now.** Fourteen hand-picked margin, padding and gap
+  values became five steps (4, 8, 12, 16, 24 px), each about a third apart. A
+  linear ramp makes small steps look identical and large ones look arbitrary.
+- **Text hierarchy moved from `opacity` to grey tokens.** Six rules faded text
+  with `opacity`. That is not wrong, and measurement says the old values
+  cleared the 4.5:1 floor (4.58 to 7.78), so this is a predictability change
+  rather than a contrast fix: an opacity value paints a different colour on
+  every surface it lands on, so the ratio silently moves whenever a background
+  changes, and the fade applies to anything nested inside. The replacements
+  are measured, with the weakest at 5.24:1. The one remaining `opacity` is a
+  fill blend on a decorative chart tick, which is not text.
+- **Light and dark now differ only in token values.** The dark block used
+  three `!important` overrides to win specificity fights it should not have
+  been in. Fourteen one-off hex values became a named ramp.
+- **Zebra striping existed in dark mode only**, so the two themes rendered
+  visibly different tables. One rule, one token, both modes.
+- **Table rows are roomier** (8 px by 12 px, was 6 px by 10 px), which suits
+  the stated 10-foot TV reading distance.
+- **One type size instead of two small ones.** 14 px sat 7% from the 15 px
+  body size, which reads as an accident rather than a decision. The scale is
+  15 / 17 / 22, and supporting text is separated by colour. Nothing shrank.
+- **The page heading has a tighter line box and tracking**, which is what
+  large type wants; body copy keeps 1.5.
+- Cards and the untrustworthy-data banner gained a two-part shadow.
+- Four new tests in `tests/test_report_charts.py` (the chart and CSS guards)
+  hold the token layer: no literal colour in a rule, no off-scale spacing
+  value, no `opacity` used for text hierarchy, and the measured grey ramp
+  pinned to its values. Each was verified by planting a regression and
+  watching it fail.
+
+## v1.26.2171048 (August 5, 2026)
+
+**`Build report` and `Email report now` are now one button.** They ran the same
+job and differed only in whether the email step happened, which the **Send
+notifications to Newsflasharr** setting already answers. Five buttons became
+four. Operator request.
+
+- `build_report` now builds the report and then emails it when notifications
+  are on. The `email_report_now` action is gone.
+- **The report is always written first.** The old `Email report now` ran its
+  readiness check before building and refused outright, because building a
+  report nobody could receive was wasted work. The merged button's product is
+  the report, so it writes the files first and reports any mail problem
+  afterwards, next to a `file` the operator can still open.
+- **Notifications being off is no longer an error.** The old email button had
+  to call it one, because mail was the whole ask. The merged button says
+  "Notifications are off, so nothing was emailed" and returns a green result
+  with the report path. Everything that can silently swallow mail when
+  notifications ARE on still sets the red `error` key: Newsflasharr missing or
+  disabled, incomplete SMTP, no routing rule sending `dustarr` to smtp, a
+  collector that has stopped ticking, or a declined event.
+- The Quick Start panel and the action description were rewritten to match.
+
+## v1.26.2171040 (August 5, 2026)
+
+The report is no longer published over HTTP, and the two ranking sections now
+carry counts like every other section.
+
+- **The HTML report moved out of `/data/logos/dustarr/` and into
+  `/config/dustarr/`, alongside the CSV.** `/data/logos/**` is served by
+  Dispatcharr's own nginx to the entire local network with no authentication,
+  so every report build was publishing an unauthenticated page listing every
+  channel this household watches. `/config` is a bind mount, so the report is
+  still one double-click away on the host, and it still arrives by email as an
+  attachment. Operator request.
+- **The `Report base URL` setting is gone**, along with
+  `reports.full_report_url()`, `reports.REPORT_URL_PATH`, the `url` key
+  `write_report()` returned and the `report_url` key in the notification
+  summary. There is no URL to build, so nothing is left holding a dead link
+  or inviting the directory to be served again. Dispatcharr never prunes a
+  stored setting when its field is removed, so an existing stored value
+  survives in the database; it is now inert, and tests prove it cannot put a
+  URL back into the action message or the notification.
+- The build-report action and the Celery task now report the report's
+  filesystem path where they used to report a URL.
+- Three tests guard the removal: the report directories must not be under
+  `/logos`, `reports` must expose no URL builder, and the emitted notification
+  must carry no `url` key even when the stale setting is present.
+- **`Least used` and `Most used` now show a count in their heading.** They
+  were the only two sections without one, on the reasoning that a top-N slice
+  is not a population. A reader looking at a collapsed page cannot see that
+  distinction; they see two sections that forgot their number. The count is
+  the number of rows in the table below it, which is what the count means in
+  every other section.
+
 ## v1.26.2082129 (July 27, 2026)
 
 GUI pass on the action buttons.

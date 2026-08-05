@@ -26,9 +26,17 @@ separate scheduled task, not inline with the collector.
 
 | Where | What |
 |---|---|
-| `http://<your-dispatcharr-host>:9191/logos/dustarr/report.html` | The report. Self-contained, sortable HTML with collapsible sections and inline charts, one click from any browser, including a phone or a Shield/Fire TV. Served on the **same host and port as the Dispatcharr UI you already have open** (Dispatcharr's own nginx, the `/logos/` static route), so there is no extra container, no extra port to open, and no new address to remember. If you can reach Dispatcharr, you can reach the report. |
-| `/config/dustarr/report-<timestamp>.csv` | The same data as CSV. `/config` is Dispatcharr's existing bind mount, so this file lands somewhere on your host you can double-click straight into Excel or LibreOffice. |
-| Newsflasharr (optional) | A short message with the headline numbers and a link to the full report, sent on whatever schedule you configure. See "Notifications via Newsflasharr" below. |
+| `/config/dustarr/report.html` | The report, always the latest run. Self-contained, sortable HTML with collapsible sections and inline charts. `/config` is Dispatcharr's existing bind mount, so this is a real folder on your host: open the file by double-clicking it, or copy it anywhere you like. |
+| `/config/dustarr/report-<timestamp>.html` | The same report, kept as a dated archive. The last eight are retained. |
+| `/config/dustarr/report-<timestamp>.csv` | The same data as CSV, for a spreadsheet. The last eight are retained. |
+| Newsflasharr (optional) | A short message with the headline numbers, with the full HTML report attached, sent on whatever schedule you configure. See "Notifications via Newsflasharr" below. |
+
+**Nothing is served over HTTP, deliberately.** Earlier versions wrote the report
+into `/data/logos/`, which Dispatcharr's own nginx serves to your whole local
+network with no login. That was convenient and it was also an unauthenticated,
+unlisted-but-guessable page naming every channel your household watches. The
+report is now a file on a bind mount you already have, and it reaches you by
+email as an attachment if you turn notifications on.
 
 ## Reading the report
 
@@ -157,8 +165,8 @@ is reported separately as **unobservable**, not folded into never-watched.
 
 The plugin's settings page opens with a **Quick Start** panel, and the buttons
 sit in the order you want to press them: **Validate settings** first, then
-**Show summary** for the headline numbers, **Build report** to write the HTML
-and CSV, and **Email report now** if you have Newsflasharr notifications on.
+**Show summary** for the headline numbers, then **Build report** to write the
+HTML and CSV, which also emails them if you have Newsflasharr notifications on.
 **Report an issue** prints the link to the issue tracker.
 
 The one thing worth knowing up front: your first reports will carry a "not
@@ -190,10 +198,6 @@ Everything lives in the plugin's settings card in the Dispatcharr UI:
   essentially *every* judged channel looks dead.
 - **Send notifications to Newsflasharr**: off by default. See "Notifications via
   Newsflasharr" below.
-- **Report base URL**: the base URL of your Dispatcharr UI (e.g.
-  `http://192.168.1.53:9191`). Set this so the report link sent to Newsflasharr
-  is an actual clickable link. Without it, some notification channels render a
-  bare path as inert text.
 - **Scheduled report**: off / daily / weekly / monthly, run by Celery Beat.
 
 ## Notifications via Newsflasharr
@@ -215,16 +219,22 @@ change to redirect where its notifications land.
 If Newsflasharr is not installed or is not enabled, turning this setting on is
 harmless: Dustarr degrades safely and simply does not spool anything.
 
-### Email report now
+### Build report
 
-**Email report now** builds the report immediately and emails it with the file
-attached. It is the same job the schedule runs, so you get fresh data rather than a
-re-send of an older file.
+**Build report** writes the report immediately and, if notifications are on,
+emails it with the file attached. It is the same job the schedule runs, so you
+get fresh data rather than a re-send of an older file. There used to be two
+buttons here, **Build report** and **Email report now**; they did the same work
+and differed only in whether the email step ran, which the **Send notifications
+to Newsflasharr** setting already answers.
 
-**It checks that the mail can actually leave the box before it builds
-anything.** Emailing requires Newsflasharr installed and enabled, with its SMTP
-configured and a routing rule sending dustarr to smtp, so the button refuses up
-front and names what is missing rather than producing a report nobody receives.
+**The report is written either way**, so pressing this never wastes a run. If
+notifications are off it simply says so and stops, with no error: you asked for
+a file and you got one.
+
+If notifications are on, emailing needs Newsflasharr installed and enabled, with
+its SMTP configured and a routing rule sending dustarr to smtp. The button
+checks all of that and names anything missing, next to the report it just wrote.
 The routing check is the one that earns its keep: without a matching rule the
 event still spools successfully and is simply delivered somewhere else, which
 looks exactly like working.
@@ -234,9 +244,9 @@ The wording it reports back is deliberate:
 - Success says **"queued for delivery"**, not "sent". Handing the report to
   Newsflasharr means it was durably spooled; Newsflasharr delivers it afterwards
   on its own retry schedule.
-- If notifications are off, nothing was published, Newsflasharr declined the
-  event, or its collector has stopped running, you get a **red error** naming
-  which one, never a green tick.
+- If nothing was published, or notifications are on but Newsflasharr is not
+  ready, declined the event, or its collector has stopped running, you get a
+  **red error** naming which one, never a green tick.
 
 **It does not prove the *schedule* works.** The button runs in the web worker
 using the settings currently on screen; the schedule runs on a background worker

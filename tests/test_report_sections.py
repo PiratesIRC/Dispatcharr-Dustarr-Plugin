@@ -47,14 +47,34 @@ def test_empty_sections_still_render_with_their_default_state(rp, gw):
     assert "open" not in found["Too new to judge"]
 
 
-def test_usage_sections_carry_no_count(rp, gw):
-    """`Least used` / `Most used` are top-N slices, not populations."""
-    html = rp.render_html(model(rp, gw))
+def test_every_section_carries_a_count(rp, gw):
+    """`Least used` / `Most used` used to be the only two sections whose size
+    the report would not tell you, on the reasoning that a top-N slice is not
+    a population. The reader cannot see that distinction from a collapsed
+    summary line -- they see two sections that forgot their number."""
+    html = rp.render_html(model(rp, gw, n=8, watched=6))
     found = re.findall(r"<summary>(.*?)</summary>", html, re.DOTALL)
+    assert len(found) == len(EXPECTED_OPEN)
     for summary in found:
         text = re.sub(r"<[^>]+>", "", summary).strip()
-        if text.startswith(("Least used", "Most used")):
-            assert "class=\"count\"" not in summary, text
+        assert 'class="count"' in summary, text
+
+
+def test_usage_section_counts_equal_the_rows_rendered_beneath_them(rp, gw):
+    """The count span means the same thing in every section: how many rows are
+    in the table directly below it. For the two ranking sections that is the
+    length of the slice, never the size of the judged population it came
+    from."""
+    built = model(rp, gw, n=8, watched=6)
+    html = rp.render_html(built)
+    for title, key in (("Least used", "least_used"), ("Most used", "most_used")):
+        match = re.search(
+            rf'{title} <span class="count">(\d+)</span></summary>(.*?)</details>',
+            html, re.DOTALL)
+        assert match, title
+        assert int(match.group(1)) == len(built[key]), title
+        # "<tr><td" is a BODY row; the header row is "<tr><th".
+        assert match.group(2).count("<tr><td") == len(built[key]), title
 
 
 def test_banner_precedes_every_collapsible_section(rp, gw):

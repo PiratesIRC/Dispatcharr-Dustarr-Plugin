@@ -134,13 +134,13 @@ def test_csv_has_one_row_per_channel_with_a_reason(rp, gw):
     assert {r["reason"] for r in rows} == {"watched", "never_watched"}
 
 
-def test_write_report_creates_both_files_and_returns_the_url(rp, gw, tmp_path):
-    report_dir = tmp_path / "logos"
+def test_write_report_creates_both_files_and_returns_their_paths(rp, gw, tmp_path):
+    report_dir = tmp_path / "config"
     csv_dir = tmp_path / "config"
     out = rp.write_report(model(rp, gw), str(report_dir), str(csv_dir), NOW)
     assert (report_dir / "report.html").exists()
     assert list(csv_dir.glob("report-*.csv"))
-    assert out["url"] == rp.REPORT_URL_PATH
+    assert out["html_path"] == str(report_dir / "report.html")
     assert "error" not in out
     # No tmp files left behind.
     assert not list(report_dir.glob("*.tmp"))
@@ -169,22 +169,22 @@ def test_write_report_keeps_a_dated_archive(rp, gw, tmp_path):
     assert list(report_dir.glob("report-*.html"))
 
 
-# -- I4: report_base_url turns the bare report path into a real link ---------
+# -- The report is not published over HTTP any more --------------------------
+#
+# It used to be written into /data/logos/, which Dispatcharr's nginx serves to
+# the whole LAN with no authentication. These tests are the guard against it
+# creeping back: a URL builder is the first thing that would reappear, and a
+# report path under /data/logos is the second.
 
-def test_full_report_url_falls_back_to_the_bare_path_when_base_is_empty(rp):
-    assert rp.full_report_url("", rp.REPORT_URL_PATH) == rp.REPORT_URL_PATH
-    assert rp.full_report_url(None, rp.REPORT_URL_PATH) == rp.REPORT_URL_PATH
-    assert rp.full_report_url("   ", rp.REPORT_URL_PATH) == rp.REPORT_URL_PATH
+def test_reports_exposes_no_url_builder_or_url_path(rp):
+    assert not hasattr(rp, "full_report_url")
+    assert not hasattr(rp, "REPORT_URL_PATH")
 
 
-def test_full_report_url_joins_base_and_path(rp):
-    assert (rp.full_report_url("http://192.168.1.53:9191", rp.REPORT_URL_PATH)
-            == "http://192.168.1.53:9191" + rp.REPORT_URL_PATH)
-
-
-def test_full_report_url_strips_a_trailing_slash_on_base(rp):
-    assert (rp.full_report_url("http://host:9191/", rp.REPORT_URL_PATH)
-            == "http://host:9191" + rp.REPORT_URL_PATH)
+def test_write_report_returns_no_url_key(rp, gw, tmp_path):
+    out = rp.write_report(model(rp, gw), str(tmp_path / "config"),
+                          str(tmp_path / "config"), NOW)
+    assert "url" not in out
 
 
 # -- M1: last-watched is the highest-value signal in the dataset -------------

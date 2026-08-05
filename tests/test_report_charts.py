@@ -361,3 +361,69 @@ def test_mini_dimension_constants_match_the_css(rp):
     assert m, "no .mini width/height rule found in _CSS"
     assert int(m.group(1)) == rp.MINI_W
     assert int(m.group(2)) == rp.MINI_H
+
+
+# -- Refactoring UI pass (2026-08-05): the token layer, and what may break it -
+#
+# Two rules from github.com/LovroPodobnik/refactoring-ui-skill are now
+# structural rather than stylistic, so they get guards. Both regress the same
+# way: someone adds one more rule with a hand-picked value, it looks fine, and
+# the system quietly stops being a system.
+
+# Everything after the `body {` rule is page styling rather than token
+# declarations. Colours and spacing there must come from var(), not literals.
+#
+# COMMENTS ARE STRIPPED FIRST, and that is load-bearing rather than tidiness:
+# these rules are explained in prose that necessarily quotes the very things
+# they forbid ("8px/12px rather than the old 6px/10px", the two chip hexes).
+# Without the strip, every guard below fires on its own documentation and the
+# only way to make them pass is to delete the explanation.
+def _rule_body(css):
+    without_comments = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+    return without_comments[without_comments.index("body {"):]
+
+
+def test_no_rule_hardcodes_a_colour_outside_the_token_block(rp):
+    """A literal hex in a rule is a colour that light mode and dark mode
+    cannot both be right about. That is exactly how the old dark block ended
+    up with three `!important` overrides."""
+    stray = sorted(set(re.findall(r"#[0-9a-fA-F]{3,8}\b", _rule_body(rp._CSS))))
+    assert not stray, f"hardcode a token instead of these literals: {stray}"
+
+
+def test_every_spacing_value_comes_from_the_scale(rp):
+    """Margins, paddings and gaps pick a step off --s1..--s5. Fourteen one-off
+    values preceded this. Sizes (widths, heights, font sizes, radii, borders)
+    are NOT spacing and are deliberately out of scope."""
+    offenders = []
+    for prop, value in re.findall(r"\b(margin|padding|gap)\s*:\s*([^;}]+)",
+                                  _rule_body(rp._CSS)):
+        for token in value.split():
+            if token.endswith("px") and token not in ("0", "0px"):
+                offenders.append(f"{prop}: {token}")
+    assert not offenders, f"off-scale spacing, use var(--sN): {offenders}"
+
+
+def test_text_hierarchy_uses_ink_tokens_not_opacity(rp):
+    """`opacity` paints a different colour on every surface it lands on, so
+    the contrast ratio moves whenever a background changes, and the fade
+    applies to everything nested inside. The one survivor is a fill blend on a
+    decorative SVG tick, which is not text."""
+    faded = re.findall(r"([^{}]+)\{[^}]*opacity:", _rule_body(rp._CSS))
+    assert [s.strip() for s in faded] == [".meter .tick"], faded
+
+
+def test_the_measured_ink_ramp_is_pinned(rp):
+    """Measured against the two validated surfaces: --ink-dim is the weakest
+    at 5.24:1 on light and 6.89:1 on dark, both clear of the 4.5:1 floor for
+    normal text. Changing a value here without re-measuring puts text below
+    it with nothing to say so."""
+    css = rp._CSS
+    light = css[:css.index("prefers-color-scheme: dark")]
+    dark = css[css.index("prefers-color-scheme: dark"):]
+    for var, value in (("--ink", "#16181d"), ("--ink-muted", "#5c616b"),
+                       ("--ink-dim", "#656a76")):
+        assert f"{var}: {value}" in light, f"{var} changed in light"
+    for var, value in (("--ink", "#e8eaed"), ("--ink-muted", "#a7adb8"),
+                       ("--ink-dim", "#9aa0ab")):
+        assert f"{var}: {value}" in dark, f"{var} changed in dark"

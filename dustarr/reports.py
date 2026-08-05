@@ -302,7 +302,13 @@ def build_model(rows, usage, settings, now):
     }
 
 
-def summary_for_notify(model, report_url):
+def summary_for_notify(model):
+    """The allowlisted notification summary.
+
+    It used to carry a `report_url` pointing at the nginx-served copy of the
+    report. That copy no longer exists (see the renderer note below), so the
+    key is gone rather than left holding a dead link.
+    """
     return {
         "tracked_days": model["tracked_days"],
         "coverage": model["coverage"],
@@ -311,7 +317,6 @@ def summary_for_notify(model, report_url):
         "tuned_never_qualified": model["counts"]["tuned_never_qualified"],
         "top": [{"name": c["name"], "watch_count": c["watch_count"],
                  "hours": c["hours"]} for c in model["most_used"][:5]],
-        "report_url": report_url,
         "alerts": model["gate"]["alerts"],
     }
 
@@ -319,14 +324,18 @@ def summary_for_notify(model, report_url):
 # --------------------------------------------------------------------------
 # Renderers (Task 9).
 #
-# The report is written to nginx's already-unauthenticated static route
-# (/data/logos/** is served by Dispatcharr's nginx with no auth and correct
-# MIME types -- verified live) so it is one click away at
-# http://<host>:9191/logos/dustarr/report.html, instead of trapped inside
-# a named Docker volume with no Windows path. The page must be fully
-# self-contained (inline CSS/JS, no external assets): it is served from a
-# plain static route with no build step and must render on a TV browser
-# with no network access to a CDN.
+# NOTHING HERE IS SERVED OVER HTTP, DELIBERATELY. The report used to be
+# written into /data/logos/, which Dispatcharr's nginx serves to the whole
+# LAN with no authentication at all -- convenient, and an unauthenticated
+# listing of every channel this household watches. It is now written next to
+# the CSV in /config/dustarr/, a bind mount the operator opens from Windows
+# (<config-mount>\dustarr\). Do not move it back under
+# /data/logos/, and do not add a URL field that would invite someone to.
+#
+# The page must still be fully self-contained (inline CSS/JS, no external
+# assets): it is opened straight off disk as a file:// URL and is also mailed
+# as an attachment, so it must render on a TV browser with no network access
+# to a CDN and no server to resolve relative paths against.
 #
 # Credential safety: only allowlisted per-channel fields are ever rendered
 # (name, uuid, group, counts, timestamps) -- never Stream.url or anything
@@ -335,21 +344,6 @@ def summary_for_notify(model, report_url):
 # --------------------------------------------------------------------------
 
 REPORT_HTML = "report.html"
-REPORT_URL_PATH = "/logos/dustarr/report.html"
-
-
-def full_report_url(base_url, path=REPORT_URL_PATH):
-    """I4: REPORT_URL_PATH is a bare path -- inert text in many notification
-    channels, so the "link to the full report" nudge couldn't actually
-    link anywhere. `base_url` is the plugin's optional `report_base_url`
-    setting (the Dispatcharr UI's own base URL, e.g.
-    "http://192.168.1.53:9191"); when unset, degrade to the bare path
-    (today's behavior) rather than produce a broken relative-looking string.
-    """
-    base_url = (base_url or "").strip()
-    if not base_url:
-        return path
-    return base_url.rstrip("/") + path
 
 GAP_PX = 2          # surface gap between adjacent segments
 MIN_SEG_PX = 2      # a real category must never vanish sub-pixel
@@ -574,35 +568,83 @@ def _svg_mini_bar(never, judged, label):
             f'</svg>')
 
 
+# Token layer, reworked 2026-08-05 against the Refactoring UI guidance
+# (github.com/LovroPodobnik/refactoring-ui-skill). Three rules from it drive
+# the shape of this block:
+#
+# 1. SPACING IS A SCALE, NOT ARBITRARY VALUES. --s1..--s6 step by roughly a
+#    third each, because a linear ramp makes small steps look identical and
+#    large ones look wild. Every margin and padding below picks a step. There
+#    were 14 one-off values here before; anything not on the scale is a bug.
+# 2. GREY IS A RAMP, AND HIERARCHY RIDES ON IT RATHER THAN ON `opacity`.
+#    Six rules used to fade text with opacity. That works, and measurement
+#    says the old values cleared 4.5:1 (4.58 to 7.78), so this is NOT a
+#    contrast fix. It is a predictability fix: an opacity value paints a
+#    DIFFERENT colour on every surface it lands on, so the ratio silently
+#    moves whenever a background changes, and the fade also applies to
+#    anything nested inside. --ink / --ink-muted / --ink-dim are measured
+#    (5.24:1 at the weakest, on the light surface) and stay put.
+# 3. LIGHT AND DARK DIFFER ONLY IN TOKEN VALUES. The dark block used three
+#    `!important` overrides to win specificity fights it should never have
+#    been in.
+#
+# DO NOT change --never / --watched / --tuned / --toonew / --track / --ok /
+# --bad, or the two surface colours --bg (#fbfbfd, #14161a). That palette was
+# validated all-pairs for colourblind safety AGAINST those exact surfaces with
+# a validator that does not live in this repository, so the numbers cannot be
+# re-derived here. tests/test_report_charts.py pins every one of them.
 _CSS = """
 :root {
   color-scheme: light dark;
   --never: #2a78d6; --watched: #1baf7a; --tuned: #e34948; --toonew: #898781;
   --track: #e1e0d9; --ok: #0ca30c; --bad: #d03b3b;
+
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px;
+
+  --bg: #fbfbfd; --raised: #ffffff; --zebra: #f7f8fa; --head: #f2f3f6;
+  --ink: #16181d; --ink-muted: #5c616b; --ink-dim: #656a76;
+  --line: #e3e5ea; --line-soft: #e6e8ec;
+  --warn-bg: #fff4e5; --warn-line: #ffb84d; --warn-ink: #7a4b00;
+  --lift: 0 1px 2px rgba(16, 18, 29, .05), 0 4px 12px rgba(16, 18, 29, .04);
 }
-body { font: 15px/1.5 system-ui, -apple-system, Segoe UI, sans-serif;
-       margin: 0; padding: 24px; background: #fbfbfd; color: #16181d; }
 @media (prefers-color-scheme: dark) {
   :root {
     --never: #3987e5; --watched: #199e70; --tuned: #e66767; --toonew: #898781;
     --track: #2c2c2a; --ok: #0ca30c; --bad: #d03b3b;
+
+    --bg: #14161a; --raised: #1a1d22; --zebra: #191c21; --head: #1e2127;
+    --ink: #e8eaed; --ink-muted: #a7adb8; --ink-dim: #9aa0ab;
+    --line: #2a2e35; --line-soft: #262a31;
+    --warn-bg: #2e2312; --warn-line: #8a6320; --warn-ink: #f2c98a;
+    --lift: 0 1px 2px rgba(0, 0, 0, .35), 0 4px 12px rgba(0, 0, 0, .25);
   }
-  body { background: #14161a; color: #e8eaed; }
-  th { background: #1e2127 !important; }
-  tr:nth-child(even) td { background: #191c21; }
-  .card { background: #1a1d22 !important; border-color: #2a2e35 !important; }
 }
-h1 { font-size: 22px; margin: 0 0 4px; }
-.sub { opacity: .7; font-size: 15px; margin-bottom: 20px; }
-.card { background: #fff; border: 1px solid #e3e5ea; border-radius: 10px;
-        padding: 14px 16px; margin-bottom: 18px; }
-.banner { background: #fff4e5; border: 1px solid #ffb84d; border-radius: 10px;
-          padding: 12px 16px; margin-bottom: 18px; color: #7a4b00; }
-.banner ul { margin: 6px 0 0 18px; padding: 0; }
+body { font: 15px/1.5 system-ui, -apple-system, Segoe UI, sans-serif;
+       margin: 0; padding: var(--s5); background: var(--bg); color: var(--ink); }
+/* Headline: large type wants a tighter line box and slightly tighter
+   tracking. Body copy keeps 1.5, which is where 15px over this measure is
+   comfortable. */
+h1 { font-size: 22px; line-height: 1.2; letter-spacing: -.01em;
+     margin: 0 0 var(--s1); }
+.sub { color: var(--ink-muted); font-size: 15px; margin-bottom: var(--s5); }
+.card { background: var(--raised); border: 1px solid var(--line);
+        border-radius: 10px; box-shadow: var(--lift);
+        padding: var(--s3) var(--s4); margin-bottom: var(--s4); }
+.banner { background: var(--warn-bg); border: 1px solid var(--warn-line);
+          border-radius: 10px; box-shadow: var(--lift);
+          padding: var(--s3) var(--s4); margin-bottom: var(--s4);
+          color: var(--warn-ink); }
+.banner ul { margin: var(--s2) 0 0 var(--s5); padding: 0; }
 table { border-collapse: collapse; width: 100%; font-size: 15px; }
 .scroll { overflow-x: auto; }
-th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #e6e8ec; }
-th { background: #f2f3f6; position: sticky; top: 0; cursor: pointer; }
+/* Row padding is 8px/12px rather than the old 6px/10px: this page is read at
+   TV distance, and the scale has no step between them anyway. */
+th, td { text-align: left; padding: var(--s2) var(--s3);
+         border-bottom: 1px solid var(--line-soft); }
+th { background: var(--head); position: sticky; top: 0; cursor: pointer; }
+/* Zebra striping used to exist in dark mode ONLY, so the two themes read as
+   different tables. One rule, one token, both modes. */
+tr:nth-child(even) td { background: var(--zebra); }
 td.num { text-align: right; font-variant-numeric: tabular-nums; }
 """
 
@@ -615,24 +657,32 @@ _CSS += """
 .seg-tuned { fill: var(--tuned); }
 /* Gaps come from the x-offsets computed in _svg_split_bar, not from a
    stroke -- do not add a stroke rule here, it would double-count. */
-.legend { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 18px;
-          margin: 10px 0 4px; padding: 0; font-size: 15px; }
+.legend { list-style: none; display: flex; flex-wrap: wrap;
+          gap: var(--s1) var(--s4);
+          margin: var(--s2) 0 var(--s1); padding: 0; font-size: 15px; }
 .swatch { display: inline-block; width: 11px; height: 11px; border-radius: 3px;
-          margin-right: 6px; vertical-align: -1px; }
+          margin-right: var(--s2); vertical-align: -1px; }
 .swatch.seg-never { background: var(--never); }
 .swatch.seg-watched { background: var(--watched); }
 .swatch.seg-toonew { background: var(--toonew); }
 .swatch.seg-tuned { background: var(--tuned); }
-.caption { font-size: 15px; opacity: .7; margin: 2px 0 18px; }
+.caption { font-size: 15px; color: var(--ink-muted);
+           margin: var(--s1) 0 var(--s4); }
 """
 
 _CSS += """
 .meter { width: 280px; max-width: 100%; height: 14px; vertical-align: middle; }
 .meter .fill { fill: var(--never); }
+/* This `opacity` is a fill blend on a decorative SVG tick, not text
+   de-emphasis, so it is deliberately NOT one of the --ink-* tokens. */
 .meter .tick { fill: var(--bad); opacity: .55; }
-.meterrow { display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
-            margin: 12px 0 16px; font-size: 15px; }
-.chip { font-size: 14px; padding: 2px 9px; border-radius: 999px;
+.meterrow { display: flex; flex-wrap: wrap; align-items: center;
+            gap: var(--s3); margin: var(--s3) 0 var(--s4); font-size: 15px; }
+/* 15px, not 14px: the type scale is 15 / 17 / 22, hand-picked and deliberately
+   sparse. A 14px step sits 7% from the body size, which reads as an accident
+   rather than a decision, and this page is sized for TV distance so nothing
+   here shrinks. Supporting text is separated by COLOUR instead. */
+.chip { font-size: 15px; padding: var(--s1) var(--s2); border-radius: 999px;
         border: 1px solid; }
 /* Text stays the page's normal ink (inherited, not set here) -- #0ca30c on
    the light surface and #d03b3b on the dark surface both fall short of the
@@ -652,22 +702,27 @@ td.barcell { width: 120px; }
 """
 
 _CSS += """
-details { border-top: 1px solid var(--track); padding: 4px 0 8px; }
+details { border-top: 1px solid var(--track); padding: var(--s1) 0 var(--s2); }
+/* Never add `outline: none` here. The focus ring is how this page is driven
+   by a TV remote's D-pad. */
 summary { font-size: 17px; font-weight: 600; cursor: pointer;
-          padding: 10px 2px; list-style: none; }
+          padding: var(--s2) var(--s1); list-style: none; }
 summary::-webkit-details-marker { display: none; }
 summary::before { content: '\\25B8'; display: inline-block; width: 1em;
-                  opacity: .55; transition: transform .12s; }
+                  color: var(--ink-dim); transition: transform .12s; }
 details[open] > summary::before { transform: rotate(90deg); }
 .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
-       margin-right: 8px; vertical-align: baseline; }
+       margin-right: var(--s2); vertical-align: baseline; }
 .dot-never { background: var(--never); }
 .dot-watched { background: var(--watched); }
 .dot-tuned { background: var(--tuned); }
 .dot-toonew { background: var(--toonew); }
 .dot-neutral { background: var(--track); }
-.count { font-weight: 400; opacity: .6; font-variant-numeric: tabular-nums; }
-.hint { font-size: 14px; opacity: .6; margin: 0 0 8px; }
+/* The heading is 600; the count staying at 400 is what separates the two, so
+   the number reads as data rather than as part of the label. */
+.count { font-weight: 400; color: var(--ink-dim);
+         font-variant-numeric: tabular-nums; }
+.hint { font-size: 15px; color: var(--ink-dim); margin: 0 0 var(--s2); }
 """
 
 # Inline, no external assets: click a header to sort its column ascending,
@@ -737,9 +792,14 @@ def _table(entries):
 def _section(title, count, body, open_by_default, dot_class):
     """One report section as a collapsible <details>.
 
-    `count` is Optional[int]: `Least used` / `Most used` are top-N slices
-    rather than populations and deliberately carry no number, so None omits
-    the span entirely. `dot_class` is the modifier only ("dot-never").
+    `count` is Optional[int] and None omits the span entirely, but every
+    section now passes a number. For `Least used` / `Most used` that number
+    is the length of the top-N slice actually rendered below, not the size
+    of any wider population -- the invariant every other section obeys is
+    that the count span equals the row count of the table beneath it, and
+    leaving these two bare made them look like the only sections whose size
+    the report would not tell you. `dot_class` is the modifier only
+    ("dot-never").
 
     <details> needs no JavaScript, and a client that does not implement it
     renders the content EXPANDED -- the failure mode is "everything visible",
@@ -868,14 +928,14 @@ def render_html(model):
                  "kick), not unused. Fix them rather than remove them.</p>"
                  + find_hint + _table(model["tuned_never_qualified"]),
                  False, "dot-tuned"),
-        _section("Least used", None,
+        _section("Least used", len(model["least_used"]),
                  "<p class='sub'>The judged channels you watched least. They "
                  "earned a real watch, so they are weaker candidates to turn off "
                  "than the never watched list.</p>"
                  + find_hint + rankings_note + least_used_note
                  + _table(model["least_used"]),
                  False, "dot-neutral"),
-        _section("Most used", None,
+        _section("Most used", len(model["most_used"]),
                  "<p class='sub'>The judged channels you watched most. Keep "
                  "these.</p>"
                  + find_hint + rankings_note + _table(model["most_used"]),
@@ -1018,14 +1078,21 @@ def _prune_archives(dirpath, prefix, suffix, keep=ARCHIVE_KEEP):
 def write_report(model, report_dir, csv_dir, now):
     """Write the HTML report + CSV. Never raises (M-global: I/O must degrade).
 
-    The HTML report is the product; the CSV is a convenience export to a real
-    bind mount. If the CSV directory is unwritable, the HTML write must still
-    succeed and be returned -- only the CSV path degrades to None with an
-    "error" key explaining why.
+    The HTML report is the product; the CSV is a convenience export. If the
+    CSV directory is unwritable, the HTML write must still succeed and be
+    returned -- only the CSV path degrades to None with an "error" key
+    explaining why.
+
+    `report_dir` and `csv_dir` are now normally the SAME directory (both
+    /config/dustarr), and the two calls are kept separate anyway: the archive
+    pruning is keyed on the file suffix, so the two streams do not collide,
+    and keeping the parameters split means a caller can still separate them.
     """
     stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(now))
-    out = {"html_path": None, "csv_path": None, "archive_path": None,
-           "url": REPORT_URL_PATH}
+    # There is no "url" key any more: the report is not published over HTTP.
+    # `html_path` is the only handle callers get, and it is a real filesystem
+    # path the operator can open.
+    out = {"html_path": None, "csv_path": None, "archive_path": None}
 
     try:
         os.makedirs(report_dir, exist_ok=True)
