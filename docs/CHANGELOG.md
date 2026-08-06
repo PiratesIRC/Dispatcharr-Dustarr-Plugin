@@ -1,5 +1,40 @@
 # Changelog
 
+## Repository maintenance, August 5, 2026 (no plugin version change)
+
+**Git history was rewritten. Every commit SHA from before this date is dead.**
+112 commits became 98; the tip is `94020bf`. Any clone or branch predating it
+is unmergeable, so re-clone rather than rebasing an old one on.
+
+The tree had been scrubbed of operator-identifying strings on August 2, but a
+tree scrub does not reach history and a push publishes history. The repository
+still carried, in old commits, the operator's real provider hostname and edge
+labels, their LAN address in 159 places, Windows drive and home-directory
+paths, and a provider catalogue id.
+
+- `git filter-repo` removed `CLAUDE.md` and `docs/superpowers/**` from every
+  commit. They are agent guidance and the design archive, already gitignored,
+  and they were the densest source of infrastructure detail.
+- Remaining strings were replaced with the same placeholders the current tree
+  already used, so tree and history are now consistent.
+- Verified by cloning the remote fresh and scanning that clone, not the local
+  copy. The publish audit on the remote tip reports 9 findings, all
+  informational: references to internal notes filenames, and the phrase "on
+  this box".
+- The pre-rewrite state is preserved as a verified `git bundle` outside the
+  repository. **That backup contains the unscrubbed data.**
+- GitHub keeps rewritten objects reachable by direct SHA until it garbage
+  collects, and there is no user-facing way to force that. The repository is
+  private with no forks or watchers.
+
+Also fixed: the publish-audit deny rule meant to catch the development drive
+path **had never matched anything**. A regex inside JSON is escaped twice, so
+its two backslashes became `\?` in the compiled pattern, which a regex reads
+as an escaped literal question mark rather than an optional backslash. The
+corrected single-backslash form then still missed the doubled form that
+appears inside a Python string literal. Both failures were invisible from a
+clean audit report; only planting a canary found them.
+
 ## v1.26.2171121 (August 5, 2026)
 
 Branding on the report, and a counter another plugin can turn into a badge.
