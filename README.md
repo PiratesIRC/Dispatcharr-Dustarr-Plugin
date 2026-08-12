@@ -1,5 +1,8 @@
 # Dustarr
 
+[![Dispatcharr plugin](https://img.shields.io/badge/Dispatcharr-plugin-8A2BE2)](https://github.com/Dispatcharr/Dispatcharr)
+[![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-db61a2?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/PiratesIRC)
+
 A Dispatcharr plugin that records which channels are actually watched, and reports
 the most-used, least-used, and never-watched channels so you can turn off the dead
 weight in your lineup.
@@ -317,6 +320,15 @@ Calendar versioning, `Major.YY.DDDHHMM`: major version, two-digit year,
 day-of-year, then the UTC time the version was cut. `1.26.2241505` is major
 version 1, built on day 224 of 2026 at 15:05 UTC. A later version string is
 always a later build.
+
+## Sponsor
+
+This plugin is free and always will be. If it saves you time and you would like
+to support the work, you can sponsor it at
+[github.com/sponsors/PiratesIRC](https://github.com/sponsors/PiratesIRC).
+
+Sponsoring buys no priority, no private support and no influence over what gets
+built. Bug reports and pull requests are just as welcome from everyone.
 
 ## License
 
