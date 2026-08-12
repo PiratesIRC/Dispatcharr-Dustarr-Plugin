@@ -13,7 +13,18 @@ NOW = 1_700_000_000.0
 
 @pytest.fixture()
 def plugin():
-    return load_plugin()
+    """The plugin module, with per-test state reset.
+
+    `_restart_times` is the collector crash-loop budget (at most RESTART_BOUND
+    spawns per RESTART_WINDOW_S) and it is a MODULE GLOBAL, so without this
+    reset each spawning test spends budget belonging to whichever spawning
+    test runs later, and the failure surfaces in an unrelated test. Cleared in
+    place rather than rebound, because ensure_collector mutates this exact list
+    object through `_restart_times[:] = ...`.
+    """
+    module = load_plugin()
+    module._restart_times.clear()
+    return module
 
 
 def _make_thread(plugin, version=None, fingerprint=None, alive_for=30.0):
@@ -425,11 +436,6 @@ def test_stop_on_reload_still_stops_the_collector_thread(plugin, monkeypatch):
     another one.
     """
     monkeypatch.setattr(plugin, "_is_uwsgi_worker", lambda: True)
-    # `_restart_times` is a MODULE global holding the crash-loop budget
-    # (RESTART_BOUND spawns per RESTART_WINDOW_S) and nothing resets it between
-    # tests. A spawn here would otherwise spend budget belonging to whichever
-    # spawning test happens to run later, and push it over the bound.
-    monkeypatch.setattr(plugin, "_restart_times", [])
     spawned = []
 
     def fake_spawn(settings):
@@ -1843,3 +1849,22 @@ def test_the_counter_file_is_the_machine_readable_contract(plugin, tmp_path,
     on_disk = json.loads(
         (tmp_path / plugin.REPORT_COUNT_FILE).read_text(encoding="utf-8"))
     assert on_disk == {"reports_built": 2}, "the file shape IS the contract"
+
+
+# ---- test isolation: the collector crash-loop budget is a MODULE GLOBAL -----
+
+def test_each_test_starts_with_an_empty_collector_restart_budget(plugin):
+    """`_restart_times` in plugin.py holds the crash-loop budget: at most
+    RESTART_BOUND collector spawns per RESTART_WINDOW_S. It is a module-level
+    list, so without a reset between tests every spawning test spends budget
+    belonging to whichever spawning test runs later. Once the budget is gone,
+    ensure_collector returns early WITHOUT stopping the incumbent thread, and
+    an unrelated test asserting supersession fails.
+
+    That is not hypothetical: adding one collector-spawning test on 2026-08-12
+    broke test_ensure_collector_supersedes_an_old_version, which passed in
+    isolation and failed in the suite. Order-dependent tests report a failure
+    in the wrong place, which is worse than no test.
+    """
+    assert plugin._restart_times == [], (
+        "a previous test leaked collector restart budget into this one")
