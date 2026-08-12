@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.26.2241505, August 12, 2026
+
+**Fixed: the weekly report schedule was cancelled by reloading the plugin.**
+Two consecutive Monday reports, August 3 and August 10, never ran.
+
+The report is driven by a Celery Beat row named `dustarr_build_report`.
+`Plugin.stop()` deleted that row every time it was called, and Dispatcharr
+calls `stop()` on the Plugins page Refresh control as well as on disable and
+uninstall. Nothing re-creates the row when the plugin loads, so a refresh
+cancelled the weekly report until an action button was next clicked. Every
+health signal kept reading normal throughout: the plugin card, the version
+string, and the usage collector, which had gone on recording the whole time.
+
+Dispatcharr passes the reason for stopping to the plugin, but the old method
+signature took no argument, so the reason was discarded. `stop()` now accepts
+it and removes the schedule only when the plugin is being disabled or
+uninstalled. An absent or unrecognized reason keeps the schedule: a leftover
+schedule announces itself in the worker log, while a missing one is silent.
+
+The report itself, the collector and the recorded usage data are unchanged.
+Anyone who saw reports stop arriving without an error should get the next one
+on schedule.
+
 ## Repository maintenance, August 5, 2026 (no plugin version change)
 
 **Git history was rewritten. Every commit SHA from before this date is dead.**
