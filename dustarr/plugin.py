@@ -36,7 +36,7 @@ except ImportError:                     # standalone (non-package) import path
 
 _LOGGER = logging.getLogger(__name__)
 
-PLUGIN_VERSION = "1.26.2171121"
+PLUGIN_VERSION = "1.26.2241505"
 
 DATA_DIR = "/data/dustarr"           # plugin state (named volume)
 # Both outputs go to the SAME directory, under Dispatcharr's existing /config
@@ -883,7 +883,7 @@ class Plugin:
         except Exception:
             pass
 
-    def stop(self):
+    def stop(self, context=None):
         """Called by the loader on disable/uninstall/reload (C2). Must never
         raise -- a cleanup failure must not break the loader.
 
@@ -892,12 +892,32 @@ class Plugin:
         workspace ships an orphan-task cleaner for exactly this reason), and
         (b) the collector daemon thread, which would otherwise keep polling
         Redis and writing usage.json after the plugin is disabled.
+
+        THE SCHEDULE ROW SURVIVES A RELOAD, AND THE `context` PARAMETER IS WHAT
+        MAKES THAT POSSIBLE (measured outage 2026-08-12). Dispatcharr calls
+        `stop_method(context)` and falls back to a bare `stop_method()` only
+        after catching TypeError, so the no-argument signature this used to
+        have discarded `context["reason"]` and deleted the row on EVERY call.
+        One of those callers is the Plugins page Reload control
+        (`stop_all_plugins(reason="reload")`), which is the control the deploy
+        runbook says to press. Nothing re-arms the schedule at load time --
+        only an action click reaches sync_schedule -- so a reload cancelled the
+        weekly report outright. Two consecutive Monday reports never ran, and
+        the plugin card, the version string and the collector all read healthy
+        throughout.
+
+        An absent or unrecognized reason KEEPS the row. The two failures are
+        not symmetrical: an orphan row is loud, because the worker rejects a
+        task it cannot import and logs it every Monday, while a missing row
+        produces no report and no signal at all.
         """
-        try:
-            from core.scheduling import delete_periodic_task
-            delete_periodic_task(TASK_NAME)
-        except Exception:
-            pass
+        reason = context.get("reason") if isinstance(context, dict) else None
+        if reason in ("disable", "delete"):
+            try:
+                from core.scheduling import delete_periodic_task
+                delete_periodic_task(TASK_NAME)
+            except Exception:
+                pass
 
         try:
             for thread in threading.enumerate():

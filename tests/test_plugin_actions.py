@@ -352,11 +352,51 @@ def test_build_report_task_logs_redacted_and_reraises_so_celery_can_retry(
 
 # ---- C2: Plugin.stop() ------------------------------------------------------
 
-def test_stop_deletes_the_periodic_task(plugin):
+def test_stop_accepts_the_loader_context_positionally(plugin):
+    """Dispatcharr calls `stop_method(context)` and only falls back to a bare
+    `stop_method()` after catching TypeError. A no-argument signature therefore
+    throws away the reason and cannot tell a reload from an uninstall.
+    """
+    plugin.Plugin().stop({"reason": "reload"})       # must not raise TypeError
+
+
+def test_stop_on_disable_deletes_the_periodic_task(plugin):
+    core_sched = sys.modules["core.scheduling"]
+    core_sched.delete_periodic_task.reset_mock()
+    plugin.Plugin().stop({"reason": "disable"})
+    core_sched.delete_periodic_task.assert_called_once_with(plugin.TASK_NAME)
+
+
+def test_stop_on_delete_deletes_the_periodic_task(plugin):
+    core_sched = sys.modules["core.scheduling"]
+    core_sched.delete_periodic_task.reset_mock()
+    plugin.Plugin().stop({"reason": "delete"})
+    core_sched.delete_periodic_task.assert_called_once_with(plugin.TASK_NAME)
+
+
+def test_stop_on_reload_keeps_the_periodic_task(plugin):
+    """The Plugins page Reload control calls stop() with reason='reload', and
+    nothing re-arms the schedule at load time -- only an action click does.
+    Deleting the row here silently cancels the weekly report until somebody
+    presses a button. Measured live 2026-08-12: two consecutive Monday reports
+    never ran and every health signal still read green.
+    """
+    core_sched = sys.modules["core.scheduling"]
+    core_sched.delete_periodic_task.reset_mock()
+    plugin.Plugin().stop({"reason": "reload"})
+    core_sched.delete_periodic_task.assert_not_called()
+
+
+def test_stop_without_a_reason_keeps_the_periodic_task(plugin):
+    """An unknown or absent reason must not cancel the schedule. An orphan row
+    is loud (the worker rejects an unknown task and logs it every Monday); a
+    missing row is silent, which is the failure that went unnoticed for two
+    weeks.
+    """
     core_sched = sys.modules["core.scheduling"]
     core_sched.delete_periodic_task.reset_mock()
     plugin.Plugin().stop()
-    core_sched.delete_periodic_task.assert_called_once_with(plugin.TASK_NAME)
+    core_sched.delete_periodic_task.assert_not_called()
 
 
 def test_stop_stops_the_collector_thread(plugin, monkeypatch):
@@ -372,11 +412,51 @@ def test_stop_stops_the_collector_thread(plugin, monkeypatch):
     plugin.ensure_collector({})
     thread = spawned[0]
     try:
-        plugin.Plugin().stop()
+        plugin.Plugin().stop({"reason": "disable"})
         assert thread.dustarr_stop.is_set()
     finally:
         thread.dustarr_stop.set()
         thread.join(timeout=2)
+
+
+def test_stop_on_reload_still_stops_the_collector_thread(plugin, monkeypatch):
+    """Keeping the schedule row on a reload must not also keep the old
+    collector thread: the loader builds a fresh Plugin, whose __init__ spawns
+    another one.
+    """
+    monkeypatch.setattr(plugin, "_is_uwsgi_worker", lambda: True)
+    # `_restart_times` is a MODULE global holding the crash-loop budget
+    # (RESTART_BOUND spawns per RESTART_WINDOW_S) and nothing resets it between
+    # tests. A spawn here would otherwise spend budget belonging to whichever
+    # spawning test happens to run later, and push it over the bound.
+    monkeypatch.setattr(plugin, "_restart_times", [])
+    spawned = []
+
+    def fake_spawn(settings):
+        thread = _make_thread(plugin)
+        spawned.append(thread)
+        return thread
+
+    monkeypatch.setattr(plugin, "_spawn_collector", fake_spawn)
+    plugin.ensure_collector({})
+    thread = spawned[0]
+    try:
+        plugin.Plugin().stop({"reason": "reload"})
+        assert thread.dustarr_stop.is_set()
+    finally:
+        thread.dustarr_stop.set()
+        thread.join(timeout=2)
+
+
+def test_stop_never_raises_on_a_context_that_is_not_a_mapping(plugin):
+    """A cleanup failure must not break Dispatcharr's loader, and reading the
+    reason out of the context is the one step that sits outside the existing
+    try/except.
+    """
+    core_sched = sys.modules["core.scheduling"]
+    core_sched.delete_periodic_task.reset_mock()
+    plugin.Plugin().stop("reload")               # must not raise
+    core_sched.delete_periodic_task.assert_not_called()
 
 
 def test_stop_never_raises_even_if_scheduling_cleanup_fails(plugin, monkeypatch):
@@ -386,7 +466,7 @@ def test_stop_never_raises_even_if_scheduling_cleanup_fails(plugin, monkeypatch)
         raise RuntimeError("boom")
 
     monkeypatch.setattr(core_sched, "delete_periodic_task", boom)
-    plugin.Plugin().stop()               # must not raise
+    plugin.Plugin().stop({"reason": "disable"})     # must not raise
 
 
 # ---- C1: the collector must actually START -- nothing else ever calls run() -
