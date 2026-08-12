@@ -293,3 +293,20 @@ upgrading.** Dispatcharr's web workers hot-reload a plugin when `plugin.json`'s
 modified time changes, but the Celery workers that run the scheduled report task
 only import plugins once, at worker start, so an in-place upgrade leaves the old
 code running in Celery until the container restarts.
+
+## Changelog
+
+Release notes are in [docs/CHANGELOG.md](docs/CHANGELOG.md), newest first. Each
+entry says what changed from the operator's point of view, not what changed in
+the code.
+
+## Versioning
+
+Calendar versioning, `Major.YY.DDDHHMM`: major version, two-digit year,
+day-of-year, then the UTC time the version was cut. `1.26.2241505` is major
+version 1, built on day 224 of 2026 at 15:05 UTC. A later version string is
+always a later build.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

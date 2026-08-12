@@ -1,0 +1,50 @@
+# Fails when the tree would publish a provider hostname, an M3U account suffix,
+# a LAN address or a personal path. Every real leak in this workspace has been in
+# that category rather than the cloud-token category a generic scanner looks for,
+# which is why .publish-audit.json carries a repository-specific deny list.
+#
+# This repository is PRIVATE today. That is not a reason to skip the scan: a
+# repository can be flipped to public in two clicks, a collaborator can be added
+# at any time, and the tree is also the source of any release archive. The audit
+# is about what the tree WOULD publish, not about who can read it right now.
+#
+# The rules are applied inline below rather than by the workspace audit script,
+# which is not committed here. That is deliberate: the script only applies the
+# repository-specific rules when it is given --rules on the command line, and a
+# workflow that forgot the flag would pass while checking almost nothing.
+#
+# The push trigger is load bearing. The maintainer pushes to master directly, so
+# a pull-request-only trigger would leave every direct push unaudited. That
+# happened on a sibling repository for its first 11 runs.
+#
+# This is a SECOND line of defence, not a replacement for running the full
+# workspace audit before pushing. It applies only the deny and allow lists; it
+# does not run the built-in credential, hostname and entropy patterns, and it
+# cannot scan history.
+name: Publish audit
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check the deny list is present and parses
+        run: python .github/scripts/check_audit_rules.py
+
+      - name: Scan the tree against the deny list
+        run: python .github/scripts/scan_tree.py
