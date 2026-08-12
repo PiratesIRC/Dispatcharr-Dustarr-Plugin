@@ -1,5 +1,28 @@
 # Changelog
 
+## Repository maintenance, August 12, 2026 (no plugin version change)
+
+Documentation and tooling only. The plugin itself is unchanged.
+
+- **Added a license.** MIT, matching every sibling plugin. Its absence would
+  have blocked a Dispatcharr Plugin Hub listing, because the Hub requires a
+  license field, and an unlicensed repository grants nobody any rights.
+- **The credential audit now runs automatically** on every push and pull
+  request, rather than depending on somebody remembering to run it. It applies
+  the repository-specific deny list, which is the half that catches real
+  problems: a provider hostname and a local network prefix look like ordinary
+  words to a generic secret scanner. It is a second line of defence and does
+  not replace the full audit before publishing, because it skips the built-in
+  credential patterns and cannot scan history.
+- **Added the contributor and support files**: how to report a problem without
+  pasting your provider credentials, what the plugin can reach and what the
+  report contains, a troubleshooting guide covering the failures that have
+  actually happened, a development guide, issue and pull request forms, and an
+  optional pre-commit hook.
+- **Fixed a test that could fail for the wrong reason.** A counter shared
+  between tests meant an unrelated test could fail depending on execution
+  order, which sends the next person looking in the wrong place.
+
 ## 1.26.2241505, August 12, 2026
 
 **Fixed: the weekly report schedule was cancelled by reloading the plugin.**
