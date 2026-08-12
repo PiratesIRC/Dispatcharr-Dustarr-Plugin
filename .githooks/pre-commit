@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Dustarr pre-commit gate. Fast checks only.
+#
+# Enable once per clone:
+#     git config core.hooksPath .githooks
+#
+# Bypass in an emergency with:  git commit --no-verify
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+PY="${PYTHON:-python}"
+command -v "$PY" >/dev/null 2>&1 || PY=python3
+
+echo "[pre-commit] byte-compiling plugin sources..."
+"$PY" -m compileall -q dustarr
+
+echo "[pre-commit] checking version sync..."
+"$PY" scripts/check_version_sync.py
+
+# Cheapest possible moment to catch a provider hostname, an M3U account suffix,
+# a local network address or a personal path: before the commit exists at all.
+# Rewriting history after a push does not reach forks, caches or pull request
+# references, so the fix afterwards is to rotate rather than to edit.
+echo "[pre-commit] scanning the tree against the credential deny list..."
+"$PY" .github/scripts/check_audit_rules.py
+"$PY" .github/scripts/scan_tree.py
+
+# The whole suite runs in about four seconds, so there is no subset worth
+# maintaining and no way for a slow test to be quietly skipped here.
+echo "[pre-commit] running the test suite..."
+"$PY" -m pytest -q
+
+echo "[pre-commit] OK"

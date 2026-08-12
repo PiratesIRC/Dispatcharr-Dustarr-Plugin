@@ -294,6 +294,17 @@ modified time changes, but the Celery workers that run the scheduled report task
 only import plugins once, at worker start, so an in-place upgrade leaves the old
 code running in Celery until the container restarts.
 
+## Further reading
+
+- [docs/troubleshooting.md](docs/troubleshooting.md) if something is not
+  working: no report arrived, nothing is being recorded, the numbers look wrong,
+  or the email is not turning up.
+- [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for how the plugin is put together
+  and the constraints that are not obvious from one file.
+- [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or a pull request.
+- [SECURITY.md](SECURITY.md) for what the plugin can reach, what the report
+  contains, and how to report a vulnerability privately.
+
 ## Changelog
 
 Release notes are in [docs/CHANGELOG.md](docs/CHANGELOG.md), newest first. Each
