@@ -345,6 +345,14 @@ def build_model(rows, usage, settings, now):
         last_watched = entry.get("last_watched")
         if not last_watched:
             continue
+        # This recomputes days-since from the raw stored `last_watched`
+        # rather than reusing entry["days_since_watched_sort"] (built above
+        # in _entry from the same raw value, but coerced/rounded there
+        # first). The two agree today only because _sanitize_usage coerces
+        # last_watched to a float or None before either computation ever
+        # sees it. If that coercion or either computation changes, this
+        # comparison and the rendered sort key can silently disagree about
+        # which channels are cold. Keep them consistent.
         if (now - float(last_watched)) / 86400.0 < cold_window:
             continue
         last_tuned = entry.get("last_tuned")

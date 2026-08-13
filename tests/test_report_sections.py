@@ -267,3 +267,52 @@ def test_the_cold_section_count_matches_both_tables(rp, gw):
     model_["cold_still_tried"] = model_["most_used"][1:2]
     html = rp.render_html(model_)
     assert 'Channels going cold <span class="count">2</span>' in html
+
+
+def test_classification_and_rendering_agree_end_to_end(rp, gw):
+    """No other test drives build_model() and render_html() together for the
+    cold section -- the tests above hand-mutate a model dict instead. Build a
+    real model from channel rows and usage data holding two genuinely cold
+    channels (watched once, long ago, never tuned since), render it, and
+    check the section heading count and that both channel names land inside
+    the "Channels going cold" section and nowhere else on the page.
+    top_n=0 keeps most_used/least_used empty so a cold channel cannot also
+    surface there and make the "nowhere else" half of this test meaningless.
+    """
+    rows = [gw.ChannelRow(id=0, uuid="cold-a", name="Cold Channel Alpha",
+                          group="US: Movies", auto_created=False,
+                          created_at=NOW - 300 * 86400, proxying=True),
+            gw.ChannelRow(id=1, uuid="cold-b", name="Cold Channel Bravo",
+                          group="US: Movies", auto_created=False,
+                          created_at=NOW - 300 * 86400, proxying=True)]
+    channels = {
+        "cold-a": {"watch_count": 2, "watch_seconds": 3600.0, "tune_count": 2,
+                  "last_watched": NOW - 100 * 86400,
+                  "last_tuned": NOW - 100 * 86400,
+                  "first_seen": NOW - 250 * 86400},
+        "cold-b": {"watch_count": 1, "watch_seconds": 1800.0, "tune_count": 1,
+                  "last_watched": NOW - 90 * 86400,
+                  "last_tuned": NOW - 90 * 86400,
+                  "first_seen": NOW - 250 * 86400},
+    }
+    usage = {"channels": channels,
+             "meta": {"stats_since": NOW - 200 * 86400, "coverage": {}}}
+    built = rp.build_model(rows, usage, dict(SETTINGS, top_n=0), NOW)
+    assert [e["uuid"] for e in built["cold_abandoned"]] == ["cold-a", "cold-b"]
+    assert built["cold_still_tried"] == []
+
+    html = rp.render_html(built)
+    found = _sections(html)
+    assert "Channels going cold" in found
+    assert 'Channels going cold <span class="count">2</span>' in html
+
+    match = re.search(r'<details[^>]*>\s*<summary>.*?Channels going cold.*?'
+                      r'</summary>(.*?)</details>', html, re.DOTALL)
+    assert match, "could not locate the going-cold section body"
+    cold_body = match.group(1)
+    assert "Cold Channel Alpha" in cold_body
+    assert "Cold Channel Bravo" in cold_body
+
+    rest_of_page = html.replace(cold_body, "", 1)
+    assert "Cold Channel Alpha" not in rest_of_page
+    assert "Cold Channel Bravo" not in rest_of_page

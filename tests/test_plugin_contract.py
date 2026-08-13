@@ -197,11 +197,22 @@ def test_recent_window_days_is_declared_with_a_default_of_30(lp):
 
 
 def test_recent_window_days_is_clamped_and_cast_to_int(lp):
-    assert lp.coerce_settings({"recent_window_days": -5})["recent_window_days"] == 1
+    assert lp.coerce_settings({"recent_window_days": -5})["recent_window_days"] == 7
     assert lp.coerce_settings({"recent_window_days": 99999})["recent_window_days"] == 3650
     value = lp.coerce_settings({"recent_window_days": 45.7})["recent_window_days"]
     assert value == 45
     assert isinstance(value, int)
+
+
+def test_recent_window_days_floor_is_7_not_1(lp):
+    """A window shorter than 7 days lets an always-on channel go cold in a
+    single day: its last completed watch and its last tune both predate a
+    1 day window well before the stream itself has stopped, so it would be
+    listed as abandoned while it is actually on screen. See the comment on
+    _NUMERIC_FLOORS in plugin.py."""
+    assert lp.coerce_settings({"recent_window_days": 1})["recent_window_days"] == 7
+    assert lp.coerce_settings({"recent_window_days": 6})["recent_window_days"] == 7
+    assert lp.coerce_settings({"recent_window_days": 7})["recent_window_days"] == 7
 
 
 def test_recent_window_days_does_not_respawn_the_collector(lp):

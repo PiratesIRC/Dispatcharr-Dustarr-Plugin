@@ -453,25 +453,69 @@ def test_a_non_numeric_cell_still_carries_a_numeric_sort_key(rp, gw):
     assert ">never<" in html
 
 
+def test_the_days_since_column_sorts_numerically_including_never_cells(rp, gw):
+    """No browser is available in this environment, so clicking the column
+    heading cannot be driven directly. The sort script (_SORT_JS) only takes
+    its numeric path when BOTH compared cells' `data-v` parse via
+    parseFloat() -- otherwise it falls back to text comparison, which would
+    put "9" above "10". So the property that actually needs proving is that
+    every cell in the "Days since" column, including the ones whose visible
+    text reads "never", carries a `data-v` attribute that parses as a float.
+
+    Uses a model with both watched (numeric days-since) and never-watched
+    ("never" display, NEVER_SORT data-v) channels, so both cell shapes are
+    exercised in the same rendered page."""
+    days_since_idx = next(i for i, (key, _) in enumerate(rp._COLUMNS)
+                          if key == "days_since_watched")
+    html = rp.render_html(model(rp, gw, n=6, watched=2))
+
+    checked = 0
+    for row in re.findall(r"<tr>(.*?)</tr>", html, re.DOTALL):
+        cells = re.findall(r"<td[^>]*data-v='([^']*)'[^>]*>", row)
+        # Only rows shaped like the per-channel table (one cell per
+        # _COLUMNS entry) are in scope -- the per-group rollup table above
+        # each section also uses <td data-v=...> cells but has a different
+        # column count and is not the column under test.
+        if len(cells) != len(rp._COLUMNS):
+            continue
+        raw = cells[days_since_idx]
+        try:
+            float(raw)
+        except ValueError:
+            pytest.fail(f"days-since data-v {raw!r} does not parse as a float")
+        checked += 1
+    assert checked > 0, "no per-channel table rows were found to check"
+
+
 REPORT_SIZE_CEILING = 850_000
 
 
 def test_a_full_size_report_stays_under_the_attachment_ceiling(rp, gw):
     """The report is emailed as an attachment against a 1 MiB cap. Measured at
-    522,504 bytes for this shape before the recency columns were added."""
+    660,091 bytes for this shape (last_watched aged past the default 30 day
+    cold window, so the "Channels going cold" section is populated rather
+    than empty)."""
     rows = [gw.ChannelRow(id=i, uuid=f"u{i}", name=f"Channel number {i}",
                           group=f"Group {i % 13}", auto_created=False,
                           created_at=NOW - 300 * 86400, proxying=True)
             for i in range(1440)]
+    # Aged in DAYS, not hours: at i * 3600s (an hour per channel) every
+    # watched channel fell within 6.3 days of NOW, well inside the default
+    # 30 day cold window, so "Channels going cold" rendered empty in the
+    # very test meant to bound its size. i * 86400s pushes most channels
+    # (i >= 31) past the window instead.
     channels = {f"u{i}": {"watch_count": 3, "watch_seconds": 7200.0,
-                          "tune_count": 4, "last_watched": NOW - i * 3600,
-                          "last_tuned": NOW - i * 3600,
+                          "tune_count": 4, "last_watched": NOW - i * 86400,
+                          "last_tuned": NOW - i * 86400,
                           "first_seen": NOW - 250 * 86400}
                 for i in range(151)}
     usage = {"channels": channels,
              "meta": {"stats_since": NOW - 200 * 86400, "coverage": {}}}
-    html = rp.render_html(rp.build_model(rows, usage,
-                                         dict(SETTINGS, top_n=20), NOW))
+    model = rp.build_model(rows, usage, dict(SETTINGS, top_n=20), NOW)
+    # The guard is only meaningful if the section it claims to bound actually
+    # has rows in it.
+    assert model["cold_abandoned"], "the cold section must not be empty here"
+    html = rp.render_html(model)
     assert len(html.encode("utf-8")) < REPORT_SIZE_CEILING
 
 

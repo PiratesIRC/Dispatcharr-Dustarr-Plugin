@@ -22,11 +22,15 @@ lasts, and it groups channels that have gone quiet since they were last seen.
   so a young dataset reports an empty section for a stated reason rather than
   a number that looks like a real zero.
 - **Added one new setting, "Cold threshold (days)"** (`recent_window_days`,
-  default 30, one to 3650 days), the length of that window. It is a judgment
-  about the household, not about layout, which is why it is configurable
-  while the report's other windows are fixed.
-- **The CSV export gained the same two columns**, "days_since_watched" and
-  "avg_session_minutes", alongside the existing fields.
+  default 30, seven to 3650 days), the length of that window. The floor is 7
+  days, not 1: a shorter window can mark a channel that has been streaming
+  continuously as cold, because both its last completed watch and its last
+  tune predate a window that short while it is still on screen.
+- **The CSV export gained the same two columns, "avg_session_minutes" and
+  "days_since_watched", but they were inserted between existing columns, not
+  appended.** The column order changed as a result. Any consumer that reads
+  the CSV by position rather than by header name will break; read the header
+  row instead.
 
 The rendered sample report fixture is regenerated to match. No mutation, no
 change to what the collector records, and no change to any other plugin.

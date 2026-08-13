@@ -118,13 +118,10 @@ FIELDS = [
      "type": "number", "default": 30,
      "description": "A channel younger than this cannot be judged unused."},
     {"id": "recent_window_days", "label": "Cold threshold (days)",
-     "type": "number", "default": 30, "min": 1, "max": 3650,
+     "type": "number", "default": 30, "min": 7, "max": 3650,
      "description": "How long an absence counts as cold. A channel watched at "
-                    "some point but not once inside this window is listed as "
-                    "going cold. The report shows fixed time windows because a "
-                    "page written to a file cannot be re-queried after it is "
-                    "built; this one number is configurable because it is a "
-                    "judgment about your household, not about layout."},
+                    "some point, but not once inside this window, is listed as "
+                    "going cold."},
     {"id": "top_n", "label": "Top/bottom N", "type": "number", "default": 20},
     {"id": "never_watched_ceiling", "label": "Never-watched alarm ceiling",
      "type": "number", "default": 0.98,
@@ -196,12 +193,21 @@ ACTIONS = [
      "button_variant": "outline", "button_color": "gray"},
 ]
 
+# recent_window_days floors at 7, not 1: a channel that has been streaming
+# continuously for longer than the window, and whose last completed watch
+# also predates the window, fails both timestamp tests (see
+# sessionizer.py: last_watched is written only when a session finalizes,
+# and last_tuned only when a session opens) and is listed as abandoned while
+# it is actually on screen. It does not even reach the still-tried list,
+# because the tune timestamp is equally stale for one unbroken session. At a
+# window of 1 day an always-on television reaches that state in 24 hours. A
+# floor of 7 days makes it require an implausible unbroken session.
 _NUMERIC_FLOORS = {"poll_interval_s": (5, MAX_POLL_INTERVAL_S),
                    "min_watch_seconds": (10, 3600),
                    "client_gap_grace_s": (30, 600),
                    "merge_gap_s": (0, 600),
                    "unused_threshold_days": (1, 3650),
-                   "recent_window_days": (1, 3650),
+                   "recent_window_days": (7, 3650),
                    "top_n": (1, 500),
                    "never_watched_ceiling": (0.05, 1.0)}
 
