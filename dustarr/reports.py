@@ -178,6 +178,13 @@ def _entry(row, record, reason, now):
             days_since = max(0.0, (now - float(last_watched)) / 86400.0)
         except (TypeError, ValueError, OSError):
             days_since = None
+    last_tuned = record.get("last_tuned")
+    days_since_tuned = None
+    if last_tuned:
+        try:
+            days_since_tuned = max(0.0, (now - float(last_tuned)) / 86400.0)
+        except (TypeError, ValueError, OSError):
+            days_since_tuned = None
     # Denominated on qualified watches, the same population as `hours`, so the
     # two columns multiply back to each other. A watch_count <= 0 or a
     # non-finite result (an infinite or NaN watch_seconds, both untrusted
@@ -212,7 +219,13 @@ def _entry(row, record, reason, now):
                                 else "n/a"),
         "avg_session_minutes_sort": (round(avg_minutes, 1) if avg_minutes is not None
                                      else -1.0),
-        "last_tuned": record.get("last_tuned"),
+        "last_tuned": last_tuned,
+        # Not a rendered column and deliberately without a sort companion
+        # (contrast days_since_watched/days_since_watched_sort above): its
+        # only consumer is the cold-classification loop in build_model,
+        # which needs the value, never a display string or a sort key.
+        "days_since_tuned": (round(days_since_tuned, 1)
+                             if days_since_tuned is not None else None),
         "tune_count": int(record.get("tune_count") or 0),
         "age_days": round(age_days, 1) if age_days is not None else None,
         "reason": reason,
@@ -368,20 +381,15 @@ def build_model(rows, usage, settings, now):
             last_watched = entry.get("last_watched")
             if not last_watched:
                 continue
-            # This recomputes days-since from the raw stored `last_watched`
-            # rather than reusing entry["days_since_watched_sort"] (built
-            # above in _entry from the same raw value, but coerced/rounded
-            # there first). The two agree today only because _sanitize_usage
-            # coerces last_watched to a float or None before either
-            # computation ever sees it. If that coercion or either
-            # computation changes, this comparison and the rendered sort key
-            # can silently disagree about which channels are cold. Keep them
-            # consistent.
-            if (now - float(last_watched)) / 86400.0 < cold_window:
+            # Reuses the values _entry already computed (days_since_watched_sort,
+            # days_since_tuned) rather than recomputing from the raw timestamps,
+            # so there is one definition of how long ago something happened.
+            if entry["days_since_watched_sort"] < cold_window:
                 continue
             last_tuned = entry.get("last_tuned")
-            still_tried = (bool(last_tuned)
-                          and (now - float(last_tuned)) / 86400.0 < cold_window)
+            days_since_tuned = entry.get("days_since_tuned")
+            still_tried = (bool(last_tuned) and days_since_tuned is not None
+                          and days_since_tuned < cold_window)
             # Tried recently and abandoned inside the watch threshold means
             # BROKEN, not unwanted. Conflating the two is how a metrics tool
             # recommends disabling the channels somebody is fighting hardest
@@ -1034,6 +1042,19 @@ def _section(title, count, body, open_by_default, dot_class):
             f'{badge}{_esc(title)}{number}</summary>{body}</details>')
 
 
+def _excluded_watched_note(count, rest):
+    """One `<p class='sub'>` note about watched channels sitting in an
+    excluded group, shared by the rankings note and the going-cold note --
+    both are driven by the same count and differ only in the sentence that
+    follows the singular/plural, is/are opening. `rest` is that remainder,
+    already carrying its own leading `<b>...</b>` phrase."""
+    if not count:
+        return ""
+    plural = "" if count == 1 else "s"
+    verb = "is" if count == 1 else "are"
+    return f"<p class='sub'>{count} watched channel{plural} {verb} {rest}</p>"
+
+
 def render_html(model):
     """A complete, self-contained HTML page -- see the module-level note.
 
@@ -1091,15 +1112,11 @@ def render_html(model):
     # "what I watch most among the channels I might turn off". State the gap.
     watched_excluded = sum(1 for entry in model["excluded"]
                            if (entry.get("watch_count") or 0) > 0)
-    rankings_note = ""
-    if watched_excluded:
-        plural = "" if watched_excluded == 1 else "s"
-        rankings_note = (
-            f"<p class='sub'>{watched_excluded} watched channel{plural} "
-            f"{'is' if watched_excluded == 1 else 'are'} <b>excluded from these "
-            f"rankings</b>. These lists answer &quot;what can I turn off&quot;, "
-            f"not &quot;what do I watch most&quot;. Excluded channels are "
-            f"never judged, however much they are watched.</p>")
+    rankings_note = _excluded_watched_note(
+        watched_excluded,
+        "<b>excluded from these rankings</b>. These lists answer &quot;what "
+        "can I turn off&quot;, not &quot;what do I watch most&quot;. "
+        "Excluded channels are never judged, however much they are watched.")
 
     judged = sum(counts[key] for _, key, _ in _SEGMENT_ORDER)
     bar_svg, bar_legend = _svg_split_bar(
@@ -1154,14 +1171,10 @@ def render_html(model):
     # at the judged population, so a watched channel sitting in an excluded
     # group can never be listed here either, however long it has gone
     # unwatched. Reuses the same count the rankings note above is built from.
-    cold_excluded_note = ""
-    if watched_excluded:
-        plural = "" if watched_excluded == 1 else "s"
-        cold_excluded_note = (
-            f"<p class='sub'>{watched_excluded} watched channel{plural} "
-            f"{'is' if watched_excluded == 1 else 'are'} <b>excluded from "
-            f"this classification</b> too, and can never be listed as cold, "
-            f"however long it has gone unwatched.</p>")
+    cold_excluded_note = _excluded_watched_note(
+        watched_excluded,
+        "<b>excluded from this classification</b> too, and can never be "
+        "listed as cold, however long it has gone unwatched.")
 
     cold_still_tried = model.get("cold_still_tried") or []
     cold_still_tried_block = ""

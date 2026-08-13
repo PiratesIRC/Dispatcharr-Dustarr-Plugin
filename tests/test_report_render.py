@@ -461,6 +461,21 @@ def test_the_report_issue_url_matches_the_plugins_own(rp):
     assert rp.REPO_URL == plugin.ISSUES_URL.rsplit("/", 1)[0]
 
 
+def test_the_cold_window_floor_matches_the_settings_floor():
+    """reports.py deliberately does NOT import plugin.py (see the test above),
+    so MIN_COLD_WINDOW_DAYS is duplicated as the lower bound of
+    _NUMERIC_FLOORS["recent_window_days"]. Both comments say the two must
+    agree: a cold window shorter than about a week can name a channel that
+    is currently being watched, because the collector records a watch only
+    when the session ends. Bind the two numbers together here or relaxing
+    one silently reopens that defect."""
+    import sys
+    rp = sys.modules["dustarr_under_test.reports"]
+    plugin = sys.modules["dustarr_under_test.plugin"]
+    floor, _high = plugin._NUMERIC_FLOORS["recent_window_days"]
+    assert rp.MIN_COLD_WINDOW_DAYS == floor
+
+
 def test_section_glyphs_are_decoration_and_never_the_only_signal(rp, gw):
     """Same rule the palette follows. A client with no emoji font shows a box
     or nothing, so the coloured dot and the words have to carry the meaning on
