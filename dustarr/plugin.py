@@ -117,6 +117,14 @@ FIELDS = [
     {"id": "unused_threshold_days", "label": "Unused threshold (days)",
      "type": "number", "default": 30,
      "description": "A channel younger than this cannot be judged unused."},
+    {"id": "recent_window_days", "label": "Cold threshold (days)",
+     "type": "number", "default": 30, "min": 1, "max": 3650,
+     "description": "How long an absence counts as cold. A channel watched at "
+                    "some point but not once inside this window is listed as "
+                    "going cold. The report shows fixed time windows because a "
+                    "page written to a file cannot be re-queried after it is "
+                    "built; this one number is configurable because it is a "
+                    "judgment about your household, not about layout."},
     {"id": "top_n", "label": "Top/bottom N", "type": "number", "default": 20},
     {"id": "never_watched_ceiling", "label": "Never-watched alarm ceiling",
      "type": "number", "default": 0.98,
@@ -193,6 +201,7 @@ _NUMERIC_FLOORS = {"poll_interval_s": (5, MAX_POLL_INTERVAL_S),
                    "client_gap_grace_s": (30, 600),
                    "merge_gap_s": (0, 600),
                    "unused_threshold_days": (1, 3650),
+                   "recent_window_days": (1, 3650),
                    "top_n": (1, 500),
                    "never_watched_ceiling": (0.05, 1.0)}
 
@@ -221,7 +230,7 @@ def coerce_settings(settings):
             low, high = _NUMERIC_FLOORS.get(fid, (None, None))
             if low is not None:
                 value = max(low, min(high, value))
-            if fid in ("top_n", "unused_threshold_days"):
+            if fid in ("top_n", "unused_threshold_days", "recent_window_days"):
                 value = int(value)
             elif fid == "poll_interval_s" and value == int(value):
                 value = int(value)
@@ -267,12 +276,23 @@ def _is_uwsgi_worker():
 
 
 # ---- collector thread -------------------------------------------------------
+# Settings the COLLECTOR does not read. ensure_collector respawns the collector
+# thread on any fingerprint change, and a respawn constructs a fresh
+# Sessionizer, forfeiting every in-flight watch session. A setting that only
+# affects how the report is drawn must never be able to do that. Keep this list
+# minimal: a setting listed here in error stops a real collection change from
+# taking effect until the next version bump.
+_REPORT_ONLY_SETTINGS = ("recent_window_days",)
+
+
 def _thresholds_fingerprint(thresholds):
     """A hashable snapshot of coerced settings (I1), used to detect a settings
     change that must respawn the collector even when PLUGIN_VERSION hasn't
     moved. `thresholds` is always coerce_settings()'s output -- only numbers/
-    bools/strings -- so a sorted tuple of items is stable and comparable."""
-    return tuple(sorted(thresholds.items()))
+    bools/strings -- so a sorted tuple of items is stable and comparable.
+    Excludes _REPORT_ONLY_SETTINGS, which the collector never reads."""
+    return tuple(sorted((key, value) for key, value in thresholds.items()
+                        if key not in _REPORT_ONLY_SETTINGS))
 
 
 def _spawn_collector(settings):

@@ -1,9 +1,25 @@
 import json
 from pathlib import Path
 
+import pytest
 from conftest import PLUGIN_DIR, load_plugin
 
 VALID_FIELD_TYPES = {"string", "number", "boolean", "select", "text", "info"}
+
+
+@pytest.fixture
+def lp():
+    """The loaded plugin module, with a fresh Plugin() attached as `.instance`.
+
+    `lp.instance.fields` is the served field list (Plugin.__init__ builds it),
+    which is what must be asserted on: the manifest declares none, so reading
+    it there gives a false pass. Module-level helpers such as
+    `coerce_settings` and `_thresholds_fingerprint` are reachable straight off
+    `lp` because `lp` is the plugin module itself.
+    """
+    plugin = load_plugin()
+    plugin.instance = plugin.Plugin()
+    return plugin
 
 
 def test_init_exports_only_plugin():
@@ -172,3 +188,35 @@ def test_build_report_action_states_its_newsflasharr_requirement():
                 if a["id"] == "build_report")["description"].lower()
     assert "newsflasharr" in desc
     assert "smtp" in desc
+
+
+def test_recent_window_days_is_declared_with_a_default_of_30(lp):
+    field = next(f for f in lp.instance.fields if f["id"] == "recent_window_days")
+    assert field["type"] == "number"
+    assert field["default"] == 30
+
+
+def test_recent_window_days_is_clamped_and_cast_to_int(lp):
+    assert lp.coerce_settings({"recent_window_days": -5})["recent_window_days"] == 1
+    assert lp.coerce_settings({"recent_window_days": 99999})["recent_window_days"] == 3650
+    value = lp.coerce_settings({"recent_window_days": 45.7})["recent_window_days"]
+    assert value == 45
+    assert isinstance(value, int)
+
+
+def test_recent_window_days_does_not_respawn_the_collector(lp):
+    """A report-only setting must not restart the collector: a respawn builds a
+    fresh Sessionizer and forfeits every in-flight watch session."""
+    base = lp.coerce_settings({"recent_window_days": 30})
+    changed = lp.coerce_settings({"recent_window_days": 90})
+    assert base != changed
+    assert (lp._thresholds_fingerprint(base)
+            == lp._thresholds_fingerprint(changed))
+
+
+def test_a_collection_setting_still_respawns_the_collector(lp):
+    """Guard against the exclusion list growing until it excludes everything."""
+    base = lp.coerce_settings({"poll_interval_s": 15})
+    changed = lp.coerce_settings({"poll_interval_s": 20})
+    assert (lp._thresholds_fingerprint(base)
+            != lp._thresholds_fingerprint(changed))
