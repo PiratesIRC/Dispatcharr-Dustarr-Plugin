@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.26.2251457, August 13, 2026
+## 1.26.2251625, August 13, 2026
 
 **Release A: recency.** The report now shows, for every watched channel, how
 long it has been since it was last watched and how long a typical watch
@@ -31,6 +31,21 @@ lasts, and it groups channels that have gone quiet since they were last seen.
   appended.** The column order changed as a result. Any consumer that reads
   the CSV by position rather than by header name will break; read the header
   row instead.
+
+- **When the tracked dataset is younger than the seven day floor, the section
+  states that it cannot answer yet** and lists nothing, rather than judging
+  against a window shorter than the floor. Shortening the window to the age of
+  a very young dataset was the same defect the floor exists to prevent.
+- **The section now always states the window it used**, so a reader can tell
+  whether "the recent window" meant thirty days or ninety, and it says how many
+  watched channels sit in excluded groups and therefore can never be listed as
+  cold, matching what the ranking sections already disclose.
+- **Changing a setting that only affects the report no longer restarts the
+  collector.** The check now covers only the four settings the collector reads,
+  derived from the collection thresholds themselves rather than a hand
+  maintained list. Before this, changing the top and bottom count, the unused
+  threshold, the alarm ceiling, the notification toggle, the report schedule or
+  an exclusion setting discarded every watch session in progress.
 
 The rendered sample report fixture is regenerated to match. No mutation, no
 change to what the collector records, and no change to any other plugin.
