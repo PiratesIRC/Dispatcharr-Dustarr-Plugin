@@ -41,6 +41,13 @@ except ImportError:                     # standalone (non-package) import path
 # absent from usage.channels (THE INVARIANT above).
 EMPTY = sessionizer._blank_record(None)
 
+# Sort sentinel for a channel that was never watched. Large rather than small so
+# that sorting the "days since" column ascending puts the most recently watched
+# first and the never-watched at the far end, which is where a reader looking
+# for retirement candidates expects them. It is a float so the column can never
+# fall into the sort script's text-comparison path.
+NEVER_SORT = 99999.0
+
 
 def _coerce_int(value, default=0):
     if value is None:
@@ -145,12 +152,25 @@ def _entry(row, record, reason, now):
     created = row.created_at
     age_days = ((now - created) / 86400.0) if created else None
     last_watched = record.get("last_watched")
+    watch_count = int(record.get("watch_count") or 0)
+    watch_seconds = float(record.get("watch_seconds") or 0.0)
+
+    # Clamped at zero: a forward clock step (or a corrected backward one) can
+    # put last_watched in the future, and a negative age would sort a stale
+    # channel ahead of one watched a minute ago.
+    days_since = None
+    if last_watched:
+        days_since = max(0.0, (now - float(last_watched)) / 86400.0)
+    # Denominated on qualified watches, the same population as `hours`, so the
+    # two columns multiply back to each other.
+    avg_minutes = (watch_seconds / watch_count / 60.0) if watch_count else None
+
     return {
         "uuid": row.uuid,
         "name": row.name,
         "group": row.group or "(no group)",
-        "watch_count": int(record.get("watch_count") or 0),
-        "hours": round(float(record.get("watch_seconds") or 0.0) / 3600.0, 2),
+        "watch_count": watch_count,
+        "hours": round(watch_seconds / 3600.0, 2),
         "last_watched": last_watched,
         # M1: "last watched 8 months ago" is the single highest-value signal
         # in the dataset for "what do I turn off" -- it was collected and
@@ -158,6 +178,17 @@ def _entry(row, record, reason, now):
         # same _fmt_local the data-confidence header already uses) so the
         # HTML table renderer stays a generic column-driven loop.
         "last_watched_display": _fmt_local(last_watched),
+        # Display value and sort key are separate on purpose: the sort script
+        # falls back to text comparison unless BOTH compared cells parse as
+        # numbers, so one "never" cell would order the whole column 9 above 10.
+        "days_since_watched": (round(days_since, 1) if days_since is not None
+                               else "never"),
+        "days_since_watched_sort": (round(days_since, 1) if days_since is not None
+                                    else NEVER_SORT),
+        "avg_session_minutes": (round(avg_minutes, 1) if avg_minutes is not None
+                                else "n/a"),
+        "avg_session_minutes_sort": (round(avg_minutes, 1) if avg_minutes is not None
+                                     else -1.0),
         "last_tuned": record.get("last_tuned"),
         "tune_count": int(record.get("tune_count") or 0),
         "age_days": round(age_days, 1) if age_days is not None else None,
@@ -821,7 +852,8 @@ document.querySelectorAll('table').forEach(function (table) {
 # only ever written to the CSV's trailing ISO-8601 columns (render_csv).
 _COLUMNS = [("name", "Channel"), ("group", "Group"), ("watch_count", "Watches"),
             ("hours", "Hours"), ("tune_count", "Tunes"), ("age_days", "Age (d)"),
-            ("last_watched_display", "Last watched"), ("reason", "Reason")]
+            ("last_watched_display", "Last watched"),
+            ("days_since_watched", "Days since watched"), ("reason", "Reason")]
 
 
 def _esc(value):
@@ -846,11 +878,17 @@ def _table(entries):
         cells = []
         for key, _ in _COLUMNS:
             value = entry.get(key)
-            numeric = isinstance(value, (int, float))
+            # A column may carry a separate numeric sort key alongside a
+            # human display value ("never", "n/a"). Where it does, the cell
+            # sorts on the number and reads as the text, and the column stays
+            # right-aligned like the other numeric ones.
+            sort_value = entry.get(f"{key}_sort")
+            numeric = isinstance(value, (int, float)) or sort_value is not None
             cls = " class='num'" if numeric else ""
+            data_v = value if sort_value is None else sort_value
             # name/group/reason are provider- or user-controlled strings and
             # get HTML-escaped like everything else routed through _esc().
-            cells.append(f"<td{cls} data-v='{_esc(value)}'>{_esc(value)}</td>")
+            cells.append(f"<td{cls} data-v='{_esc(data_v)}'>{_esc(value)}</td>")
         body.append(f"<tr>{''.join(cells)}</tr>")
     return (f"<div class='scroll'><table><thead><tr>{head}</tr></thead>"
             f"<tbody>{''.join(body)}</tbody></table></div>")

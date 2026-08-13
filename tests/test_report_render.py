@@ -441,3 +441,13 @@ def test_every_glyph_is_keyed_on_a_dot_class_that_exists_in_the_css(rp):
     silently render no glyph at all."""
     for dot_class in rp._SECTION_GLYPH:
         assert f".{dot_class} {{" in rp._CSS, dot_class
+
+
+def test_a_non_numeric_cell_still_carries_a_numeric_sort_key(rp, gw):
+    """One text cell in a numeric column makes the whole column sort as text
+    (9 above 10), because the sort script needs BOTH cells to parse."""
+    entries = [{"name": "A", "days_since_watched": "never",
+                "days_since_watched_sort": rp.NEVER_SORT}]
+    html = rp._table(entries)
+    assert f"data-v='{rp.NEVER_SORT}'" in html
+    assert ">never<" in html

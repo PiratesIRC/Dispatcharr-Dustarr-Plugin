@@ -403,3 +403,58 @@ def test_group_rollup_carries_a_judged_count(rp, gw):
     assert bucket["judged"] == 4
     assert bucket["never"] == 3
     assert bucket["never"] <= bucket["judged"]
+
+
+def test_days_since_watched_is_a_number_for_a_watched_channel(rp, gw):
+    row = gw.ChannelRow(id=1, uuid="u1", name="CH1", group="G",
+                        auto_created=False, created_at=NOW - 90 * 86400,
+                        proxying=True)
+    record = {"watch_count": 2, "watch_seconds": 7200.0, "tune_count": 2,
+              "last_watched": NOW - 10 * 86400, "last_tuned": NOW - 10 * 86400,
+              "first_seen": NOW - 80 * 86400}
+    entry = rp._entry(row, record, "watched", NOW)
+    assert entry["days_since_watched"] == 10.0
+    assert entry["days_since_watched_sort"] == 10.0
+
+
+def test_days_since_watched_says_never_but_still_sorts_numerically(rp, gw):
+    row = gw.ChannelRow(id=2, uuid="u2", name="CH2", group="G",
+                        auto_created=False, created_at=NOW - 90 * 86400,
+                        proxying=True)
+    entry = rp._entry(row, {}, "never_watched", NOW)
+    assert entry["days_since_watched"] == "never"
+    assert entry["days_since_watched_sort"] == rp.NEVER_SORT
+    assert isinstance(entry["days_since_watched_sort"], float)
+
+
+def test_a_future_last_watched_does_not_produce_a_negative_age(rp, gw):
+    """A clock step must not make a channel sort as more recent than now."""
+    row = gw.ChannelRow(id=3, uuid="u3", name="CH3", group="G",
+                        auto_created=False, created_at=NOW - 90 * 86400,
+                        proxying=True)
+    record = {"watch_count": 1, "watch_seconds": 600.0, "tune_count": 1,
+              "last_watched": NOW + 5 * 86400, "last_tuned": None,
+              "first_seen": NOW - 80 * 86400}
+    entry = rp._entry(row, record, "watched", NOW)
+    assert entry["days_since_watched"] == 0.0
+
+
+def test_average_session_length_is_minutes_per_qualified_watch(rp, gw):
+    row = gw.ChannelRow(id=4, uuid="u4", name="CH4", group="G",
+                        auto_created=False, created_at=NOW - 90 * 86400,
+                        proxying=True)
+    record = {"watch_count": 4, "watch_seconds": 7200.0, "tune_count": 4,
+              "last_watched": NOW - 3600, "last_tuned": NOW - 3600,
+              "first_seen": NOW - 80 * 86400}
+    entry = rp._entry(row, record, "watched", NOW)
+    assert entry["avg_session_minutes"] == 30.0
+
+
+def test_average_session_length_is_not_a_zero_when_never_watched(rp, gw):
+    """Zero would read as 'watched for no time', which is a different claim."""
+    row = gw.ChannelRow(id=5, uuid="u5", name="CH5", group="G",
+                        auto_created=False, created_at=NOW - 90 * 86400,
+                        proxying=True)
+    entry = rp._entry(row, {}, "never_watched", NOW)
+    assert entry["avg_session_minutes"] == "n/a"
+    assert entry["avg_session_minutes_sort"] == -1.0
