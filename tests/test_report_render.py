@@ -451,3 +451,32 @@ def test_a_non_numeric_cell_still_carries_a_numeric_sort_key(rp, gw):
     html = rp._table(entries)
     assert f"data-v='{rp.NEVER_SORT}'" in html
     assert ">never<" in html
+
+
+REPORT_SIZE_CEILING = 850_000
+
+
+def test_a_full_size_report_stays_under_the_attachment_ceiling(rp, gw):
+    """The report is emailed as an attachment against a 1 MiB cap. Measured at
+    522,504 bytes for this shape before the recency columns were added."""
+    rows = [gw.ChannelRow(id=i, uuid=f"u{i}", name=f"Channel number {i}",
+                          group=f"Group {i % 13}", auto_created=False,
+                          created_at=NOW - 300 * 86400, proxying=True)
+            for i in range(1440)]
+    channels = {f"u{i}": {"watch_count": 3, "watch_seconds": 7200.0,
+                          "tune_count": 4, "last_watched": NOW - i * 3600,
+                          "last_tuned": NOW - i * 3600,
+                          "first_seen": NOW - 250 * 86400}
+                for i in range(151)}
+    usage = {"channels": channels,
+             "meta": {"stats_since": NOW - 200 * 86400, "coverage": {}}}
+    html = rp.render_html(rp.build_model(rows, usage,
+                                         dict(SETTINGS, top_n=20), NOW))
+    assert len(html.encode("utf-8")) < REPORT_SIZE_CEILING
+
+
+def test_the_csv_carries_the_recency_columns(rp, gw):
+    csv_text = rp.render_csv(model(rp, gw))
+    header = csv_text.splitlines()[0]
+    assert "days_since_watched" in header
+    assert "avg_session_minutes" in header

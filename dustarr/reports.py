@@ -910,9 +910,10 @@ document.querySelectorAll('table').forEach(function (table) {
 # text) -- the raw epoch `last_watched` field stays out of _COLUMNS and is
 # only ever written to the CSV's trailing ISO-8601 columns (render_csv).
 _COLUMNS = [("name", "Channel"), ("group", "Group"), ("watch_count", "Watches"),
-            ("hours", "Hours"), ("tune_count", "Tunes"), ("age_days", "Age (d)"),
-            ("last_watched_display", "Last watched"),
-            ("days_since_watched", "Days since"), ("reason", "Reason")]
+            ("hours", "Hours"), ("avg_session_minutes", "Avg min"),
+            ("tune_count", "Tunes"), ("age_days", "Age (d)"),
+            ("days_since_watched", "Days since"),
+            ("last_watched_display", "Last watched"), ("reason", "Reason")]
 
 
 def _esc(value):
