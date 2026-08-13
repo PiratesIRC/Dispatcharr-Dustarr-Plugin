@@ -71,15 +71,30 @@ report renders the same offline, on a TV, or as an email attachment:
   excluded does not draw a misleadingly short bar. Click that column header to
   sort by share.
 
+Two columns answer the recency question directly: **Days since**, the number of
+days since a channel was last watched, and **Avg min**, the average length of a
+watch on it. Sorting by "Days since" turns the table into an ordered retirement
+queue. Channels never watched read "never" in that column and still sort as the
+coldest, and both columns appear in the CSV export too.
+
 Every column in every table sorts: click a header once for ascending, again for
 descending. Colour is used only to mean something, never for decoration, and the
 page follows your system's light or dark theme.
 
-## The three lists that matter
+## The lists that matter
 
 - **Never watched**: the dead weight. Entries are grouped by channel group so you
   can act on an entire group at once instead of clicking through channels one at a
   time.
+- **Channels going cold**: watched at some point, but not once inside the cold
+  window. These earned a real watch before, so they are weaker candidates to turn
+  off than the never-watched list and stronger than anything below it. Two things
+  are deliberately kept out of the abandoned list: a channel the collector cannot
+  observe is never judged by its silence, and a channel tuned again recently but
+  given up on before the minimum watch length is listed separately as still being
+  tried, because that shape means broken rather than unwanted. If the tracked
+  dataset is younger than seven days the section says it cannot answer yet instead
+  of listing anything.
 - **Tuned but never qualified**: channels you *tried* to watch and gave up on
   within two minutes. This list is not "barely used"; it is almost certainly
   **broken**: a dead source, a black-screen slate, or a provider connection getting
@@ -193,6 +208,11 @@ Everything lives in the plugin's settings card in the Dispatcharr UI:
   kept out of the never-watched judgment (see "Excluded by default" above).
 - **Unused threshold (days)**: how old a channel must be before it can fairly be
   called unused.
+- **Cold threshold (days)** (default 30, minimum 7): how long an absence counts as
+  cold, for the "Channels going cold" list. The minimum is seven days rather than
+  one because a watch is recorded only when the session ends, so a channel that has
+  been streaming continuously for longer than the window has no recent watch and no
+  recent tune on record while it is still on screen.
 - **Never-watched alarm ceiling** (default 0.98): the fraction of *judged*
   channels (never-watched + too-new + tuned-but-never-qualified + watched, since
   excluded and unobservable channels do not count) that must look never-watched

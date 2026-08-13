@@ -73,6 +73,19 @@ Two likely causes, and they mean opposite things.
 - **You watch it outside Dispatcharr.** The plugin sees only what flows through
   Dispatcharr's own proxy.
 
+## A channel I still watch is listed as going cold
+
+A watch is recorded only when the session ends, and a tune is recorded only when
+one starts. A channel left streaming without interruption for longer than the cold
+window therefore has no recent watch and no recent tune on record, even while it is
+on screen. The cold threshold setting has a minimum of seven days for that reason,
+so this needs a session running unbroken for at least a week.
+
+If you see it anyway, check the "Days since" column against when you actually
+watched the channel. A large gap between the two points at a collector that stopped
+seeing the channel rather than at your viewing, and the entries under "Nothing is
+being recorded at all" above cover that case.
+
 ## Most of my channels are listed as never watched
 
 That is normal and is usually correct. A typical provider lineup carries
