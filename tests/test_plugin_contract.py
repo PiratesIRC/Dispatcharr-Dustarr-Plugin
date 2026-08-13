@@ -215,19 +215,83 @@ def test_recent_window_days_floor_is_7_not_1(lp):
     assert lp.coerce_settings({"recent_window_days": 7})["recent_window_days"] == 7
 
 
-def test_recent_window_days_does_not_respawn_the_collector(lp):
-    """A report-only setting must not restart the collector: a respawn builds a
-    fresh Sessionizer and forfeits every in-flight watch session."""
-    base = lp.coerce_settings({"recent_window_days": 30})
-    changed = lp.coerce_settings({"recent_window_days": 90})
-    assert base != changed
-    assert (lp._thresholds_fingerprint(base)
-            == lp._thresholds_fingerprint(changed))
+def _changed_value(lp, field):
+    """A value that coerce_settings will treat as genuinely different from the
+    field's own default, respecting each type's own rules (a select must stay
+    one of its declared options, a number must stay in its floor/ceiling)."""
+    fid = field["id"]
+    default = field.get("default")
+    if field["type"] == "boolean":
+        return not default
+    if field["type"] == "select":
+        options = [opt["value"] for opt in field.get("options", [])]
+        for opt in options:
+            if opt != default:
+                return opt
+        raise AssertionError(f"select field {fid!r} has no alternate option")
+    if field["type"] == "number":
+        low, high = lp._NUMERIC_FLOORS.get(fid, (None, None))
+        candidate = float(default) + 1.0
+        if high is not None:
+            candidate = min(candidate, high)
+        if low is not None:
+            candidate = max(candidate, low)
+        assert candidate != default, f"could not derive a changed value for {fid!r}"
+        return candidate
+    # string / text: any different string coerces through unchanged.
+    return f"{default}-changed"
 
 
-def test_a_collection_setting_still_respawns_the_collector(lp):
-    """Guard against the exclusion list growing until it excludes everything."""
-    base = lp.coerce_settings({"poll_interval_s": 15})
-    changed = lp.coerce_settings({"poll_interval_s": 20})
-    assert (lp._thresholds_fingerprint(base)
-            != lp._thresholds_fingerprint(changed))
+def test_report_only_settings_do_not_respawn_the_collector(lp):
+    """Every setting the collector does not read must leave the fingerprint
+    unchanged: a respawn builds a fresh Sessionizer and forfeits every
+    in-flight watch session, so a setting that only affects the report (the
+    top/bottom count, the unused threshold, the alarm ceiling, the
+    notification toggle, the report schedule, the exclusion settings, and so
+    on) must never trigger one.
+
+    Driven from the served field list, not a hand-written name list, so a
+    report-only setting added later is covered automatically. This test would
+    fail if `_thresholds_fingerprint` reverted to hashing every setting: the
+    non-collection fields it drives through here (e.g. `top_n`,
+    `never_watched_ceiling`, `notify_enabled`, `report_schedule`) would then
+    change the fingerprint just like a collection threshold does.
+    """
+    base = lp.coerce_settings({})
+    base_fp = lp._thresholds_fingerprint(base)
+    collection_keys = set(lp.sessionizer.DEFAULTS)
+    for field in lp.instance.fields:
+        if field["type"] == "info" or field["id"] in collection_keys:
+            continue
+        changed = lp.coerce_settings({field["id"]: _changed_value(lp, field)})
+        assert changed[field["id"]] != base[field["id"]], (
+            f"{field['id']!r} did not actually change value in coerce_settings")
+        assert lp._thresholds_fingerprint(changed) == base_fp, (
+            f"report-only setting {field['id']!r} unexpectedly respawned the collector")
+
+
+def test_every_collection_threshold_changes_the_hash(lp):
+    """Every setting the collector DOES read must change the fingerprint on a
+    real change. Driven from sessionizer.DEFAULTS, the same dictionary
+    `_thresholds_fingerprint` derives its key set from, so the test and the
+    implementation cannot drift apart."""
+    base = lp.coerce_settings({})
+    base_fp = lp._thresholds_fingerprint(base)
+    fields_by_id = {field["id"]: field for field in lp.instance.fields}
+    for key in lp.sessionizer.DEFAULTS:
+        field = fields_by_id[key]
+        changed = lp.coerce_settings({key: _changed_value(lp, field)})
+        assert changed[key] != base[key], (
+            f"{key!r} did not actually change value in coerce_settings")
+        assert lp._thresholds_fingerprint(changed) != base_fp, (
+            f"collection threshold {key!r} did not respawn the collector")
+
+
+def test_fingerprint_is_stable_when_nothing_changes(lp):
+    """Calling coerce_settings twice on the same input must fingerprint the
+    same, or ensure_collector would respawn the collector every single call
+    for no reason at all."""
+    settings = {"poll_interval_s": 15, "top_n": 20}
+    first = lp._thresholds_fingerprint(lp.coerce_settings(settings))
+    second = lp._thresholds_fingerprint(lp.coerce_settings(dict(settings)))
+    assert first == second

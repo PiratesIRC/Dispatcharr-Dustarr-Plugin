@@ -282,13 +282,18 @@ def _is_uwsgi_worker():
 
 
 # ---- collector thread -------------------------------------------------------
-# Settings the COLLECTOR does not read. ensure_collector respawns the collector
-# thread on any fingerprint change, and a respawn constructs a fresh
-# Sessionizer, forfeiting every in-flight watch session. A setting that only
-# affects how the report is drawn must never be able to do that. Keep this list
-# minimal: a setting listed here in error stops a real collection change from
-# taking effect until the next version bump.
-_REPORT_ONLY_SETTINGS = ("recent_window_days",)
+# The fingerprint covers only the settings the collector actually reads,
+# derived from sessionizer.DEFAULTS -- the poll interval, the minimum watch
+# length, the client gap grace and the session merge gap are the whole set
+# collector.py and sessionizer.py consult. Deriving the key set from that
+# dictionary, rather than listing the four names again here, means a setting
+# that does not affect collection can never trigger a respawn (every other
+# setting -- top/bottom N, the unused threshold, the alarm ceiling, the
+# notification toggle, the report schedule, the exclusion settings -- is
+# report-only and must not forfeit an in-flight watch session), and a new
+# collection threshold can never be forgotten, because a threshold absent from
+# sessionizer.DEFAULTS is, by construction, one the collector does not use.
+_COLLECTOR_SETTING_KEYS = frozenset(sessionizer.DEFAULTS)
 
 
 def _thresholds_fingerprint(thresholds):
@@ -296,9 +301,9 @@ def _thresholds_fingerprint(thresholds):
     change that must respawn the collector even when PLUGIN_VERSION hasn't
     moved. `thresholds` is always coerce_settings()'s output -- only numbers/
     bools/strings -- so a sorted tuple of items is stable and comparable.
-    Excludes _REPORT_ONLY_SETTINGS, which the collector never reads."""
+    Includes only _COLLECTOR_SETTING_KEYS, the settings the collector reads."""
     return tuple(sorted((key, value) for key, value in thresholds.items()
-                        if key not in _REPORT_ONLY_SETTINGS))
+                        if key in _COLLECTOR_SETTING_KEYS))
 
 
 def _spawn_collector(settings):
