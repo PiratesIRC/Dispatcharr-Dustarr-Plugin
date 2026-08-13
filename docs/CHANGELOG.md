@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.26.2251457, August 13, 2026
+
+**Release A: recency.** The report now shows, for every watched channel, how
+long it has been since it was last watched and how long a typical watch
+lasts, and it groups channels that have gone quiet since they were last seen.
+
+- **Added a "Days since" column**, the number of days since a channel was
+  last watched, with its own numeric sort key so the table sorts by actual
+  distance rather than by the text of the displayed number (nine no longer
+  sorts above ten).
+- **Added an "Avg min" column**, the average length of a watch on that
+  channel, alongside the existing watch and tune counts.
+- **Added a new report section, "Channels going cold"**, for channels that
+  were watched at some point but not once inside the cold window. It carries
+  two protections: a channel the collector cannot observe is never judged by
+  its silence, and a channel tuned again recently but abandoned before the
+  minimum watch length is kept separate as still being tried rather than
+  lumped in with the abandoned ones, because that shape means broken, not
+  unwanted. The window itself is clamped to the age of the tracked dataset,
+  so a young dataset reports an empty section for a stated reason rather than
+  a number that looks like a real zero.
+- **Added one new setting, "Cold threshold (days)"** (`recent_window_days`,
+  default 30, one to 3650 days), the length of that window. It is a judgment
+  about the household, not about layout, which is why it is configurable
+  while the report's other windows are fixed.
+- **The CSV export gained the same two columns**, "days_since_watched" and
+  "avg_session_minutes", alongside the existing fields.
+
+The rendered sample report fixture is regenerated to match. No mutation, no
+change to what the collector records, and no change to any other plugin.
+
 ## Repository maintenance, August 12, 2026 (no plugin version change)
 
 Documentation and tooling only. The plugin itself is unchanged.
