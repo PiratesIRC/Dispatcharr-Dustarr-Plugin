@@ -568,6 +568,41 @@ def test_an_unclamped_window_is_reported_as_unclamped(rp, gw):
     assert model["cold_window_clamped"] is False
 
 
+def test_a_dataset_younger_than_the_floor_cannot_judge_cold_channels(rp, gw):
+    """Fix 1: the dataset-age clamp used to floor at one day and defeat the
+    seven day minimum on recent_window_days, so a three day old dataset
+    produced a three day window and named a channel abandoned even though
+    both its stored timestamps are simply as old as the dataset itself. A
+    dataset this young cannot answer the cold question at all, so both
+    lists must come back empty and the model must say why."""
+    model = _cold_model(rp, gw, last_watched_days=1, tracked_days=3)
+    assert model["cold_abandoned"] == []
+    assert model["cold_still_tried"] == []
+    assert model["cold_window_too_young"] is True
+
+
+def test_a_dataset_older_than_the_floor_but_younger_than_the_window_still_clamps(rp, gw):
+    """The dataset is older than MIN_COLD_WINDOW_DAYS (7) but still younger
+    than the requested window, so the too-young path must not fire and the
+    ordinary clamp-and-report-the-clamp behaviour must still apply."""
+    model = _cold_model(rp, gw, last_watched_days=15, window=90,
+                        tracked_days=20)
+    assert model["cold_window_days"] == 20.0
+    assert model["cold_window_clamped"] is True
+    assert model["cold_window_too_young"] is False
+
+
+def test_a_negative_dataset_age_takes_the_too_young_path(rp, gw):
+    """A stats_since in the future makes the computed dataset age negative,
+    which is truthy and smaller than the requested window, so it used to
+    collapse the window to one day for the whole report. It must take the
+    too-young path instead of producing a one day window."""
+    model = _cold_model(rp, gw, last_watched_days=20, tracked_days=-5)
+    assert model["cold_abandoned"] == []
+    assert model["cold_still_tried"] == []
+    assert model["cold_window_too_young"] is True
+
+
 def test_cold_channels_are_ordered_coldest_first(rp, gw):
     rows = [gw.ChannelRow(id=i, uuid=f"u{i}", name=f"CH{i}", group="US: Movies",
                           auto_created=False, created_at=NOW - 300 * 86400,

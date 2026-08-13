@@ -269,6 +269,96 @@ def test_the_cold_section_count_matches_both_tables(rp, gw):
     assert 'Channels going cold <span class="count">2</span>' in html
 
 
+def _cold_section_body(html):
+    match = re.search(r'<details[^>]*>\s*<summary>.*?Channels going cold.*?'
+                      r'</summary>(.*?)</details>', html, re.DOTALL)
+    assert match, "could not locate the going-cold section body"
+    return match.group(1)
+
+
+def test_the_cold_section_states_the_shortfall_when_the_dataset_is_too_young(rp, gw):
+    """Fix 1: when the dataset itself has not reached
+    reports.MIN_COLD_WINDOW_DAYS, the plugin cannot answer the cold question
+    at all. The section must still carry its normal description, the find
+    hint and a count (0 here), but a short line names the shortfall instead
+    of an empty table that would read as "nothing is cold"."""
+    model_ = model(rp, gw)
+    model_["cold_abandoned"] = []
+    model_["cold_still_tried"] = []
+    model_["cold_window_too_young"] = True
+    model_["cold_window_clamped"] = False
+    model_["cold_window_days"] = 30.0
+    model_["tracked_days"] = 3.0
+    html = rp.render_html(model_)
+    section = _cold_section_body(html)
+    assert "does not yet reach back far enough" in section
+    assert str(int(rp.MIN_COLD_WINDOW_DAYS)) in section
+    assert "Watched at some point" in section     # the unconditional description
+    assert "Expand to search these" in section    # the find hint
+    assert 'Channels going cold <span class="count">0</span>' in html
+
+
+def test_the_report_never_claims_a_window_longer_than_the_dataset_age(rp, gw):
+    """Fix 2, a consequence of Fix 1: with a dataset under a day old the
+    model used to report a one day window while claiming that was as far
+    back as the data went, which was false whenever the data actually went
+    back further than a day. The too-young wording must appear instead of
+    the "as far back as this dataset goes" claim."""
+    model_ = model(rp, gw)
+    model_["cold_abandoned"] = []
+    model_["cold_still_tried"] = []
+    model_["cold_window_too_young"] = True
+    model_["cold_window_clamped"] = False
+    model_["cold_window_days"] = 30.0
+    model_["tracked_days"] = 0.5
+    html = rp.render_html(model_)
+    section = _cold_section_body(html)
+    assert "as far back as this dataset goes" not in section
+    assert "does not yet reach back far enough" in section
+
+
+def test_the_cold_section_states_the_window_unconditionally(rp, gw):
+    """Fix 4: the window length used to render only when it had been
+    shortened, so a reader of an unclamped report could not tell whether
+    "the recent window" meant seven days or ninety. It must render even when
+    the window was not clamped."""
+    model_ = model(rp, gw)
+    model_["cold_window_clamped"] = False
+    model_["cold_window_too_young"] = False
+    model_["cold_window_days"] = 45.0
+    html = rp.render_html(model_)
+    section = _cold_section_body(html)
+    assert "45.0 days" in section
+
+
+def test_the_cold_section_acknowledges_watched_channels_in_excluded_groups(rp, gw):
+    """Fix 5: like the two ranking sections, the cold classification only
+    ever looks at the judged population, so a watched channel sitting in an
+    excluded group can never be listed here either. State the gap the same
+    way the rankings sections already do."""
+    rows = [gw.ChannelRow(id=0, uuid="u0", name="CH0", group="US: Movies",
+                          auto_created=False, created_at=NOW - 90 * 86400,
+                          proxying=True),
+            gw.ChannelRow(id=1, uuid="u1", name="News One", group="US: News",
+                          auto_created=False, created_at=NOW - 90 * 86400,
+                          proxying=True)]
+    channels = {"u0": {"watch_count": 2, "watch_seconds": 3600.0,
+                       "tune_count": 2, "last_watched": NOW - 3600,
+                       "last_tuned": NOW - 3600,
+                       "first_seen": NOW - 80 * 86400},
+                "u1": {"watch_count": 4, "watch_seconds": 3600.0,
+                       "tune_count": 4, "last_watched": NOW - 3600,
+                       "last_tuned": NOW - 3600,
+                       "first_seen": NOW - 80 * 86400}}
+    usage = {"channels": channels,
+             "meta": {"stats_since": NOW - 40 * 86400, "coverage": {}}}
+    settings = dict(SETTINGS, exclude_groups="US: News")
+    built = rp.build_model(rows, usage, settings, NOW)
+    html = rp.render_html(built)
+    section = _cold_section_body(html)
+    assert "excluded from this classification" in section
+
+
 def test_classification_and_rendering_agree_end_to_end(rp, gw):
     """No other test drives build_model() and render_html() together for the
     cold section -- the tests above hand-mutate a model dict instead. Build a

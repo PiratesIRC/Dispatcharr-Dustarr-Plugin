@@ -230,6 +230,45 @@ def test_csv_blank_last_watched_stays_blank_not_a_bogus_epoch_date(rp, gw):
     assert row["last_watched"] == ""
 
 
+def test_a_cold_channel_outside_both_ranking_slices_appears_in_the_csv(rp, gw):
+    """Fix 3: render_csv built its rows from a union that did not include
+    cold_abandoned/cold_still_tried, and the two ranking lists only carry
+    the top and bottom slices of the watched population -- so a cold
+    channel ranked in the middle appeared in the HTML report and in no CSV
+    row at all. u0 is watched but ranks 6th of 10 by watch_count, outside
+    both the top_n=2 head and the top_n=2 tail, and is cold by last_watched."""
+    rows = [gw.ChannelRow(id=i, uuid=f"u{i}", name=f"CH{i}", group="US: Movies",
+                          auto_created=False, created_at=NOW - 300 * 86400,
+                          proxying=True) for i in range(10)]
+    watch_counts = {"u1": 90, "u2": 80, "u3": 70, "u4": 60, "u5": 55,
+                    "u0": 50, "u6": 45, "u7": 40, "u8": 30, "u9": 20}
+    channels = {}
+    for uuid, count in watch_counts.items():
+        if uuid == "u0":
+            channels[uuid] = {"watch_count": count, "watch_seconds": 3600.0,
+                              "tune_count": count,
+                              "last_watched": NOW - 100 * 86400,
+                              "last_tuned": NOW - 100 * 86400,
+                              "first_seen": NOW - 250 * 86400}
+        else:
+            channels[uuid] = {"watch_count": count, "watch_seconds": 3600.0,
+                              "tune_count": count, "last_watched": NOW - 3600,
+                              "last_tuned": NOW - 3600,
+                              "first_seen": NOW - 250 * 86400}
+    usage = {"channels": channels,
+             "meta": {"stats_since": NOW - 200 * 86400, "coverage": {}}}
+    settings = dict(SETTINGS, top_n=2, recent_window_days=30)
+    built = rp.build_model(rows, usage, settings, NOW)
+
+    assert "u0" not in {e["uuid"] for e in built["most_used"]}
+    assert "u0" not in {e["uuid"] for e in built["least_used"]}
+    assert "u0" in {e["uuid"] for e in built["cold_abandoned"]}
+
+    text = rp.render_csv(built)
+    uuids = {row["uuid"] for row in csv.DictReader(io.StringIO(text))}
+    assert "u0" in uuids
+
+
 # -- M4: "Least used" silently rendering "None." is baffling, not correct ----
 
 def test_least_used_notes_that_all_watched_channels_are_listed_above(rp, gw):

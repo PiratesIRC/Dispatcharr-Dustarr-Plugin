@@ -42,6 +42,15 @@ except ImportError:                     # standalone (non-package) import path
 # absent from usage.channels (THE INVARIANT above).
 EMPTY = sessionizer._blank_record(None)
 
+# Must match the floor on the recent_window_days setting in plugin.py
+# (_NUMERIC_FLOORS["recent_window_days"]). sessionizer.py writes last_watched
+# only when a session finalizes and last_tuned only when a session opens, so a
+# channel that has been streaming continuously since before this many days ago
+# has both timestamps stale and would otherwise be reported as abandoned while
+# it is on screen. See the comment above _NUMERIC_FLOORS in plugin.py for the
+# full argument.
+MIN_COLD_WINDOW_DAYS = 7.0
+
 # Sort sentinel for a channel that was never watched. Large rather than small so
 # that sorting the "days since" column ascending puts the most recently watched
 # first and the never-watched at the far end, which is where a reader looking
@@ -326,42 +335,58 @@ def build_model(rows, usage, settings, now):
     # Recency, from data that has always been recorded. The window is clamped
     # to the dataset age so an empty section on a young dataset can say why:
     # "empty because nothing is cold" and "empty because the data does not
-    # reach back that far" are different statements.
-    requested_window = max(1.0, _setting_number(settings, "recent_window_days",
-                                                30, float))
-    cold_window = requested_window
-    cold_window_clamped = False
-    if tracked_days and tracked_days < requested_window:
+    # reach back that far" are different statements. It is never clamped
+    # below MIN_COLD_WINDOW_DAYS: a shorter window can name a channel that is
+    # on screen right now (see that constant's comment), so when the dataset
+    # itself is younger than the floor, the plugin cannot answer the question
+    # at all rather than answering it with a too-short window.
+    requested_window = max(MIN_COLD_WINDOW_DAYS,
+                           _setting_number(settings, "recent_window_days",
+                                           30, float))
+    # A negative or otherwise nonsensical dataset age (e.g. a stats_since in
+    # the future) must take the too-young path rather than be treated as
+    # smaller than the requested window and collapse it to the floor.
+    cold_window_too_young = (not tracked_days
+                             or tracked_days < MIN_COLD_WINDOW_DAYS)
+    if cold_window_too_young:
+        cold_window = requested_window
+        cold_window_clamped = False
+    elif tracked_days < requested_window:
         cold_window = round(tracked_days, 1)
         cold_window_clamped = True
-    cold_window = max(1.0, cold_window)
+    else:
+        cold_window = requested_window
+        cold_window_clamped = False
 
     cold_abandoned, cold_still_tried = [], []
-    for entry in used:
-        # Never judge a channel the collector cannot observe (see the M1 branch
-        # above): its silence carries no information.
-        if entry.get("unobservable_profile"):
-            continue
-        last_watched = entry.get("last_watched")
-        if not last_watched:
-            continue
-        # This recomputes days-since from the raw stored `last_watched`
-        # rather than reusing entry["days_since_watched_sort"] (built above
-        # in _entry from the same raw value, but coerced/rounded there
-        # first). The two agree today only because _sanitize_usage coerces
-        # last_watched to a float or None before either computation ever
-        # sees it. If that coercion or either computation changes, this
-        # comparison and the rendered sort key can silently disagree about
-        # which channels are cold. Keep them consistent.
-        if (now - float(last_watched)) / 86400.0 < cold_window:
-            continue
-        last_tuned = entry.get("last_tuned")
-        still_tried = (bool(last_tuned)
-                       and (now - float(last_tuned)) / 86400.0 < cold_window)
-        # Tried recently and abandoned inside the watch threshold means BROKEN,
-        # not unwanted. Conflating the two is how a metrics tool recommends
-        # disabling the channels somebody is fighting hardest to watch.
-        (cold_still_tried if still_tried else cold_abandoned).append(entry)
+    if not cold_window_too_young:
+        for entry in used:
+            # Never judge a channel the collector cannot observe (see the M1
+            # branch above): its silence carries no information.
+            if entry.get("unobservable_profile"):
+                continue
+            last_watched = entry.get("last_watched")
+            if not last_watched:
+                continue
+            # This recomputes days-since from the raw stored `last_watched`
+            # rather than reusing entry["days_since_watched_sort"] (built
+            # above in _entry from the same raw value, but coerced/rounded
+            # there first). The two agree today only because _sanitize_usage
+            # coerces last_watched to a float or None before either
+            # computation ever sees it. If that coercion or either
+            # computation changes, this comparison and the rendered sort key
+            # can silently disagree about which channels are cold. Keep them
+            # consistent.
+            if (now - float(last_watched)) / 86400.0 < cold_window:
+                continue
+            last_tuned = entry.get("last_tuned")
+            still_tried = (bool(last_tuned)
+                          and (now - float(last_tuned)) / 86400.0 < cold_window)
+            # Tried recently and abandoned inside the watch threshold means
+            # BROKEN, not unwanted. Conflating the two is how a metrics tool
+            # recommends disabling the channels somebody is fighting hardest
+            # to watch.
+            (cold_still_tried if still_tried else cold_abandoned).append(entry)
 
     cold_abandoned.sort(key=lambda e: e["days_since_watched_sort"], reverse=True)
     cold_still_tried.sort(key=lambda e: e["days_since_watched_sort"], reverse=True)
@@ -389,6 +414,7 @@ def build_model(rows, usage, settings, now):
         "cold_still_tried": cold_still_tried,
         "cold_window_days": cold_window,
         "cold_window_clamped": cold_window_clamped,
+        "cold_window_too_young": cold_window_too_young,
         "gate": gate,
         "counts": {
             "never_watched": len(never_watched_entries),
@@ -971,9 +997,10 @@ _SECTION_GLYPH = {
     "dot-toonew": "\N{HOURGLASS WITH FLOWING SAND}",   # wait, do not judge yet
     "dot-tuned": "\N{WARNING SIGN}",            # probably broken, not unused
     "dot-watched": "\N{GLOWING STAR}",          # keep these
-    "dot-neutral": "",                          # two different sections share
+    "dot-neutral": "",                          # three different sections share
                                                 # this class; no honest glyph
-                                                # fits both, so neither gets one
+                                                # fits all of them, so none
+                                                # gets one
 }
 
 
@@ -1102,11 +1129,39 @@ def render_html(model):
     # A conditional note can never be a section description (the description
     # guard exists because four sections once relied on notes that render only
     # on some boxes), so this sits BELOW the description, never instead of it.
-    cold_note = ""
-    if model.get("cold_window_clamped"):
+    # The effective window renders unconditionally (Fix 4): a reader of a
+    # report built with a ninety day window has no other way to tell whether
+    # "the recent window" means seven days or ninety. The too-young case
+    # (Fix 1) takes priority over both the unclamped and the clamped wording,
+    # because when the dataset itself has not reached MIN_COLD_WINDOW_DAYS the
+    # plugin cannot answer the cold question at all, not even with a
+    # shortened window.
+    if model.get("cold_window_too_young"):
+        cold_note = (
+            f"<p class='sub'>This dataset does not yet reach back far enough "
+            f"to judge which channels have gone cold. It needs at least "
+            f"{MIN_COLD_WINDOW_DAYS:.0f} days of tracked history, and "
+            f"currently has {_esc(model.get('tracked_days'))}.</p>")
+    elif model.get("cold_window_clamped"):
         cold_note = (f"<p class='sub'>Window shortened to "
                      f"{_esc(model.get('cold_window_days'))} days, which is as "
                      f"far back as this dataset goes.</p>")
+    else:
+        cold_note = (f"<p class='sub'>Recent window: "
+                     f"{_esc(model.get('cold_window_days'))} days.</p>")
+
+    # The cold classification, like the usage rankings above, only ever looks
+    # at the judged population, so a watched channel sitting in an excluded
+    # group can never be listed here either, however long it has gone
+    # unwatched. Reuses the same count the rankings note above is built from.
+    cold_excluded_note = ""
+    if watched_excluded:
+        plural = "" if watched_excluded == 1 else "s"
+        cold_excluded_note = (
+            f"<p class='sub'>{watched_excluded} watched channel{plural} "
+            f"{'is' if watched_excluded == 1 else 'are'} <b>excluded from "
+            f"this classification</b> too, and can never be listed as cold, "
+            f"however long it has gone unwatched.</p>")
 
     cold_still_tried = model.get("cold_still_tried") or []
     cold_still_tried_block = ""
@@ -1119,6 +1174,12 @@ def render_html(model):
             + _table(cold_still_tried))
 
     cold_abandoned = model.get("cold_abandoned") or []
+    # Instead of a table, the too-young case gets a short line saying the
+    # dataset does not reach back far enough yet -- there is nothing to sort
+    # or search, and an empty table next to cold_note would read as "nothing
+    # is cold" rather than "this cannot be judged yet".
+    cold_table = ("" if model.get("cold_window_too_young")
+                  else _table(cold_abandoned))
 
     # Every section opens with one short <p class='sub'> saying what it is and
     # what to do about it, because every section is collapsed and the summary
@@ -1138,7 +1199,7 @@ def render_html(model):
                  "weaker candidates to turn off than the never watched list, "
                  "and stronger than anything below it. Sort by days since to "
                  "put the coldest first.</p>"
-                 + cold_note + find_hint + _table(cold_abandoned)
+                 + cold_note + cold_excluded_note + find_hint + cold_table
                  + cold_still_tried_block,
                  False, "dot-neutral"),
         _section("Too new to judge", counts["too_new"],
@@ -1266,7 +1327,8 @@ def render_csv(model):
                                                     "last_tuned"])
     sections = (model["never_watched"] + model["tuned_never_qualified"]
                 + model["most_used"] + model["least_used"] + model["excluded"]
-                + model["unobservable"])
+                + model["unobservable"] + model["cold_abandoned"]
+                + model["cold_still_tried"])
     seen = set()
     for entry in sections:
         if entry["uuid"] in seen:
