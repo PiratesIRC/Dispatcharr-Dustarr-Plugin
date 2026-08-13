@@ -503,3 +503,84 @@ def test_an_infinite_watch_seconds_does_not_reach_the_renderer(rp, gw):
     entry = rp._entry(row, record, "watched", NOW)
     assert entry["avg_session_minutes"] == "n/a"
     assert entry["avg_session_minutes_sort"] == -1.0
+
+
+def _cold_model(rp, gw, last_watched_days, last_tuned_days=None,
+                proxying=True, window=30, tracked_days=200):
+    """One watched channel, aged to order, plus four never-watched rows so the
+    plausibility gates do not dominate the model."""
+    rows = [gw.ChannelRow(id=0, uuid="u0", name="CH0", group="US: Movies",
+                          auto_created=False, created_at=NOW - 300 * 86400,
+                          proxying=proxying)]
+    rows += [gw.ChannelRow(id=i, uuid=f"u{i}", name=f"CH{i}", group="US: Movies",
+                           auto_created=False, created_at=NOW - 300 * 86400,
+                           proxying=True) for i in range(1, 5)]
+    last_tuned = (NOW - last_tuned_days * 86400) if last_tuned_days else None
+    usage = {"channels": {"u0": {"watch_count": 3, "watch_seconds": 7200.0,
+                                 "tune_count": 3,
+                                 "last_watched": NOW - last_watched_days * 86400,
+                                 "last_tuned": last_tuned,
+                                 "first_seen": NOW - 250 * 86400}},
+             "meta": {"stats_since": NOW - tracked_days * 86400, "coverage": {}}}
+    settings = dict(SETTINGS, recent_window_days=window)
+    return rp.build_model(rows, usage, settings, NOW)
+
+
+def test_a_channel_watched_inside_the_window_is_not_cold(rp, gw):
+    model = _cold_model(rp, gw, last_watched_days=10)
+    assert model["cold_abandoned"] == []
+    assert model["cold_still_tried"] == []
+
+
+def test_a_channel_not_watched_inside_the_window_is_cold(rp, gw):
+    model = _cold_model(rp, gw, last_watched_days=100)
+    assert [e["uuid"] for e in model["cold_abandoned"]] == ["u0"]
+
+
+def test_a_cold_channel_tuned_recently_is_listed_as_still_tried(rp, gw):
+    """Watched 100 days ago, tuned yesterday: somebody is still trying it and
+    giving up inside the watch threshold. That is broken, not unwanted."""
+    model = _cold_model(rp, gw, last_watched_days=100, last_tuned_days=1)
+    assert model["cold_abandoned"] == []
+    assert [e["uuid"] for e in model["cold_still_tried"]] == ["u0"]
+
+
+def test_an_unobservable_channel_is_never_called_cold(rp, gw):
+    """A non-proxying profile writes no Redis keys, so the collector cannot see
+    the channel at all. Its silence is not evidence of anything."""
+    model = _cold_model(rp, gw, last_watched_days=100, proxying=False)
+    assert model["cold_abandoned"] == []
+    assert model["cold_still_tried"] == []
+    assert any(e.get("unobservable_profile") for e in model["most_used"])
+
+
+def test_the_window_clamps_to_the_dataset_age(rp, gw):
+    model = _cold_model(rp, gw, last_watched_days=20, window=60,
+                        tracked_days=25)
+    assert model["cold_window_days"] == 25.0
+    assert model["cold_window_clamped"] is True
+
+
+def test_an_unclamped_window_is_reported_as_unclamped(rp, gw):
+    model = _cold_model(rp, gw, last_watched_days=20, window=30,
+                        tracked_days=200)
+    assert model["cold_window_days"] == 30.0
+    assert model["cold_window_clamped"] is False
+
+
+def test_cold_channels_are_ordered_coldest_first(rp, gw):
+    rows = [gw.ChannelRow(id=i, uuid=f"u{i}", name=f"CH{i}", group="US: Movies",
+                          auto_created=False, created_at=NOW - 300 * 86400,
+                          proxying=True) for i in range(5)]
+    channels = {}
+    for i, age in enumerate((50, 300, 120)):
+        channels[f"u{i}"] = {"watch_count": 2, "watch_seconds": 3600.0,
+                             "tune_count": 2,
+                             "last_watched": NOW - age * 86400,
+                             "last_tuned": None,
+                             "first_seen": NOW - 290 * 86400}
+    usage = {"channels": channels,
+             "meta": {"stats_since": NOW - 320 * 86400, "coverage": {}}}
+    model = rp.build_model(rows, usage, dict(SETTINGS, recent_window_days=30),
+                           NOW)
+    assert [e["uuid"] for e in model["cold_abandoned"]] == ["u1", "u2", "u0"]

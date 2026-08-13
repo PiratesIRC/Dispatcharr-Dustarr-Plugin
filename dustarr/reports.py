@@ -251,7 +251,13 @@ def build_model(rows, usage, settings, now):
 
         if reason == "unobservable" and record.get("watch_count", 0) > 0:
             # M1: real usage survives a later profile change to non-proxying.
-            used.append(_entry(row, record, "watched", now))
+            entry = _entry(row, record, "watched", now)
+            # The collector cannot see this channel at all any more, so a
+            # silence since the profile changed is not evidence of disuse. The
+            # cold classification below skips these; the rankings still show
+            # them, which is the M1 behaviour.
+            entry["unobservable_profile"] = True
+            used.append(entry)
             continue
         if reason == "unobservable":
             unobservable.append(_entry(row, record, reason, now))
@@ -317,6 +323,41 @@ def build_model(rows, usage, settings, now):
     stats_since = meta.get("stats_since")
     tracked_days = ((now - float(stats_since)) / 86400.0) if stats_since else 0.0
 
+    # Recency, from data that has always been recorded. The window is clamped
+    # to the dataset age so an empty section on a young dataset can say why:
+    # "empty because nothing is cold" and "empty because the data does not
+    # reach back that far" are different statements.
+    requested_window = max(1.0, _setting_number(settings, "recent_window_days",
+                                                30, float))
+    cold_window = requested_window
+    cold_window_clamped = False
+    if tracked_days and tracked_days < requested_window:
+        cold_window = round(tracked_days, 1)
+        cold_window_clamped = True
+    cold_window = max(1.0, cold_window)
+
+    cold_abandoned, cold_still_tried = [], []
+    for entry in used:
+        # Never judge a channel the collector cannot observe (see the M1 branch
+        # above): its silence carries no information.
+        if entry.get("unobservable_profile"):
+            continue
+        last_watched = entry.get("last_watched")
+        if not last_watched:
+            continue
+        if (now - float(last_watched)) / 86400.0 < cold_window:
+            continue
+        last_tuned = entry.get("last_tuned")
+        still_tried = (bool(last_tuned)
+                       and (now - float(last_tuned)) / 86400.0 < cold_window)
+        # Tried recently and abandoned inside the watch threshold means BROKEN,
+        # not unwanted. Conflating the two is how a metrics tool recommends
+        # disabling the channels somebody is fighting hardest to watch.
+        (cold_still_tried if still_tried else cold_abandoned).append(entry)
+
+    cold_abandoned.sort(key=lambda e: e["days_since_watched_sort"], reverse=True)
+    cold_still_tried.sort(key=lambda e: e["days_since_watched_sort"], reverse=True)
+
     # I1: disjoint from most_used -- take up to top_n from the tail, but never
     # more than what's left over once the head (most_used) claims its share.
     least_n = max(0, min(top_n, len(used) - top_n))
@@ -336,6 +377,10 @@ def build_model(rows, usage, settings, now):
         "excluded": excluded,
         "unobservable": unobservable,
         "group_rollup": group_rollup,
+        "cold_abandoned": cold_abandoned,
+        "cold_still_tried": cold_still_tried,
+        "cold_window_days": cold_window,
+        "cold_window_clamped": cold_window_clamped,
         "gate": gate,
         "counts": {
             "never_watched": len(never_watched_entries),
