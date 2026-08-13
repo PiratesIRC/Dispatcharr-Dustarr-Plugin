@@ -25,6 +25,7 @@ import base64
 import csv
 import html as html_mod
 import io
+import math
 import os
 import time
 
@@ -157,13 +158,26 @@ def _entry(row, record, reason, now):
 
     # Clamped at zero: a forward clock step (or a corrected backward one) can
     # put last_watched in the future, and a negative age would sort a stale
-    # channel ahead of one watched a minute ago.
+    # channel ahead of one watched a minute ago. Same try/except shape as
+    # _fmt_local/_iso_utc below: last_watched is untrusted file input (see the
+    # module docstring), and an unparseable value must degrade to the same
+    # result as never watched rather than raise out of render_html, which has
+    # no exception net around it.
     days_since = None
     if last_watched:
-        days_since = max(0.0, (now - float(last_watched)) / 86400.0)
+        try:
+            days_since = max(0.0, (now - float(last_watched)) / 86400.0)
+        except (TypeError, ValueError, OSError):
+            days_since = None
     # Denominated on qualified watches, the same population as `hours`, so the
-    # two columns multiply back to each other.
-    avg_minutes = (watch_seconds / watch_count / 60.0) if watch_count else None
+    # two columns multiply back to each other. A watch_count <= 0 or a
+    # non-finite result (an infinite or NaN watch_seconds, both untrusted
+    # file input) degrades to the same "n/a"/-1.0 sentinel as an absent
+    # value, rather than reaching the renderer as a negative or infinite
+    # number.
+    avg_minutes = (watch_seconds / watch_count / 60.0) if watch_count > 0 else None
+    if avg_minutes is not None and not math.isfinite(avg_minutes):
+        avg_minutes = None
 
     return {
         "uuid": row.uuid,
@@ -853,7 +867,7 @@ document.querySelectorAll('table').forEach(function (table) {
 _COLUMNS = [("name", "Channel"), ("group", "Group"), ("watch_count", "Watches"),
             ("hours", "Hours"), ("tune_count", "Tunes"), ("age_days", "Age (d)"),
             ("last_watched_display", "Last watched"),
-            ("days_since_watched", "Days since watched"), ("reason", "Reason")]
+            ("days_since_watched", "Days since"), ("reason", "Reason")]
 
 
 def _esc(value):

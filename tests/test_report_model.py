@@ -458,3 +458,48 @@ def test_average_session_length_is_not_a_zero_when_never_watched(rp, gw):
     entry = rp._entry(row, {}, "never_watched", NOW)
     assert entry["avg_session_minutes"] == "n/a"
     assert entry["avg_session_minutes_sort"] == -1.0
+
+
+def test_an_unparseable_last_watched_degrades_to_never_instead_of_raising(rp, gw):
+    """last_watched is untrusted file input (storage.load() only validates the
+    top-level dict). render_html has no exception net, so a bad value here
+    must degrade like never-watched rather than raise."""
+    row = gw.ChannelRow(id=6, uuid="u6", name="CH6", group="G",
+                        auto_created=False, created_at=NOW - 90 * 86400,
+                        proxying=True)
+    record = {"watch_count": 1, "watch_seconds": 60.0, "tune_count": 1,
+              "last_watched": "not a timestamp", "last_tuned": None,
+              "first_seen": NOW - 80 * 86400}
+    entry = rp._entry(row, record, "watched", NOW)
+    assert entry["days_since_watched"] == "never"
+    assert entry["days_since_watched_sort"] == rp.NEVER_SORT
+
+
+def test_a_negative_watch_count_does_not_produce_a_negative_average(rp, gw):
+    """A negative watch_count is untrusted file input; it must degrade to the
+    same n/a sentinel as an absent value, not reach the renderer as a
+    negative number."""
+    row = gw.ChannelRow(id=7, uuid="u7", name="CH7", group="G",
+                        auto_created=False, created_at=NOW - 90 * 86400,
+                        proxying=True)
+    record = {"watch_count": -1, "watch_seconds": 60.0, "tune_count": 1,
+              "last_watched": NOW - 3600, "last_tuned": NOW - 3600,
+              "first_seen": NOW - 80 * 86400}
+    entry = rp._entry(row, record, "watched", NOW)
+    assert entry["avg_session_minutes"] == "n/a"
+    assert entry["avg_session_minutes_sort"] == -1.0
+
+
+def test_an_infinite_watch_seconds_does_not_reach_the_renderer(rp, gw):
+    """watch_seconds is untrusted file input; an infinite value must degrade
+    to the same n/a sentinel as an absent value, not reach the renderer as
+    an infinite number."""
+    row = gw.ChannelRow(id=8, uuid="u8", name="CH8", group="G",
+                        auto_created=False, created_at=NOW - 90 * 86400,
+                        proxying=True)
+    record = {"watch_count": 1, "watch_seconds": float("inf"), "tune_count": 1,
+              "last_watched": NOW - 3600, "last_tuned": NOW - 3600,
+              "first_seen": NOW - 80 * 86400}
+    entry = rp._entry(row, record, "watched", NOW)
+    assert entry["avg_session_minutes"] == "n/a"
+    assert entry["avg_session_minutes_sort"] == -1.0
