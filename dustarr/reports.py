@@ -1090,6 +1090,27 @@ def render_html(model):
     find_hint = ("<p class='hint'>Expand to search these. Find-in-page does not "
                 "reach inside a collapsed section on some browsers.</p>")
 
+    # A conditional note can never be a section description (the description
+    # guard exists because four sections once relied on notes that render only
+    # on some boxes), so this sits BELOW the description, never instead of it.
+    cold_note = ""
+    if model.get("cold_window_clamped"):
+        cold_note = (f"<p class='sub'>Window shortened to "
+                     f"{_esc(model.get('cold_window_days'))} days, which is as "
+                     f"far back as this dataset goes.</p>")
+
+    cold_still_tried = model.get("cold_still_tried") or []
+    cold_still_tried_block = ""
+    if cold_still_tried:
+        cold_still_tried_block = (
+            "<p class='sub'>Cold by watching, but tuned recently. Somebody is "
+            "still trying these and giving up before the watch threshold, so "
+            "they are most likely broken rather than unwanted. Investigate "
+            "these before turning any of them off.</p>"
+            + _table(cold_still_tried))
+
+    cold_abandoned = model.get("cold_abandoned") or []
+
     # Every section opens with one short <p class='sub'> saying what it is and
     # what to do about it, because every section is collapsed and the summary
     # line is all the reader has to decide whether to expand. The notes that
@@ -1102,6 +1123,15 @@ def render_html(model):
                  "to look for something to turn off.</p>"
                  + find_hint + never_body,
                  False, "dot-never"),
+        _section("Channels going cold", len(cold_abandoned) + len(cold_still_tried),
+                 "<p class='sub'>Watched at some point, but not once inside the "
+                 "recent window. These earned a real watch before, so they are "
+                 "weaker candidates to turn off than the never watched list, "
+                 "and stronger than anything below it. Sort by days since to "
+                 "put the coldest first.</p>"
+                 + cold_note + find_hint + _table(cold_abandoned)
+                 + cold_still_tried_block,
+                 False, "dot-neutral"),
         _section("Too new to judge", counts["too_new"],
                  "<p class='sub'>Created less than the unused threshold ago, so "
                  "not enough time has passed to fairly call these unused. Not "

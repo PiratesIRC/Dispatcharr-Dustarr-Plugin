@@ -15,6 +15,7 @@ EXPECTED_OPEN = {
     "Least used": False,
     "Most used": False,
     "Excluded and unobservable": False,
+    "Channels going cold": False,
 }
 
 
@@ -149,7 +150,7 @@ def test_no_colour_presentation_attributes_anywhere_in_the_page(rp, gw):
 def test_render_is_newline_agnostic(rp, gw):
     """CRLF worktree, LF index, LF CI -- assertions must not depend on it."""
     html = rp.render_html(model(rp, gw))
-    assert html.replace("\r\n", "\n").count("<details") == 6
+    assert html.replace("\r\n", "\n").count("<details") == 7
 
 
 # `%Y-%m-%d %H:%M %Z` rendered through time.localtime(): both the hour and the
@@ -240,3 +241,29 @@ def test_report_copy_has_no_em_dashes_or_contractions(rp, gw):
     assert "--" not in text
     found = re.findall(r"\b\w+['â€™]\w+\b", text)
     assert not found, found
+
+
+def test_the_cold_section_states_a_shortened_window(rp, gw):
+    """Empty because the dataset is young must not read as empty because
+    nothing is cold."""
+    model_ = model(rp, gw)
+    model_["cold_window_clamped"] = True
+    model_["cold_window_days"] = 25.0
+    html = rp.render_html(model_)
+    assert "25.0 days" in html
+    assert "as far back as this dataset goes" in html
+
+
+def test_the_cold_section_separates_still_tried_channels(rp, gw):
+    model_ = model(rp, gw)
+    model_["cold_still_tried"] = model_["most_used"][:1]
+    html = rp.render_html(model_)
+    assert "still trying these" in html
+
+
+def test_the_cold_section_count_matches_both_tables(rp, gw):
+    model_ = model(rp, gw)
+    model_["cold_abandoned"] = model_["most_used"][:1]
+    model_["cold_still_tried"] = model_["most_used"][1:2]
+    html = rp.render_html(model_)
+    assert 'Channels going cold <span class="count">2</span>' in html
