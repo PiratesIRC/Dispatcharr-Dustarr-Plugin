@@ -247,7 +247,23 @@ def unobservable_alert(unobservable, judged_total):
     judged set, so the fraction is denominated on the channels actually eligible
     for judgment, not every channel in the lineup.
     """
-    if judged_total and unobservable / float(judged_total) > MAX_UNOBSERVABLE_FRACTION:
-        return (f"{unobservable / judged_total:.0%} of the judged channels are unobservable - "
-                "the dataset cannot support any conclusion")
+    if not unobservable:
+        # Nothing unobservable. judged_total==0 here means an empty or fully
+        # excluded lineup, which is the rows_total-is-0 alert's territory.
+        return None
+    if not judged_total:
+        # The fully blind dataset: unobservable channels exist and NOTHING was
+        # judged. evaluate() skips its never-watched ceiling in exactly this
+        # case on the claim that this alert covers it, so returning None here
+        # would leave a totally blind dataset with no alert anywhere.
+        return ("every eligible channel is unobservable and nothing was "
+                "judged - the dataset cannot support any conclusion")
+    fraction = unobservable / float(judged_total)
+    if fraction > MAX_UNOBSERVABLE_FRACTION:
+        # Phrased as a ratio between the two populations: unobservable
+        # channels sit OUTSIDE the judged set (docstring above), so "N% of
+        # the judged channels are unobservable" misdescribes it and can
+        # exceed 100%.
+        return (f"unobservable channels number {fraction:.0%} of the judged "
+                "population - the dataset cannot support any conclusion")
     return None

@@ -172,6 +172,14 @@ def emit_gate(notify_fn, model, thresholds, prev_ok):
                 return bool(prev_ok), None
             return False, "alert"
         if not prev_ok:
+            # Resolving requires the gate to actually PASS, not merely to be
+            # too immature to page. After a real critical, a dataset wipe
+            # restarts stats_since, so the gate reads ok=False immature=True
+            # and sensor_blind() is False -- but sending "trustworthy again"
+            # there is a false all-clear for exactly the data-loss event the
+            # gate protects against. Leave the alert outstanding instead.
+            if not (((model or {}).get("gate") or {}).get("ok")):
+                return False, None
             sent = notify_fn(source="dustarr", event="honesty_gate",
                              severity="info", kind="resolve",
                              dedup_key=_DEDUP_KEY,

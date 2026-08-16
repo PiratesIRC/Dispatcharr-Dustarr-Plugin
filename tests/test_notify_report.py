@@ -106,6 +106,25 @@ def test_seam_regression_borderline_age_never_pages(nr, gates_mod):
     assert nr.sensor_blind(model, TH) is False
 
 
+def test_emit_gate_never_resolves_a_failing_but_immature_gate(nr):
+    """After a real critical, a dataset wipe restarts stats_since, so the
+    gate reads ok=False immature=True. sensor_blind() is False there (never
+    page an immature dataset), but that must not read as recovery: sending
+    'trustworthy again' while every alert still fails is a false all-clear
+    for exactly the data-loss event the gate protects against."""
+    calls = []
+
+    def fn(**kw):
+        calls.append(kw)
+        return True
+
+    failing_immature = _model(ok=False, alerts=["only 0 days of data"],
+                              tracked=0, immature=True)
+    prev, action = nr.emit_gate(fn, failing_immature, TH, prev_ok=False)
+    assert (prev, action) == (False, None)
+    assert calls == []
+
+
 def test_emit_gate_alert_then_resolve_pairing(nr):
     calls = []
 

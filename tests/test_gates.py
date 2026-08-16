@@ -268,8 +268,29 @@ def test_unobservable_alert_at_threshold_passes(gates):
     assert gates.unobservable_alert(90, 100) is None
 
 
-def test_unobservable_alert_zero_rows_total(gates):
-    assert gates.unobservable_alert(10, 0) is None
+def test_unobservable_alert_fires_when_nothing_at_all_is_judged(gates):
+    """judged_total == 0 with unobservable > 0 is the fully blind dataset.
+    evaluate() skips its never-watched ceiling in exactly this case on the
+    explicit claim that this alert covers it, so a None here means a totally
+    blind dataset raises NO alert anywhere."""
+    msg = gates.unobservable_alert(10, 0)
+    assert msg is not None
+    assert "conclusion" in msg
+
+
+def test_unobservable_alert_stays_quiet_when_nothing_exists_either_way(gates):
+    # An empty lineup is the rows_total-is-0 alert's job, not this one's.
+    assert gates.unobservable_alert(0, 0) is None
+
+
+def test_unobservable_alert_wording_does_not_claim_unobservable_are_judged(gates):
+    """Unobservable channels sit OUTSIDE the judged set (the function's own
+    docstring), so the message must not read 'N% of the judged channels are
+    unobservable' -- with 100 unobservable and 10 judged that renders an
+    impossible '1000% of the judged channels'."""
+    msg = gates.unobservable_alert(100, 10)
+    assert msg is not None
+    assert "of the judged channels are unobservable" not in msg
 
 
 def test_unobservable_alert_rebased_on_judged_population_fires_when_high(gates):
