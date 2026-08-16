@@ -73,14 +73,19 @@ class DjangoGateway:
         from apps.channels.models import Channel  # Dispatcharr runtime only
 
         # I3: resolve the GLOBAL default stream profile ONCE per report run
-        # (a single extra read), not per row -- see _default_stream_profile_name.
-        default_profile_name = _default_stream_profile_name()
+        # (a single extra read), not per row -- see
+        # _default_stream_profile_is_redirect.
+        default_is_redirect = _default_stream_profile_is_redirect()
 
         rows = []
+        # stream_profile__locked is fetched because StreamProfile.is_redirect()
+        # reads it; leaving it deferred would trigger one extra query per row
+        # that carries an explicit profile.
         queryset = (Channel.objects
                     .select_related("channel_group", "stream_profile")
                     .only("id", "uuid", "name", "channel_group__name",
-                          "stream_profile__name", "auto_created", "created_at"))
+                          "stream_profile__name", "stream_profile__locked",
+                          "auto_created", "created_at"))
         for channel in queryset.iterator(chunk_size=500):
             group = getattr(channel.channel_group, "name", None)
             rows.append(ChannelRow(
@@ -90,7 +95,7 @@ class DjangoGateway:
                 group=group,
                 auto_created=bool(getattr(channel, "auto_created", False)),
                 created_at=_epoch(getattr(channel, "created_at", None)),
-                proxying=_is_proxying(channel, default_profile_name),
+                proxying=_is_proxying(channel, default_is_redirect),
             ))
         return rows
 
@@ -138,23 +143,60 @@ def _default_stream_profile_name():
         return None
 
 
-def _is_proxying(channel, default_profile_name=None):
+def _default_stream_profile_is_redirect():
+    """Structural verdict for the GLOBAL default profile: True/False, or None
+    when it cannot be resolved (caller fails SAFE and assumes proxying).
+
+    Prefers CoreSettings.is_default_stream_profile_redirect(), the same test
+    Dispatcharr's proxy uses at play time (live_proxy/views.py), because the
+    NAME heuristic is wrong in both directions: an unlocked profile merely
+    NAMED like a redirect is proxied by Dispatcharr and does write
+    live:channel:* keys, while nothing but the locked built-in named exactly
+    'Redirect' ever redirects. Falls back to the name heuristic only on a
+    Dispatcharr old enough to lack the classmethod."""
+    try:
+        from core.models import CoreSettings  # Dispatcharr runtime only
+
+        structural = getattr(CoreSettings, "is_default_stream_profile_redirect",
+                             None)
+        if callable(structural):
+            return bool(structural())
+        name = _default_stream_profile_name()
+        if name is None:
+            return None
+        return name in _NON_PROXYING_NAMES
+    except Exception:
+        return None
+
+
+def _is_proxying(channel, default_is_redirect=None):
     """A non-proxying (Redirect) profile never writes live:channel:* keys, so the
     channel is invisible to the collector.
 
-    `default_profile_name` (I3) is the resolved GLOBAL default stream
-    profile's lowercased name, or None if that resolution itself failed. A
-    NULL `channel.stream_profile` is NOT an unconditional "always proxying"
+    `default_is_redirect` (I3) is the resolved GLOBAL default profile's
+    structural verdict, or None if that resolution itself failed. A NULL
+    `channel.stream_profile` is NOT an unconditional "always proxying"
     answer -- Dispatcharr resolves NULL to this global default at play time,
     so a NULL-profile channel must inherit the SAME verdict as that default,
     not a hardcoded True. If the default could not be resolved at all
-    (default_profile_name is None), fail SAFE and assume proxying -- the old
+    (default_is_redirect is None), fail SAFE and assume proxying -- the old
     behavior -- rather than guess.
-    """
+
+    An explicit profile is asked its OWN structural verdict first: Dispatcharr
+    decides redirect-versus-proxy via StreamProfile.is_redirect() (locked AND
+    named exactly 'Redirect'), so a cloned 'Redirect (302)' profile is proxied
+    and observable. The name heuristic remains only as the fallback for a
+    profile object without the method."""
     profile = getattr(channel, "stream_profile", None)
     if profile is None:
-        if default_profile_name is None:
+        if default_is_redirect is None:
             return True
-        return default_profile_name not in _NON_PROXYING_NAMES
+        return not default_is_redirect
+    structural = getattr(profile, "is_redirect", None)
+    if callable(structural):
+        try:
+            return not structural()
+        except Exception:
+            pass
     name = (getattr(profile, "name", "") or "").strip().lower()
     return name not in _NON_PROXYING_NAMES

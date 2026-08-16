@@ -95,27 +95,61 @@ def test_default_group_exclusion_matches_real_case(gw):
 
 def test_is_proxying_none_profile_inherits_a_proxying_default(gw):
     channel = type("C", (), {"stream_profile": None})()
-    assert gw._is_proxying(channel, default_profile_name="hls proxy") is True
+    assert gw._is_proxying(channel, default_is_redirect=False) is True
 
 
 def test_is_proxying_none_profile_inherits_a_redirect_default(gw):
     """If the operator ever points the global default at Redirect, every NULL
     channel must become unobservable -- not silently keep reading as proxying."""
     channel = type("C", (), {"stream_profile": None})()
-    assert gw._is_proxying(channel, default_profile_name="redirect") is False
+    assert gw._is_proxying(channel, default_is_redirect=True) is False
 
 
 def test_is_proxying_none_profile_fails_safe_when_default_is_unresolved(gw):
-    """A lookup failure (default_profile_name=None) must never manufacture a
+    """A lookup failure (default_is_redirect=None) must never manufacture a
     false "not proxying" verdict -- fail SAFE, same as the old behavior."""
     channel = type("C", (), {"stream_profile": None})()
-    assert gw._is_proxying(channel, default_profile_name=None) is True
+    assert gw._is_proxying(channel, default_is_redirect=None) is True
 
 
 def test_is_proxying_explicit_profile_ignores_the_resolved_default(gw):
     profile = type("P", (), {"name": "Redirect"})()
     channel = type("C", (), {"stream_profile": profile})()
-    assert gw._is_proxying(channel, default_profile_name="hls proxy") is False
+    assert gw._is_proxying(channel, default_is_redirect=False) is False
+
+
+def test_is_proxying_prefers_the_profile_own_structural_answer(gw):
+    """Dispatcharr decides redirect-versus-proxy at play time via
+    StreamProfile.is_redirect() (locked AND named exactly 'Redirect'). A
+    profile whose is_redirect() answers must be believed over its name: a
+    cloned 'Redirect (302)' profile is PROXIED by Dispatcharr and writes the
+    Redis keys the collector reads, so it is observable."""
+    clone = type("P", (), {"name": "Redirect (302)",
+                           "is_redirect": lambda self: False})()
+    channel = type("C", (), {"stream_profile": clone})()
+    assert gw._is_proxying(channel, default_is_redirect=False) is True
+
+    locked_redirect = type("P", (), {"name": "Redirect",
+                                     "is_redirect": lambda self: True})()
+    channel = type("C", (), {"stream_profile": locked_redirect})()
+    assert gw._is_proxying(channel, default_is_redirect=False) is False
+
+
+def test_is_proxying_name_matched_redirect_lookalike_is_not_observable_without_structure(gw):
+    """Fallback only: with no is_redirect() available (an older Dispatcharr),
+    the name heuristic still applies."""
+    profile = type("P", (), {"name": "  DIRECT "})()
+    channel = type("C", (), {"stream_profile": profile})()
+    assert gw._is_proxying(channel, default_is_redirect=False) is False
+
+
+def test_is_proxying_falls_back_to_the_name_when_is_redirect_raises(gw):
+    def boom(self):
+        raise RuntimeError("deferred field load failed")
+
+    profile = type("P", (), {"name": "Redirect", "is_redirect": boom})()
+    channel = type("C", (), {"stream_profile": profile})()
+    assert gw._is_proxying(channel, default_is_redirect=False) is False
 
 
 def test_default_stream_profile_name_resolves_and_lowercases(gw, monkeypatch):
@@ -151,6 +185,50 @@ def test_default_stream_profile_name_returns_none_when_no_default_is_configured(
     monkeypatch.setattr(core_models.CoreSettings, "get_default_stream_profile_id",
                         MagicMock(return_value=None))
     assert gw._default_stream_profile_name() is None
+
+
+def test_default_profile_is_redirect_uses_the_upstream_structural_test(gw, monkeypatch):
+    """CoreSettings.is_default_stream_profile_redirect() is the same test
+    Dispatcharr's proxy uses at play time; prefer it to re-deriving the
+    verdict from the profile's name."""
+    import sys
+
+    core_models = sys.modules["core.models"]
+    monkeypatch.setattr(core_models.CoreSettings,
+                        "is_default_stream_profile_redirect",
+                        MagicMock(return_value=True))
+    assert gw._default_stream_profile_is_redirect() is True
+    monkeypatch.setattr(core_models.CoreSettings,
+                        "is_default_stream_profile_redirect",
+                        MagicMock(return_value=False))
+    assert gw._default_stream_profile_is_redirect() is False
+
+
+def test_default_profile_is_redirect_fails_safe_to_none_on_error(gw, monkeypatch):
+    import sys
+
+    core_models = sys.modules["core.models"]
+    monkeypatch.setattr(core_models.CoreSettings,
+                        "is_default_stream_profile_redirect",
+                        MagicMock(side_effect=RuntimeError("boom")))
+    assert gw._default_stream_profile_is_redirect() is None
+
+
+def test_default_profile_is_redirect_falls_back_to_the_name_heuristic(gw, monkeypatch):
+    """An older Dispatcharr without the structural classmethod: resolve the
+    default profile's NAME and apply the heuristic."""
+    import sys
+
+    core_models = sys.modules["core.models"]
+    # A MagicMock auto-creates any attribute, so absence must be modeled with
+    # a plain class, not delattr.
+    monkeypatch.setattr(core_models, "CoreSettings", type("CS", (), {}))
+    monkeypatch.setattr(gw, "_default_stream_profile_name", lambda: "redirect")
+    assert gw._default_stream_profile_is_redirect() is True
+    monkeypatch.setattr(gw, "_default_stream_profile_name", lambda: "hls proxy")
+    assert gw._default_stream_profile_is_redirect() is False
+    monkeypatch.setattr(gw, "_default_stream_profile_name", lambda: None)
+    assert gw._default_stream_profile_is_redirect() is None
 
 
 def test_channels_resolves_default_profile_once_and_applies_to_null_profile_rows(
@@ -195,9 +273,9 @@ def test_channels_resolves_default_profile_once_and_applies_to_null_profile_rows
 
     def fake_default():
         calls.append(1)
-        return "redirect"
+        return True                              # the default IS Redirect
 
-    monkeypatch.setattr(gw, "_default_stream_profile_name", fake_default)
+    monkeypatch.setattr(gw, "_default_stream_profile_is_redirect", fake_default)
 
     result = gw.DjangoGateway().channels()
     assert len(calls) == 1                        # resolved ONCE per report run
