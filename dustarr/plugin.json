@@ -1,7 +1,7 @@
 {
   "id": "dustarr",
   "name": "Dustarr",
-  "version": "1.26.2251625",
+  "version": "1.26.2281841",
   "description": "Channel usage metrics: which channels are watched, which never are.",
   "author": "PiratesIRC",
   "min_dispatcharr_version": "v0.20.0"

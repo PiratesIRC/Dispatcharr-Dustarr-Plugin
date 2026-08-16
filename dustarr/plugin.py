@@ -36,7 +36,7 @@ except ImportError:                     # standalone (non-package) import path
 
 _LOGGER = logging.getLogger(__name__)
 
-PLUGIN_VERSION = "1.26.2251625"
+PLUGIN_VERSION = "1.26.2281841"
 
 DATA_DIR = "/data/dustarr"           # plugin state (named volume)
 # Both outputs go to the SAME directory, under Dispatcharr's existing /config
