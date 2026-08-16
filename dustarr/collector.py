@@ -346,6 +346,17 @@ class Collector:
         if self.storage.write(payload, now):
             self._last_flush = now
 
+    def _maybe_flush(self, now):
+        """Flush on the FLUSH_INTERVAL_S cadence. Called from BOTH run_tick
+        sites: after observe on sampling ticks (so the write carries this
+        tick's data) and on gated renewal-only ticks (so throttling cannot
+        stretch the crash-loss window -- see the gate). A negative delta
+        (backward clock step) counts as due rather than waiting for the wall
+        clock to re-pass the stored stamp."""
+        delta = now - self._last_flush
+        if delta >= FLUSH_INTERVAL_S or delta < 0.0 or self._last_flush == 0.0:
+            self._flush(now)
+
     # ---- the tick -----------------------------------------------------------
     def run_tick(self):
         start = time.monotonic()
@@ -379,8 +390,21 @@ class Collector:
         # THROTTLE_CEILING_S=120s > LEASE_TTL=60s. Only the renewal above must
         # happen on every call; the actual SCAN/observe must stay on the
         # (possibly throttled) effective_interval cadence, or throttling
-        # would silently stop shedding load.
-        if self._last_sample != 0.0 and now - self._last_sample < self.effective_interval:
+        # would silently stop shedding load. A NEGATIVE delta (backward NTP
+        # step) is treated as due rather than waiting for the wall clock to
+        # re-pass the stored stamp -- the sessionizer clamps the same input
+        # class at its credit step, so sampling early is safe and stalling
+        # is not.
+        delta = now - self._last_sample
+        if self._last_sample != 0.0 and 0.0 <= delta < self.effective_interval:
+            # The flush cadence must survive the gate: while throttled to
+            # effective_interval=120s, run_tick is still called every ~20s
+            # for lease renewal, and a flush reachable only on sampling
+            # ticks stretches the declared FLUSH_INTERVAL_S=60s crash-loss
+            # window to effective_interval exactly when the box is
+            # struggling. _flush is independently fenced by lease.renew()
+            # and no-ops for a worker that never loaded state.
+            self._maybe_flush(now)
             return
         self._last_sample = now
 
@@ -402,8 +426,7 @@ class Collector:
 
         self._throttle(self._cycle_ms(start))
 
-        if now - self._last_flush >= FLUSH_INTERVAL_S or self._last_flush == 0.0:
-            self._flush(now)
+        self._maybe_flush(now)
 
     def shutdown(self):
         try:

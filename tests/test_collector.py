@@ -654,3 +654,50 @@ def test_acquire_state_preserves_unknown_per_channel_keys(
     col.run_tick()
 
     assert col.sessionizer.channels["u1"]["future_key"] == {"kept": True}
+
+
+def test_backward_clock_step_does_not_suspend_sampling(
+        col_mod, sess_mod, storage_mod, fake_redis, fake_clock, tmp_path):
+    """A backward NTP step used to leave now - _last_sample negative, which
+    is below effective_interval on every call until the wall clock re-passes
+    the stored stamp -- no scan, no observe, no flush, nothing in stats. The
+    sessionizer clamps negative deltas (its line for exactly this input
+    class); the collector cadence gate must treat one as due."""
+    col = make_collector(col_mod, sess_mod, storage_mod, fake_redis, fake_clock,
+                         tmp_path)
+    col.run_tick()
+    ticks_before = col.stats["total_ticks"]
+
+    fake_clock.advance(-300.0)
+    col.run_tick()
+
+    assert col.stats["total_ticks"] == ticks_before + 1
+
+
+def test_flush_cadence_survives_throttling(
+        col_mod, sess_mod, storage_mod, fake_redis, fake_clock, tmp_path):
+    """While throttled to effective_interval=120s, base_tick still calls
+    run_tick every ~20s for lease renewal, but the flush check used to sit
+    below the sampling-cadence gate, so _flush ran only every 120s --
+    doubling the declared FLUSH_INTERVAL_S=60s crash-loss window exactly
+    when the box is struggling."""
+    col = make_collector(col_mod, sess_mod, storage_mod, fake_redis, fake_clock,
+                         tmp_path)
+    col.run_tick()                       # leader; first sample; first flush
+    col.effective_interval = 120.0
+
+    flushes = []
+    real_flush = col._flush
+
+    def spy_flush(now):
+        flushes.append(now)
+        return real_flush(now)
+
+    col._flush = spy_flush
+    for _ in range(5):
+        fake_clock.advance(20.0)
+        col.run_tick()
+
+    # 100 s elapsed under a 120 s sampling interval: at least one flush must
+    # still land on the 60 s cadence.
+    assert flushes
