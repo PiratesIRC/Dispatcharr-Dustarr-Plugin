@@ -247,7 +247,11 @@ def _entry(row, record, reason, now):
         "days_since_tuned": (round(days_since_tuned, 1)
                              if days_since_tuned is not None else None),
         "tune_count": int(record.get("tune_count") or 0),
-        "age_days": round(age_days, 1) if age_days is not None else None,
+        # Display/sort split like days_since_watched above: one channel
+        # without created_at used to render an empty cell whose empty data-v
+        # made the whole Age column sort as text (9 above 10).
+        "age_days": round(age_days, 1) if age_days is not None else "n/a",
+        "age_days_sort": round(age_days, 1) if age_days is not None else -1.0,
         "reason": reason,
     }
 

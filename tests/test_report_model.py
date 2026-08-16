@@ -530,6 +530,26 @@ def test_an_infinite_last_tuned_degrades_days_since_tuned_to_none(rp, gw):
     assert entry["days_since_tuned"] is None
 
 
+def test_age_days_carries_a_sort_companion_when_created_at_is_missing(rp, gw):
+    """One channel without created_at used to render an empty Age cell with
+    an empty data-v, making the whole column sort as text (9 above 10) --
+    the same mechanism the recency columns were given companions to avoid."""
+    row = gw.ChannelRow(id=18, uuid="u18", name="CH18", group="G",
+                        auto_created=False, created_at=None, proxying=True)
+    entry = rp._entry(row, {}, "never_watched", NOW)
+    assert entry["age_days"] == "n/a"
+    assert entry["age_days_sort"] == -1.0
+
+
+def test_age_days_sort_companion_matches_the_display_when_known(rp, gw):
+    row = gw.ChannelRow(id=19, uuid="u19", name="CH19", group="G",
+                        auto_created=False, created_at=NOW - 10 * 86400,
+                        proxying=True)
+    entry = rp._entry(row, {}, "never_watched", NOW)
+    assert entry["age_days"] == 10.0
+    assert entry["age_days_sort"] == 10.0
+
+
 def test_a_negative_watch_count_does_not_produce_a_negative_average(rp, gw):
     """A negative watch_count is untrusted file input; it must degrade to the
     same n/a sentinel as an absent value, not reach the renderer as a
