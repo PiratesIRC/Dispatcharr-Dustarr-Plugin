@@ -137,6 +137,10 @@ def test_select_fields_use_string_option_values(plugin):
 def test_unknown_action_is_an_error_not_a_crash(plugin):
     result = plugin.Plugin().run("no_such_action", {}, {"settings": {}})
     assert result["status"] == "error"
+    # `status` renders nowhere in Dispatcharr's plugin card; without an
+    # `error` key this failure renders as a transient green toast,
+    # pixel-identical to success.
+    assert result.get("error")
 
 
 def test_validate_settings_reports_a_broken_regex(plugin):

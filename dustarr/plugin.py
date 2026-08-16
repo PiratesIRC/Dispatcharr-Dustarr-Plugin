@@ -985,7 +985,11 @@ class Plugin:
             redacted = redaction.redact(f"{exc}")
             return {"status": "error", "error": redacted, "message": redacted}
 
-        return {"status": "error", "message": f"Unknown action: {action}"}
+        # `error`, not just `message`: without it this failure renders as a
+        # transient green toast, pixel-identical to success (see the comment
+        # in the except branch above).
+        return {"status": "error", "error": f"Unknown action: {action}",
+                "message": f"Unknown action: {action}"}
 
     def _report_issue(self):
         """Surface the issue tracker's address.

@@ -164,6 +164,28 @@ def test_write_report_survives_an_unwritable_csv_dir(rp, gw, tmp_path, monkeypat
     assert "csv" in out["error"].lower()
 
 
+def test_write_report_returns_the_live_path_when_only_the_archive_fails(
+        rp, gw, tmp_path, monkeypatch):
+    """If the disk fills between the live write and the archive write, the
+    live report.html IS the new report. Reporting html_path=None with 'html
+    write failed' skips the counter and the email while the verify-by-mtime
+    artifact says the opposite."""
+    real_atomic = rp._atomic_write
+
+    def selective(path, body):
+        if "report-" in os.path.basename(path):
+            raise OSError("disk full")
+        return real_atomic(path, body)
+
+    monkeypatch.setattr(rp, "_atomic_write", selective)
+    report_dir = tmp_path / "config"
+    out = rp.write_report(model(rp, gw), str(report_dir), str(report_dir), NOW)
+    assert (report_dir / "report.html").exists()
+    assert out["html_path"] == str(report_dir / "report.html")
+    assert out["archive_path"] is None
+    assert "archive" in out["error"].lower()
+
+
 def test_write_report_keeps_a_dated_archive(rp, gw, tmp_path):
     report_dir = tmp_path / "logos"
     rp.write_report(model(rp, gw), str(report_dir), str(tmp_path / "config"), NOW)

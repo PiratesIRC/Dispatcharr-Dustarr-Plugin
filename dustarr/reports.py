@@ -77,13 +77,24 @@ def _coerce_float(value, default=0.0):
         return default
 
 
+# Upper bound for a plausible epoch timestamp: 2100-01-01T00:00:00Z. json.load
+# accepts Infinity/NaN and any float, time.localtime raises OverflowError far
+# below 1e300, and gates.evaluate feeds int() with an age derived from
+# stats_since -- so the trust boundary rejects anything non-finite or outside
+# 1970..2100 rather than letting each consumer discover its own limit.
+_MAX_TIMESTAMP = 4102444800.0
+
+
 def _coerce_timestamp(value):
     if value is None:
         return None
     try:
-        return float(value)
+        ts = float(value)
     except (TypeError, ValueError):
         return None
+    if not math.isfinite(ts) or ts < 0.0 or ts > _MAX_TIMESTAMP:
+        return None
+    return ts
 
 
 def _sanitize_coverage_bucket(bucket):
@@ -185,6 +196,15 @@ def _entry(row, record, reason, now):
             days_since_tuned = max(0.0, (now - float(last_tuned)) / 86400.0)
         except (TypeError, ValueError, OSError):
             days_since_tuned = None
+    # Same input class as the avg_minutes guard below: json.load accepts
+    # -Infinity, so a non-finite timestamp is reachable from the file. An
+    # infinite age would top the cold list and its "inf" cell would defeat
+    # the numeric sort path for the whole column, so both ages degrade to
+    # the same sentinel as an absent value.
+    if days_since is not None and not math.isfinite(days_since):
+        days_since = None
+    if days_since_tuned is not None and not math.isfinite(days_since_tuned):
+        days_since_tuned = None
     # Denominated on qualified watches, the same population as `hours`, so the
     # two columns multiply back to each other. A watch_count <= 0 or a
     # non-finite result (an infinite or NaN watch_seconds, both untrusted
@@ -386,10 +406,11 @@ def build_model(rows, usage, settings, now):
             # so there is one definition of how long ago something happened.
             if entry["days_since_watched_sort"] < cold_window:
                 continue
-            last_tuned = entry.get("last_tuned")
+            # A non-None days_since_tuned already proves last_tuned was set:
+            # _entry only computes it inside an `if last_tuned:` branch.
             days_since_tuned = entry.get("days_since_tuned")
-            still_tried = (bool(last_tuned) and days_since_tuned is not None
-                          and days_since_tuned < cold_window)
+            still_tried = (days_since_tuned is not None
+                           and days_since_tuned < cold_window)
             # Tried recently and abandoned inside the watch threshold means
             # BROKEN, not unwanted. Conflating the two is how a metrics tool
             # recommends disabling the channels somebody is fighting hardest
@@ -967,7 +988,10 @@ def _fmt_local(ts):
         return "n/a"
     try:
         return time.strftime("%Y-%m-%d %H:%M %Z", time.localtime(float(ts)))
-    except (TypeError, ValueError, OSError):
+    # OverflowError: time.localtime raises it for a non-finite or
+    # out-of-range float, which json.load can produce (-Infinity is valid
+    # JSON to it), and it is not a subclass of the other three.
+    except (TypeError, ValueError, OSError, OverflowError):
         return "n/a"
 
 
@@ -1174,7 +1198,7 @@ def render_html(model):
     cold_excluded_note = _excluded_watched_note(
         watched_excluded,
         "<b>excluded from this classification</b> too, and can never be "
-        "listed as cold, however long it has gone unwatched.")
+        "listed as cold, however long unwatched.")
 
     cold_still_tried = model.get("cold_still_tried") or []
     cold_still_tried_block = ""
@@ -1328,7 +1352,10 @@ def _iso_utc(ts):
         return ""
     try:
         return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(float(ts)))
-    except (TypeError, ValueError, OSError):
+    # OverflowError for the same reason as _fmt_local: time.gmtime raises
+    # it for a non-finite or out-of-range float, and it is not a subclass
+    # of the other three.
+    except (TypeError, ValueError, OSError, OverflowError):
         return ""
 
 
@@ -1416,15 +1443,25 @@ def write_report(model, report_dir, csv_dir, now):
         html = render_html(model)
         live = os.path.join(report_dir, REPORT_HTML)
         _atomic_write(live, html)
-        # A stable filename always holds the latest run; archives sit alongside.
-        archive_path = os.path.join(report_dir, f"report-{stamp}.html")
-        _atomic_write(archive_path, html)
+        # Claimed the moment the live file is in place: once report.html has
+        # been atomically replaced, the report EXISTS, and a later archive or
+        # CSV failure must degrade next to it -- reporting html_path=None at
+        # that point would skip the counter and the email while the
+        # verify-by-mtime artifact says the write succeeded.
         out["html_path"] = live
-        out["archive_path"] = archive_path
-        _prune_archives(report_dir, "report-", ".html")
     except OSError as exc:
         out["error"] = f"html write failed: {exc}"
         return out
+
+    try:
+        # A stable filename always holds the latest run; archives sit alongside.
+        archive_path = os.path.join(report_dir, f"report-{stamp}.html")
+        _atomic_write(archive_path, html)
+        out["archive_path"] = archive_path
+        _prune_archives(report_dir, "report-", ".html")
+    except OSError as exc:
+        # Same degrade-not-fail contract as the CSV block below.
+        out["error"] = f"archive write failed: {exc}"
 
     try:
         os.makedirs(csv_dir, exist_ok=True)
@@ -1433,7 +1470,10 @@ def write_report(model, report_dir, csv_dir, now):
         out["csv_path"] = csv_path
         _prune_archives(csv_dir, "report-", ".csv")
     except OSError as exc:
-        # The HTML report is the product; a failed CSV must degrade, not raise.
-        out["error"] = f"csv write failed: {exc}"
+        # The HTML report is the product; a failed CSV must degrade, not
+        # raise. Joined rather than assigned so a same-run archive failure
+        # above is not silently replaced.
+        message = f"csv write failed: {exc}"
+        out["error"] = f"{out['error']}; {message}" if "error" in out else message
 
     return out

@@ -475,6 +475,61 @@ def test_an_unparseable_last_watched_degrades_to_never_instead_of_raising(rp, gw
     assert entry["days_since_watched_sort"] == rp.NEVER_SORT
 
 
+def test_coerce_timestamp_rejects_nonfinite_and_out_of_range(rp):
+    """json.load accepts Infinity/NaN and any float. time.localtime raises
+    OverflowError far below 1e300 and gates.evaluate feeds int() with the
+    derived age, so the trust boundary must reject these instead of letting
+    each consumer discover its own limit."""
+    assert rp._coerce_timestamp(float("inf")) is None
+    assert rp._coerce_timestamp(float("-inf")) is None
+    assert rp._coerce_timestamp(float("nan")) is None
+    assert rp._coerce_timestamp(1e300) is None
+    assert rp._coerce_timestamp(-5.0) is None
+    assert rp._coerce_timestamp(NOW) == NOW
+
+
+def test_infinite_stats_since_does_not_crash_build_model(rp, gw):
+    """meta.stats_since = Infinity used to reach gates.evaluate, where
+    int(-inf) raises OverflowError out of build_model, failing every report
+    build until usage.json is hand edited."""
+    rows = [gw.ChannelRow(id=1, uuid="u1", name="CH1", group="G",
+                          auto_created=False, created_at=NOW - 90 * 86400,
+                          proxying=True)]
+    usage = {"channels": {}, "meta": {"stats_since": float("inf"),
+                                      "coverage": {}}}
+    model = rp.build_model(rows, usage, SETTINGS, NOW)
+    assert model is not None
+
+
+def test_an_infinite_last_watched_degrades_to_never_instead_of_inf(rp, gw):
+    """json.load accepts -Infinity, so a non-finite timestamp is reachable
+    from usage.json. An inf age would top the cold list and its 'inf' cell
+    would defeat the numeric sort path for the whole column."""
+    row = gw.ChannelRow(id=16, uuid="u16", name="CH16", group="G",
+                        auto_created=False, created_at=NOW - 90 * 86400,
+                        proxying=True)
+    record = {"watch_count": 1, "watch_seconds": 60.0, "tune_count": 1,
+              "last_watched": float("-inf"), "last_tuned": None,
+              "first_seen": NOW - 80 * 86400}
+    entry = rp._entry(row, record, "watched", NOW)
+    assert entry["days_since_watched"] == "never"
+    assert entry["days_since_watched_sort"] == rp.NEVER_SORT
+
+
+def test_an_infinite_last_tuned_degrades_days_since_tuned_to_none(rp, gw):
+    """Same input class as the last_watched case above, on the tuned side:
+    a non-finite age must degrade to the absent sentinel, not reach the
+    cold classification as inf."""
+    row = gw.ChannelRow(id=17, uuid="u17", name="CH17", group="G",
+                        auto_created=False, created_at=NOW - 90 * 86400,
+                        proxying=True)
+    record = {"watch_count": 1, "watch_seconds": 60.0, "tune_count": 1,
+              "last_watched": NOW - 3600, "last_tuned": float("-inf"),
+              "first_seen": NOW - 80 * 86400}
+    entry = rp._entry(row, record, "watched", NOW)
+    assert entry["days_since_tuned"] is None
+
+
 def test_a_negative_watch_count_does_not_produce_a_negative_average(rp, gw):
     """A negative watch_count is untrusted file input; it must degrade to the
     same n/a sentinel as an absent value, not reach the renderer as a
