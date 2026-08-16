@@ -44,6 +44,13 @@ class Storage:
             body["written_at"] = now
             with open(tmp, "w", encoding="utf-8") as fh:
                 json.dump(body, fh, separators=(",", ":"), default=str)
+                # Force the bytes to disk BEFORE the rename: without this, a
+                # power loss inside the filesystem journal window can publish
+                # a truncated file, which load() then sidelines -- silently
+                # restarting the irreplaceable dataset. One fsync per flush
+                # (every 60 s) is the whole cost.
+                fh.flush()
+                os.fsync(fh.fileno())
             # Same-directory rename: cross-device os.replace fails.
             os.replace(tmp, self._path())
             self._fail_streak = 0

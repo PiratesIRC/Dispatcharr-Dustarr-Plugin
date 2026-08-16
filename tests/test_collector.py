@@ -605,3 +605,52 @@ def test_lease_error_increments_redis_errors_via_drain(
     assert col._was_leader is False
     assert col.stats["redis_errors"] == 1
     assert col.stats["last_error"]
+
+
+def test_corrupt_but_parseable_record_does_not_kill_collection(
+        col_mod, sess_mod, storage_mod, fake_redis, fake_clock, tmp_path):
+    """usage.json can be valid JSON while one record is malformed (a hand
+    edit, a partial write). _acquire_state used to hand it raw to the
+    sessionizer, whose tune_count += 1 then raised on every tick, outside
+    run_tick's sample guard -- collection dead forever while reports (which
+    sanitize their own copy) kept rendering fine."""
+    store = storage_mod.Storage(str(tmp_path))
+    store.write({"channels": {
+        "u1": {"watch_count": "3", "watch_seconds": None, "tune_count": None,
+               "last_watched": "not a timestamp", "last_tuned": None,
+               "first_seen": None},
+        "u2": None},
+        "meta": {"stats_since": 500.0, "coverage": {"2026-01-01T00": None}}},
+        fake_clock.wall())
+    sess = sess_mod.Sessionizer(dict(THRESHOLDS))
+    col = col_mod.Collector(fake_redis, sess, store, dict(THRESHOLDS),
+                            token="me", wall=fake_clock.wall)
+
+    fake_redis.open_channel("u1", clients=1)
+    col.run_tick()                      # acquire leadership + load state
+    fake_clock.advance(16.0)
+    col.run_tick()                      # observe() credits u1: must not raise
+
+    assert col.sessionizer.channels["u1"]["tune_count"] == 1
+    assert col.sessionizer.channels["u1"]["watch_count"] == 3
+    assert col.sessionizer.channels["u2"]["tune_count"] == 0
+
+
+def test_acquire_state_preserves_unknown_per_channel_keys(
+        col_mod, sess_mod, storage_mod, fake_redis, fake_clock, tmp_path):
+    """channels is loaded and re-emitted whole; a future release stores new
+    per-channel data inside it, so sanitizing must coerce the known keys
+    without discarding unknown ones."""
+    store = storage_mod.Storage(str(tmp_path))
+    store.write({"channels": {
+        "u1": {"watch_count": 1, "watch_seconds": 60.0, "tune_count": 1,
+               "last_watched": 400.0, "last_tuned": 400.0, "first_seen": 300.0,
+               "future_key": {"kept": True}}},
+        "meta": {"stats_since": 500.0, "coverage": {}}},
+        fake_clock.wall())
+    sess = sess_mod.Sessionizer(dict(THRESHOLDS))
+    col = col_mod.Collector(fake_redis, sess, store, dict(THRESHOLDS),
+                            token="me", wall=fake_clock.wall)
+    col.run_tick()
+
+    assert col.sessionizer.channels["u1"]["future_key"] == {"kept": True}

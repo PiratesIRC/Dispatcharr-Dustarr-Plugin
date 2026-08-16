@@ -5,6 +5,7 @@ duck-typed: get/set/delete/expire/scard/scan_iter/pipeline.
 """
 from __future__ import annotations
 
+import math
 import time
 import traceback
 
@@ -29,6 +30,58 @@ def to_text(value):
     if isinstance(value, bytes):
         return value.decode("utf-8", "replace")
     return str(value)
+
+
+def _coerce_stat(value, default, cast):
+    """Coerce one untrusted usage.json value; anything unparseable or
+    non-finite degrades to `default`. int() raises OverflowError on an
+    infinite float, which is not a subclass of the other two."""
+    if value is None:
+        return default
+    try:
+        out = cast(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    if not math.isfinite(out):
+        return default
+    return out
+
+
+def _sanitize_record(record, now):
+    """Coerce the six keys the sessionizer reads and arithmetically updates,
+    WITHOUT discarding unknown keys: `channels` is loaded and re-emitted
+    whole on flush, so per-channel data a newer release stored must survive
+    a round trip through an older collector. (Contrast reports._sanitize_usage,
+    which is an allowlist -- correct there because reports only read.)
+
+    storage.load() validates only that the top level is a dict; a record can
+    arrive as None or with null/string fields (a hand edit, a partial write),
+    and an uncoerced record used to raise out of observe() on every tick,
+    permanently killing collection while reports kept rendering fine."""
+    if not isinstance(record, dict):
+        return {"watch_count": 0, "watch_seconds": 0.0, "tune_count": 0,
+                "last_watched": None, "last_tuned": None, "first_seen": now}
+    out = dict(record)
+    out["watch_count"] = _coerce_stat(record.get("watch_count"), 0, int)
+    out["watch_seconds"] = _coerce_stat(record.get("watch_seconds"), 0.0, float)
+    out["tune_count"] = _coerce_stat(record.get("tune_count"), 0, int)
+    out["last_watched"] = _coerce_stat(record.get("last_watched"), None, float)
+    out["last_tuned"] = _coerce_stat(record.get("last_tuned"), None, float)
+    first_seen = _coerce_stat(record.get("first_seen"), None, float)
+    out["first_seen"] = now if first_seen is None else first_seen
+    return out
+
+
+def _sanitize_bucket(bucket):
+    """Coerce a coverage bucket to the two keys _mark_coverage updates
+    arithmetically, preserving unknown keys for the same reason as
+    _sanitize_record."""
+    if not isinstance(bucket, dict):
+        bucket = {}
+    out = dict(bucket)
+    out["ticks"] = _coerce_stat(bucket.get("ticks"), 0, int)
+    out["max_gap_s"] = _coerce_stat(bucket.get("max_gap_s"), 0.0, float)
+    return out
 
 
 def uuid_from_key(key):
@@ -194,9 +247,27 @@ class Collector:
         hand back a fresh stats_since -- never one this worker cached from a
         previous, now-stale, in-memory copy (task-2 review guarantee)."""
         data = self.storage.ensure_stats_since(self.storage.load(now), now)
-        self.sessionizer.channels = dict(data.get("channels") or {})
-        self.sessionizer.coverage = dict((data.get("meta") or {}).get("coverage") or {})
-        self._stats_since = (data.get("meta") or {}).get("stats_since") or now
+        # Sanitize at the trust boundary: everything below runs arithmetic on
+        # these values on every tick, with no per-record exception net (see
+        # _sanitize_record). Non-dict containers degrade to empty rather than
+        # raising on .items().
+        raw_channels = data.get("channels")
+        if not isinstance(raw_channels, dict):
+            raw_channels = {}
+        self.sessionizer.channels = {
+            uuid: _sanitize_record(record, now)
+            for uuid, record in raw_channels.items()}
+        meta = data.get("meta")
+        if not isinstance(meta, dict):
+            meta = {}
+        raw_coverage = meta.get("coverage")
+        if not isinstance(raw_coverage, dict):
+            raw_coverage = {}
+        self.sessionizer.coverage = {
+            str(key): _sanitize_bucket(bucket)
+            for key, bucket in raw_coverage.items()}
+        self._stats_since = _coerce_stat(meta.get("stats_since"), None,
+                                         float) or now
 
     def _sample(self, now):
         """Full SCAN for the presence set, then a pipelined SCARD on EVERY present

@@ -49,6 +49,29 @@ def test_stats_since_set_once_and_never_moved(store):
     assert again["meta"]["stats_since"] == 1000.0  # NOT moved forward
 
 
+def test_write_fsyncs_the_temp_file_before_replacing(store, storage_mod,
+                                                     monkeypatch):
+    """Without flush+fsync before os.replace, a power loss inside the
+    filesystem journal window can publish a truncated usage.json; load()
+    then sidelines it and silently restarts the dataset."""
+    calls = []
+    real_fsync = storage_mod.os.fsync
+    real_replace = storage_mod.os.replace
+
+    def spy_fsync(fd):
+        calls.append("fsync")
+        return real_fsync(fd)
+
+    def spy_replace(src, dst):
+        calls.append("replace")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(storage_mod.os, "fsync", spy_fsync)
+    monkeypatch.setattr(storage_mod.os, "replace", spy_replace)
+    assert store.write({"channels": {}}, 1000.0) is True
+    assert calls == ["fsync", "replace"]
+
+
 def test_stats_since_rearms_after_corrupt_sideline(store, tmp_path):
     # A recreated usage.json must get a FRESH stats_since, which re-arms the
     # 30-day blackout. Carrying it forward would let the report act on an
