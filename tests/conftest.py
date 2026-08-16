@@ -27,6 +27,17 @@ def _install_runtime_stubs():
     for name in ("Channel", "ChannelGroup", "ChannelProfile",
                  "ChannelProfileMembership", "StreamProfile"):
         setattr(models, name, MagicMock(name=name))
+    # plugin._load_settings distinguishes PluginConfig.DoesNotExist (a missing
+    # row, legitimately {}) from every other failure (which must propagate).
+    # DoesNotExist must be a real exception CLASS: an auto-created MagicMock
+    # attribute is not a BaseException subclass and would break the except
+    # clause itself.
+    apps_plugins = types.ModuleType("apps.plugins")
+    apps_plugins.__path__ = []
+    plugins_models = types.ModuleType("apps.plugins.models")
+    plugins_models.PluginConfig = MagicMock(name="PluginConfig")
+    plugins_models.PluginConfig.DoesNotExist = type(
+        "DoesNotExist", (Exception,), {})
     django = types.ModuleType("django")
     django_db = types.ModuleType("django.db")
     django_db.close_old_connections = MagicMock(name="close_old_connections")
@@ -53,6 +64,7 @@ def _install_runtime_stubs():
     sys.modules.update({
         "apps": apps, "apps.channels": apps_channels,
         "apps.channels.models": models,
+        "apps.plugins": apps_plugins, "apps.plugins.models": plugins_models,
         "django": django, "django.db": django_db,
         "core": core, "core.utils": core_utils, "core.scheduling": core_sched,
         "core.models": core_models,

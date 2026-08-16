@@ -588,17 +588,27 @@ def build_report_task():
 
 
 def _load_settings():
+    """DoesNotExist is the ONLY silent {}: the row was never created, and
+    defaults are the correct answer. Any OTHER failure (a database blip at
+    03:00) must propagate to build_report_task's handler: returning {} there
+    used to build the scheduled report with DEFAULT settings -- the
+    operator's exclusions ignored, notifications off -- and stamp the run
+    healthy, with nothing anywhere saying the settings were not read."""
     from apps.plugins.models import PluginConfig  # Dispatcharr runtime only
 
     try:
         config = PluginConfig.objects.get(key="dustarr")
-        return config.settings or {}
-    except Exception:
+    except PluginConfig.DoesNotExist:
         return {}
+    return config.settings or {}
 
 
 CRON_BY_SCHEDULE = {"daily": "0 3 * * *", "weekly": "0 3 * * 1",
                     "monthly": "0 3 1 * *"}
+
+# Expected days between scheduled runs, for _schedule_health's staleness
+# check. 31 for monthly so a 31-day month is never flagged.
+CADENCE_DAYS = {"daily": 1.0, "weekly": 7.0, "monthly": 31.0}
 
 
 SCHEDULED_RUN_FILE = "scheduled_run.json"
@@ -800,15 +810,25 @@ def _notifier_alive():
         return False
 
 
-def _schedule_health():
+def _schedule_health(cadence_days=None):
     """Facts about dustarr's OWN Beat row plus the last real scheduled run.
 
     `total_run_count` is deliberately NOT consulted: Beat counts messages SENT,
     not executed, so it reads healthy for a task the worker rejects -- which is
     precisely the outage this function exists to surface.
+
+    A missing run stamp is a NOTE, not a problem: on a fresh install the row
+    was just armed by the same click and legitimately has no stamp for up to
+    a cadence, so flagging it red is a built-in false alarm lasting a week on
+    the weekly cron. The compensating signal is the staleness check: a stamp
+    older than twice `cadence_days` means the schedule stopped firing (the
+    2026-08-03/08-10 outage shape, where the Beat row had been deleted). The
+    blind spot -- a schedule that NEVER fires on a box that never had a run
+    -- is accepted as the price of not false-alarming on every install.
     """
     out = {"exists": False, "enabled": False, "queue": None,
-           "last_run_ts": _read_scheduled_run_ts(), "problems": []}
+           "last_run_ts": _read_scheduled_run_ts(), "problems": [],
+           "notes": []}
     try:
         row = _periodic_task_qs().filter(name=TASK_NAME).first()
     except Exception:
@@ -825,7 +845,14 @@ def _schedule_health():
             f"schedule queue is {row.queue!r}, not {SCHEDULE_QUEUE!r} -- the "
             f"scheduled report will be rejected and never run")
     if out["last_run_ts"] is None:
-        out["problems"].append("the scheduled report has never run")
+        out["notes"].append("the scheduled report has not run yet")
+    elif cadence_days:
+        age_days = (time.time() - out["last_run_ts"]) / 86400.0
+        if age_days > 2.0 * float(cadence_days):
+            out["problems"].append(
+                f"the scheduled report last ran {age_days:.1f} days ago, more "
+                f"than twice its {cadence_days:.0f} day cadence -- the "
+                f"schedule has stopped firing")
     return out
 
 
@@ -1131,7 +1158,8 @@ class Plugin:
         # sync_schedule already ran once in run() before dispatch (I3) -- that
         # is the single arming site. Calling it again here would just arm the
         # schedule twice per click for no benefit.
-        health = _schedule_health()
+        health = _schedule_health(
+            cadence_days=CADENCE_DAYS.get(thresholds.get("report_schedule")))
         problems = list(health["problems"])
         # Only meaningful when notifications are ON -- flagging a dead collector
         # for an operator who is not using it is a false alarm, which is its own
@@ -1147,6 +1175,10 @@ class Plugin:
         if health["last_run_ts"] is not None:
             age_d = (time.time() - health["last_run_ts"]) / 86400.0
             ran = f" Scheduled report last ran {age_d:.1f} days ago."
+        elif health.get("notes"):
+            # Informational, not red: a fresh install legitimately has no run
+            # stamp for up to a cadence (see _schedule_health).
+            ran = " " + " ".join(f"{n.capitalize()}." for n in health["notes"])
         else:
             ran = ""
         return {"status": "ok",

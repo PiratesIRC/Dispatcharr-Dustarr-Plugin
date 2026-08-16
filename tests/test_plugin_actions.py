@@ -1308,13 +1308,14 @@ def test_a_failed_publish_does_not_record_a_scheduled_run(plugin, monkeypatch, t
 # failure was already pixel-identical to success.
 
 _HEALTHY = {"exists": True, "enabled": True, "queue": "dvr",
-            "last_run_ts": 1_700_000_000.0, "problems": []}
+            "last_run_ts": 1_700_000_000.0, "problems": [], "notes": []}
 
 
 def _stub_health(plugin, monkeypatch, **over):
     h = dict(_HEALTHY)
     h.update(over)
-    monkeypatch.setattr(plugin, "_schedule_health", lambda: h)
+    monkeypatch.setattr(plugin, "_schedule_health",
+                        lambda cadence_days=None: h)
     monkeypatch.setattr(plugin, "_notifier_alive", lambda: True)
 
 
@@ -1441,16 +1442,69 @@ def test_schedule_health_flags_a_missing_row(plugin, monkeypatch, tmp_path):
     assert any("no report schedule" in p for p in h["problems"])
 
 
-def test_schedule_health_flags_a_never_run_schedule(plugin, monkeypatch, tmp_path):
+def test_schedule_health_treats_never_run_as_a_note_not_a_problem(
+        plugin, monkeypatch, tmp_path):
+    """A fresh install has no run stamp for up to a week on the weekly cron,
+    and the row was just armed by the same click -- a red error there is a
+    built-in false alarm. The compensating signal is the staleness check
+    below: a stamp that stops advancing IS a problem."""
     monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))   # no stamp written
     _stub_row(plugin, monkeypatch, _fake_row())
-    assert any("never run" in p for p in plugin._schedule_health()["problems"])
+    h = plugin._schedule_health()
+    assert h["problems"] == []
+    assert any("not run yet" in n for n in h["notes"])
+
+
+def test_schedule_health_flags_a_stale_last_run(plugin, monkeypatch, tmp_path):
+    """The 2026-08-03/08-10 outage shape: the stamp exists but stopped
+    advancing (the Beat row had been deleted and later re-created). More
+    than twice the cadence without a run is a problem, not a note."""
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(plugin.time, "time", lambda: 1_700_000_000.0 + 15 * 86400)
+    plugin._write_scheduled_run_ts(1_700_000_000.0)
+    _stub_row(plugin, monkeypatch, _fake_row())
+    problems = plugin._schedule_health(cadence_days=7.0)["problems"]
+    assert any("last ran" in p for p in problems), problems
+
+
+def test_schedule_health_accepts_a_recent_run_within_cadence(
+        plugin, monkeypatch, tmp_path):
+    monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(plugin.time, "time", lambda: 1_700_000_000.0 + 6 * 86400)
+    plugin._write_scheduled_run_ts(1_700_000_000.0)
+    _stub_row(plugin, monkeypatch, _fake_row())
+    assert plugin._schedule_health(cadence_days=7.0)["problems"] == []
 
 
 def test_schedule_health_never_raises_on_a_db_error(plugin, monkeypatch, tmp_path):
     monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
     _stub_row(plugin, monkeypatch, RuntimeError("db down"))
     assert plugin._schedule_health()["problems"]
+
+
+def test_load_settings_returns_empty_only_for_a_missing_row(plugin):
+    from apps.plugins.models import PluginConfig  # the conftest stub
+
+    PluginConfig.objects.get.side_effect = PluginConfig.DoesNotExist()
+    try:
+        assert plugin._load_settings() == {}
+    finally:
+        PluginConfig.objects.get.side_effect = None
+
+
+def test_load_settings_propagates_a_db_failure(plugin):
+    """A transient database failure at 03:00 must fail the scheduled task
+    loudly. Returning {} there used to build the report with DEFAULT
+    settings (the exclusions ignored, notifications off) and stamp the run
+    healthy, with nothing anywhere saying the settings were not read."""
+    from apps.plugins.models import PluginConfig  # the conftest stub
+
+    PluginConfig.objects.get.side_effect = RuntimeError("db down")
+    try:
+        with pytest.raises(RuntimeError):
+            plugin._load_settings()
+    finally:
+        PluginConfig.objects.get.side_effect = None
 
 
 # -- Phase B: the on-demand report button ------------------------------------
