@@ -305,8 +305,11 @@ The wording it reports back is deliberate:
 **It does not prove the *schedule* works.** The button runs in the web worker
 using the settings currently on screen; the schedule runs on a background worker
 from saved settings. **Validate settings** is what tells you about the schedule:
-it reports when the scheduled report last ran, and warns if it has never run, is
-disabled, or is queued to a worker that would reject it.
+it reports when the scheduled report last ran, and warns if that run is more
+than twice the schedule cadence in the past, is disabled, or is queued to a
+worker that would reject it. On a fresh install it simply notes that the
+scheduled report has not run yet, which is normal until the first cadence
+passes, rather than raising an error.
 
 ## Install / upgrade
 

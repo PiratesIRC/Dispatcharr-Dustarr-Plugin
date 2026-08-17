@@ -1,5 +1,66 @@
 # Changelog
 
+## 1.26.2281841, August 16, 2026
+
+**Review hardening.** A comprehensive code review produced fourteen verified
+findings; this release fixes all but three deliberately skipped minor
+cleanups. No new features. Every fix carries a test that fails against the
+previous code.
+
+Robustness against a damaged or hand edited `usage.json`:
+
+- **The report trust boundary rejects non-finite and out-of-range
+  timestamps.** A JSON file can legally carry `Infinity` or `NaN`, and one
+  such value used to crash every report build, or silently make the honesty
+  gate treat a garbage aged dataset as mature. The recency ages, the
+  timestamp formatters and the age arithmetic now all degrade to the same
+  "never" or "n/a" sentinels an absent value gets.
+- **The collector coerces each loaded channel record at the load boundary.**
+  One malformed record in an otherwise valid file used to raise on every
+  collection tick, permanently stopping collection with no visible symptom
+  while reports kept rendering. Unknown per-record keys are preserved, so
+  data written by a newer release survives an older collector.
+- **The usage file is flushed and fsynced before the atomic rename**, so a
+  power loss can no longer publish a truncated file, which would have been
+  sidelined on the next load and silently restarted the dataset.
+
+Honest signals to the operator:
+
+- **A settings read failure now fails the scheduled report loudly.** It used
+  to fall back to default settings silently, ignoring the configured
+  exclusions and turning notifications off, while stamping the run healthy.
+- **Validate settings no longer shows a red error on a healthy fresh
+  install.** A missing run stamp is an informational note; the error now
+  fires when the last scheduled run is more than twice the cadence old,
+  which is the actual outage shape.
+- **The "usage sensor trustworthy again" notification requires the gate to
+  actually pass.** A dataset wipe after an outstanding critical alert used
+  to read as recovery and sent a false all-clear.
+- **A fully blind dataset now raises an alert.** When every channel is
+  excluded or unobservable, the unobservable-fraction alert used to
+  suppress itself in exactly the case the never-watched ceiling delegates
+  to it. Its wording no longer implies a percentage that can exceed 100.
+- **An unknown action id returns a persistent red error** instead of a
+  transient green toast, and a failure writing only the dated archive copy
+  no longer reports the whole report write as failed after the live
+  `report.html` was already replaced.
+
+Correctness under unusual conditions:
+
+- **Stream profile observability is decided structurally**, by the same
+  `is_redirect()` test Dispatcharr itself uses at play time, instead of by
+  exact lowercase name match against three hardcoded names. A renamed or
+  cloned profile can no longer flip watched channels into the never-watched
+  list or hide unobservable ones. The name heuristic remains as a fallback
+  for Dispatcharr versions without the method.
+- **A backward clock step no longer suspends sampling** until the wall clock
+  re-passes the stored stamp, and **the sixty second write cadence survives
+  load throttling** instead of stretching to the throttled interval.
+- **The Age column sorts numerically** even when a channel has no creation
+  date, using the same display and sort key split the recency columns use.
+- **The going cold note reads "however long unwatched"**, correcting a
+  singular pronoun after a plural subject.
+
 ## 1.26.2251625, August 13, 2026
 
 **Release A: recency.** The report now shows, for every watched channel, how
