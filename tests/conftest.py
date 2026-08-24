@@ -275,6 +275,16 @@ def fake_redis(fake_clock):
 
 NOW = 1_700_000_000.0
 
+
+def _sessionizer_bucket_key(ts):
+    """The UTC hour-bucket key the collector writes coverage under.
+
+    Imported lazily from the module under test rather than reimplemented, so a
+    change to the bucket format cannot leave this helper silently building keys
+    that never match.
+    """
+    return sys.modules["dustarr_under_test.sessionizer"].bucket_key(ts)
+
 SETTINGS = {"exclude_groups": "", "exclude_name_regex": "",
             "exclude_auto_created": False, "top_n": 5,
             "unused_threshold_days": 30, "never_watched_ceiling": 0.99,
@@ -303,6 +313,23 @@ def model(rp, gw, n=5, watched=2):
 # no chip at all and the fixture would then stop covering the masthead chip.
 SAMPLE_REPORT_NUMBER = 37
 
+SAMPLE_SETTINGS = dict(SETTINGS, top_n=5, exclude_groups="US: Local News",
+                       unused_threshold_days=30)
+
+
+def _full_coverage(now, window_days=40, poll_interval_s=15.0):
+    """Coverage buckets for a collector that sampled the whole window.
+
+    gates.coverage_fraction counts an hour as covered only when it holds at
+    least 90% of the ticks the poll interval implies AND its largest gap fits
+    inside the client grace, so both numbers have to be filled in: a bucket
+    carrying only a tick count scores zero coverage.
+    """
+    ticks = int(3600.0 / poll_interval_s)
+    return {_sessionizer_bucket_key(now - hour * 3600):
+            {"ticks": ticks, "max_gap_s": poll_interval_s}
+            for hour in range(int(window_days * 24))}
+
 
 def sample_model(rp, gw):
     """The exact model behind tests/fixtures/sample_report.html.
@@ -311,8 +338,92 @@ def sample_model(rp, gw):
     fixture) and the test that compares against it. When those two built their
     model separately, adding a single key to one of them broke the comparison
     with no defect in the renderer at all.
+
+    Deliberately RICHER than `model()` above, and deliberately healthy. Every
+    section of the report has entries here -- never watched, going cold, still
+    being tried, too new to judge, tuned but never qualified, most used, least
+    used, excluded and unobservable -- across several channel groups, so the
+    fixture exercises the table, chart and rollup markup rather than a page of
+    empty headings. Coverage is complete and enough distinct channels were
+    watched to clear the honesty gates, because a fixture that always carries
+    the "not trustworthy" banner cannot show what a normal report looks like.
+    The banner itself is covered by its own test, which builds a blind dataset.
     """
-    m = model(rp, gw, n=12, watched=4)
+    day = 86400.0
+    rows, channels = [], []
+
+    def add(uuid, name, group, *, age_days=200, proxying=True,
+            auto_created=False, record=None):
+        rows.append(gw.ChannelRow(id=len(rows) + 1, uuid=uuid, name=name,
+                                  group=group, auto_created=auto_created,
+                                  created_at=NOW - age_days * day,
+                                  proxying=proxying))
+        if record is not None:
+            channels.append((uuid, record))
+
+    def watched(count, hours, last_days, tunes=None):
+        return {"watch_count": count, "watch_seconds": hours * 3600.0,
+                "tune_count": tunes if tunes is not None else count,
+                "last_watched": NOW - last_days * day,
+                "last_tuned": NOW - last_days * day,
+                "first_seen": NOW - 180 * day}
+
+    # Watched regularly: these carry the most-used and least-used rankings.
+    add("u-news24", "BBC News HD", "UK: News", record=watched(48, 61.0, 0.4))
+    add("u-film1", "Paramount Network", "US: Movies", record=watched(31, 44.5, 1.2))
+    add("u-doc", "Smithsonian Channel", "US: Documentary", record=watched(22, 29.0, 2.1))
+    add("u-kids", "Cartoon Network", "US: Kids", record=watched(17, 12.5, 0.8))
+    add("u-food", "Food Network", "US: Lifestyle", record=watched(9, 6.0, 3.5))
+    add("u-hist", "History Channel", "US: Documentary", record=watched(4, 2.5, 5.0))
+
+    # Watched once, long ago: the "going cold" list, the retirement queue.
+    add("u-cold1", "Travel Channel", "US: Lifestyle", record=watched(2, 1.5, 41.0))
+    add("u-cold2", "Discovery Turbo", "US: Documentary", record=watched(1, 0.6, 55.0))
+
+    # Cold by watching but tuned recently: somebody is still trying, which
+    # reads as broken rather than unwanted, so it is listed apart.
+    still_tried = watched(1, 0.5, 47.0)
+    still_tried["last_tuned"] = NOW - 2 * day
+    still_tried["tune_count"] = 14
+    add("u-tried", "Sky Sports Main Event", "UK: Sports", record=still_tried)
+
+    # Tuned repeatedly, never long enough to count as a watch: almost certainly
+    # a broken source rather than an unpopular channel.
+    for uuid, name, group, tunes in (
+            ("u-brk1", "AMC HD", "US: Movies", 11),
+            ("u-brk2", "TLC", "US: Lifestyle", 6)):
+        add(uuid, name, group,
+            record={"watch_count": 0, "watch_seconds": 0.0,
+                    "tune_count": tunes, "last_watched": None,
+                    "last_tuned": NOW - 1.5 * day,
+                    "first_seen": NOW - 120 * day})
+
+    # Never watched: the dead weight the report exists to find.
+    for uuid, name, group in (
+            ("u-dead1", "Shopping HQ", "US: Shopping"),
+            ("u-dead2", "Gems TV", "US: Shopping"),
+            ("u-dead3", "Poker Central", "US: Sports"),
+            ("u-dead4", "QVC Style", "US: Shopping"),
+            ("u-dead5", "Baby First TV", "US: Kids"),
+            ("u-dead6", "Classic Arts Showcase", "US: Movies"),
+            ("u-dead7", "Motorvision TV", "US: Documentary")):
+        add(uuid, name, group)
+
+    # Created inside the unused threshold: not dead weight, just too new to
+    # judge fairly.
+    add("u-new1", "Fox Weather", "US: News", age_days=9)
+    add("u-new2", "Nosey", "US: Lifestyle", age_days=21)
+
+    # Held back from judgment: an excluded group, and a channel whose stream
+    # profile is not proxying so the collector cannot see it at all.
+    add("u-exc1", "WKYC Cleveland", "US: Local News")
+    add("u-exc2", "WEWS Cleveland", "US: Local News")
+    add("u-unobs", "Willow Cricket", "US: Sports", proxying=False)
+
+    usage = {"channels": dict(channels),
+             "meta": {"stats_since": NOW - 40 * day,
+                      "coverage": _full_coverage(NOW)}}
+    m = rp.build_model(rows, usage, SAMPLE_SETTINGS, NOW)
     m["report_number"] = SAMPLE_REPORT_NUMBER
     return m
 
