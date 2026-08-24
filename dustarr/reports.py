@@ -912,6 +912,11 @@ _CSS += """
    glyph (the <b>) only. */
 .chip-ok { border-color: var(--ok); }
 .chip-bad { border-color: var(--bad); }
+/* The published-report counter. Purely informational, so it carries no status
+   hue at all: a neutral border and muted ink keep it from competing with the
+   sampling verdict chip, which is the one the reader must act on. */
+.chip-count { border-color: var(--line); color: var(--ink-muted); }
+.countrow { margin-top: var(--s2); }
 .chip-ok b { color: var(--ok); }
 .chip-bad b { color: var(--bad); }
 """
@@ -1081,6 +1086,29 @@ def _excluded_watched_note(count, rest):
     plural = "" if count == 1 else "s"
     verb = "is" if count == 1 else "are"
     return f"<p class='sub'>{count} watched channel{plural} {verb} {rest}</p>"
+
+
+def _report_number_chip(value):
+    """The masthead chip carrying the running total of published reports.
+
+    Returns an empty string for anything that is not a positive whole number,
+    so the chip disappears rather than claiming a report that does not exist.
+    That direction is deliberate and matches `plugin.read_report_count`, which
+    degrades to 0 on an unreadable count file: a badge must never invent
+    activity. It is the opposite of the scheduled-run stamp, which degrades to
+    "never ran" because ITS job is to report a problem.
+
+    `render_html` is one large f-string with no exception handler around it, so
+    this helper has to be total over its inputs. Every renderer helper in this
+    module carries the same obligation.
+    """
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return ""
+    if number < 1:
+        return ""
+    return f'<div class="countrow"><span class="chip chip-count">Report #{number}</span></div>'
 
 
 def render_html(model):
@@ -1282,6 +1310,7 @@ def render_html(model):
     logo = logo_data_uri()
     mark = (f'<img class="mark" src="{logo}" alt="" width="48" height="48">'
             if logo else "")
+    count_chip = _report_number_chip(model.get("report_number"))
 
     return f"""<!doctype html>
 <html lang="en">
@@ -1302,6 +1331,7 @@ def render_html(model):
   coverage {model['coverage']:.1%} ·
   {model['total_channels']} channels
 </div>
+{count_chip}
 </div>
 </header>
 {bar_svg}

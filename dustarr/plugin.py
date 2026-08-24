@@ -412,6 +412,15 @@ def _build_report(settings):
     usage = store.load(now)
     rows = gw.channels()
     model = reports.build_model(rows, usage, thresholds, now)
+    # The report about to be written is the NEXT one, so the number it shows in
+    # its own masthead is one past the stored total. The counter is bumped only
+    # after the write is confirmed (below), which is why it cannot simply be
+    # read back afterwards: the file on disk still holds the previous total at
+    # the moment the HTML is rendered.
+    #
+    # Set on the model rather than passed as an argument because `reports.py`
+    # must not import `plugin.py`, and `read_report_count` lives here.
+    model["report_number"] = read_report_count() + 1
     written = reports.write_report(model, REPORT_DIR, CSV_DIR, now)
 
     counts = model["counts"]

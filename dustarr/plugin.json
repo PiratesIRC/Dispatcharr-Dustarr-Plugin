@@ -4,5 +4,8 @@
   "version": "1.26.2281841",
   "description": "Channel usage metrics: which channels are watched, which never are.",
   "author": "PiratesIRC",
+  "license": "MIT",
+  "repo_url": "https://github.com/PiratesIRC/Dispatcharr-Dustarr-Plugin",
+  "help_url": "https://github.com/PiratesIRC/Dispatcharr-Dustarr-Plugin",
   "min_dispatcharr_version": "v0.20.0"
 }

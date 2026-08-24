@@ -295,3 +295,30 @@ def test_fingerprint_is_stable_when_nothing_changes(lp):
     first = lp._thresholds_fingerprint(lp.coerce_settings(settings))
     second = lp._thresholds_fingerprint(lp.coerce_settings(dict(settings)))
     assert first == second
+
+
+def test_manifest_declares_the_hub_required_metadata():
+    """The Dispatcharr Plugin Hub manifest schema REQUIRES a `license` field,
+    so a listing is refused without one. `repo_url` and `help_url` are what the
+    plugin card links out to. Sibling plugins carry the same four keys, and
+    this test is what stops one being dropped by a future manifest edit.
+
+    `discord_thread` is deliberately NOT asserted: no support thread exists for
+    this plugin yet, and an invented thread id would render a dead link on the
+    plugin card.
+    """
+    manifest = json.loads((PLUGIN_DIR / "plugin.json").read_text(encoding="utf-8"))
+    assert manifest["license"] == "MIT"
+    for key in ("repo_url", "help_url"):
+        assert manifest[key].startswith("https://github.com/"), key
+
+
+def test_manifest_repo_url_agrees_with_the_url_the_report_renders():
+    """`reports.py` cannot import `plugin.py`, so it duplicates REPO_URL. The
+    manifest is a THIRD copy. Bind all of them together here: three URLs that
+    can drift independently is how a rename ships a dead link.
+    """
+    manifest = json.loads((PLUGIN_DIR / "plugin.json").read_text(encoding="utf-8"))
+    reports_src = (PLUGIN_DIR / "reports.py").read_text(encoding="utf-8")
+    assert f'REPO_URL = "{manifest["repo_url"]}"' in reports_src
+    assert f'ISSUES_URL = "{manifest["repo_url"]}/issues"' in reports_src

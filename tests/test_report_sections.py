@@ -169,7 +169,9 @@ def test_regenerate_the_committed_fixture(rp, gw, tmp_path):
     """The visual check leaves an artifact a later session can diff, rather
     than an unfalsifiable `I looked at it`."""
     import pathlib
-    html = rp.render_html(model(rp, gw, n=12, watched=4))
+
+    from conftest import sample_model
+    html = rp.render_html(sample_model(rp, gw))
     fixture = (pathlib.Path(__file__).parent / "fixtures" / "sample_report.html")
     assert fixture.exists(), (
         "tests/fixtures/sample_report.html is missing -- regenerate it with: "

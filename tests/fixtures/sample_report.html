@@ -109,6 +109,11 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; }
    glyph (the <b>) only. */
 .chip-ok { border-color: var(--ok); }
 .chip-bad { border-color: var(--bad); }
+/* The published-report counter. Purely informational, so it carries no status
+   hue at all: a neutral border and muted ink keep it from competing with the
+   sampling verdict chip, which is the one the reader must act on. */
+.chip-count { border-color: var(--line); color: var(--ink-muted); }
+.countrow { margin-top: var(--s2); }
 .chip-ok b { color: var(--ok); }
 .chip-bad b { color: var(--bad); }
 
@@ -153,6 +158,7 @@ details[open] > summary::before { transform: rotate(90deg); }
   coverage 0.0% ·
   12 channels
 </div>
+<div class="countrow"><span class="chip chip-count">Report #37</span></div>
 </div>
 </header>
 <svg class="chart" role="img" aria-label="Judged population: Never watched 8, Watched 4" viewBox="0 0 900 22" preserveAspectRatio="none"><rect class="seg seg-never" x="0.00" y="0" width="598.67" height="22" rx="4"/><rect class="seg seg-watched" x="600.67" y="0" width="299.33" height="22" rx="4"/><title>Never watched 8, Watched 4</title></svg>

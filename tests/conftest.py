@@ -297,6 +297,26 @@ def model(rp, gw, n=5, watched=2):
     return rp.build_model(rows, usage, SETTINGS, NOW)
 
 
+# The published-report counter carried by the committed fixture. A real run
+# reads this from /data/dustarr/report_count.json; the fixture has no such
+# file, so the number is supplied here. It is not zero, because a zero renders
+# no chip at all and the fixture would then stop covering the masthead chip.
+SAMPLE_REPORT_NUMBER = 37
+
+
+def sample_model(rp, gw):
+    """The exact model behind tests/fixtures/sample_report.html.
+
+    Defined once and used by BOTH scripts/render_sample.py (which writes the
+    fixture) and the test that compares against it. When those two built their
+    model separately, adding a single key to one of them broke the comparison
+    with no defect in the renderer at all.
+    """
+    m = model(rp, gw, n=12, watched=4)
+    m["report_number"] = SAMPLE_REPORT_NUMBER
+    return m
+
+
 @pytest.fixture()
 def rp():
     return sys.modules["dustarr_under_test.reports"]

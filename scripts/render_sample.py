@@ -15,14 +15,16 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tests"))
 
-from conftest import load_plugin, model  # noqa: E402
+from conftest import load_plugin, sample_model  # noqa: E402
 
 load_plugin()
 
 rp = sys.modules["dustarr_under_test.reports"]
 gw = sys.modules["dustarr_under_test.gateway"]
 
-html = rp.render_html(model(rp, gw, n=12, watched=4))
+# The model is built in tests/conftest.py so this script and the test that
+# compares against the fixture cannot drift apart.
+html = rp.render_html(sample_model(rp, gw))
 out = ROOT / "tests" / "fixtures" / "sample_report.html"
 out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(html, encoding="utf-8", newline="\n")

@@ -600,3 +600,47 @@ def test_the_csv_carries_the_recency_columns(rp, gw):
     header = csv_text.splitlines()[0]
     assert "days_since_watched" in header
     assert "avg_session_minutes" in header
+
+
+def test_masthead_renders_the_report_number_when_one_is_supplied(rp, gw):
+    """The running total of published reports is surfaced ON the report, in its
+    masthead, because that is the only place the number is both available and
+    meaningful. It cannot be a README badge: the count lives in a file on the
+    operator's own box (`/data/dustarr/report_count.json`) and this plugin never
+    makes a network call, so nothing can publish it outward.
+    """
+    m = model(rp, gw)
+    m["report_number"] = 42
+    html = rp.render_html(m)
+    assert "Report #42" in html
+    assert 'class="chip chip-count"' in html
+
+
+def test_masthead_omits_the_report_number_when_it_is_absent_or_zero(rp, gw):
+    """A counter must never invent activity. An unreadable or missing count
+    file degrades to 0 (`plugin.read_report_count`), and a "Report #0" chip
+    would claim a report that does not exist, so no chip renders at all --
+    the same degrade-to-nothing rule the logo follows.
+    """
+    for value in (None, 0, "", "not a number", -3):
+        m = model(rp, gw)
+        if value is not None:
+            m["report_number"] = value
+        html = rp.render_html(m)
+        # Assert on the RENDERED chip, not on the bare class name: the
+        # `.chip-count` CSS rule is in the stylesheet on every page whether the
+        # chip renders or not, so a substring test for "chip-count" alone
+        # passes only by accident and would never fail.
+        assert '<span class="chip chip-count">' not in html, repr(value)
+        assert "Report #" not in html, repr(value)
+
+
+def test_report_number_chip_escapes_its_value(rp, gw):
+    """`render_html` is one large f-string with no safety net around it, so any
+    value reaching it must be coerced, not trusted. A string of digits is
+    accepted (it is a number by any reasonable reading); anything else is
+    dropped by the test above. This pins the coercion rather than the escape.
+    """
+    m = model(rp, gw)
+    m["report_number"] = "17"
+    assert "Report #17" in rp.render_html(m)
