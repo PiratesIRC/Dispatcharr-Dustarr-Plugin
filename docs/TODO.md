@@ -102,13 +102,18 @@ protection waits, which is a reasonable position for a single maintainer.
   this is not visible. Fill them with the disc colour only if it is ever scaled
   up.
 
-## Verification still outstanding
+## Verification
 
-- **A scheduled report has not yet been observed running under the current
-  plugin name.** The mechanism itself is proven: the run timestamp recorded a
-  real scheduled run before the plugin was renamed. Two later chances were lost
-  to a schedule row that had been deleted by a plugin reload, which is fixed.
-  The proof is the timestamp in `/data/dustarr/scheduled_run.json` advancing.
-  Pressing the Build report button deliberately does not write that timestamp,
-  because only the scheduled task may write it and a hand run would destroy the
-  one signal that answers the question.
+- **The scheduled report is confirmed running, measured 2026-08-24.** This was
+  open for a month: a schedule row deleted by a plugin reload had cost two
+  chances, and no scheduled run had been observed since the plugin was renamed.
+  It is now settled by side effects rather than by a counter. The run timestamp
+  in `/data/dustarr/scheduled_run.json` has advanced to 2026-08-24 08:00 UTC,
+  and two report files sit on disk timestamped 03:00 local on 2026-08-17 and
+  2026-08-24, which are the Mondays the weekly schedule names.
+
+  Judging it this way was the whole point. Celery's own run counter reads 2, and
+  it would read 2 whether or not the task ever executed, because it counts
+  messages sent. Pressing the Build report button deliberately does not write
+  the timestamp, so that the one signal answering this question could not be
+  destroyed by a hand run.
