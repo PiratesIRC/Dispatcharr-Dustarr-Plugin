@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.26.2362242, August 24, 2026
+
+**Release preparation.** No change to how usage is recorded or judged. The
+plugin is being readied for its first public release, so this version is about
+the manifest, the documentation and the settings card copy.
+
+- **The plugin manifest now declares its license, repository and help links.**
+  The Dispatcharr Plugin Hub requires a license field, so a Hub listing was not
+  possible without one, and the plugin card had no link to follow. A test binds
+  the repository URL in the manifest to the one the report renders in its
+  footer, because those are separate copies that can drift apart.
+- **The report shows how many reports this installation has built.** A chip
+  under the title reads "Report #N". It counts reports that actually reached
+  the disk, so a build that failed to write does not increment it, and it
+  renders nothing at all rather than "Report #0" when the count is missing or
+  unreadable.
+- **The settings card copy no longer contains a contraction or a double hyphen.**
+  The never-watched alarm ceiling description carried both, and a double hyphen
+  reads as an em dash on the page. Two tests now check every string the plugin
+  puts on its settings card.
+- **The documentation is reorganised.** A new user guide holds every setting,
+  every button and how to read the report in one place, with screenshots. A new
+  documentation index routes readers by what they are trying to do, and a new
+  open-work page records what is planned, what is deliberately not planned, and
+  the known limitations. The README is now an overview that links to them
+  instead of carrying everything inline.
+
 ## 1.26.2281841, August 16, 2026
 
 **Review hardening.** A comprehensive code review produced fourteen verified
