@@ -126,8 +126,8 @@ FIELDS = [
     {"id": "never_watched_ceiling", "label": "Never-watched alarm ceiling",
      "type": "number", "default": 0.98,
      "description": "Fraction of JUDGED channels (never-watched + too-new + "
-                    "tuned-but-never-qualified + watched -- excluded/"
-                    "unobservable channels don't count) that must look "
+                    "tuned-but-never-qualified + watched; excluded and "
+                    "unobservable channels do not count) that must look "
                     "never-watched before the data is treated as untrustworthy "
                     "(a blind collector). Most real lineups exclude most "
                     "channels by policy, so a healthy household can easily "

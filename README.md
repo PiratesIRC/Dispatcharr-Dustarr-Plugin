@@ -1,357 +1,120 @@
 # Dustarr
 
+A Dispatcharr plugin that records which channels are actually watched, and reports the ones that are not, so you can turn off the dead weight in your lineup.
+
+> [!TIP]
+> **New to Dispatcharr plugins?** Start with the **[Dispatcharr Plugin Workflow guide](https://piratesirc.github.io/Dispatcharr-Plugin-Workflow/)**.
+> It explains what each plugin and tool does, where they overlap, and what order to use them in.
+
 [![Dispatcharr plugin](https://img.shields.io/badge/Dispatcharr-plugin-8A2BE2)](https://github.com/Dispatcharr/Dispatcharr)
-[![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-db61a2?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/PiratesIRC)
+[![Workflow Guide](https://img.shields.io/badge/%F0%9F%93%96-Workflow_Guide-1F6FEB?style=flat)](https://piratesirc.github.io/Dispatcharr-Plugin-Workflow/)
+[![Discord](https://img.shields.io/badge/Discord-Discussion-5865F2?logo=discord&logoColor=white)](https://discord.gg/Sp45V5BcxU)
+[![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/PiratesIRC)
 
-A Dispatcharr plugin that records which channels are actually watched, and reports
-the most-used, least-used, and never-watched channels so you can turn off the dead
-weight in your lineup.
+[![GitHub Release](https://img.shields.io/github/v/release/PiratesIRC/Dispatcharr-Dustarr-Plugin?include_prereleases&logo=github)](https://github.com/PiratesIRC/Dispatcharr-Dustarr-Plugin/releases)
+[![Downloads](https://img.shields.io/github/downloads/PiratesIRC/Dispatcharr-Dustarr-Plugin/total?color=success&label=Downloads&logo=github)](https://github.com/PiratesIRC/Dispatcharr-Dustarr-Plugin/releases)
+[![Stars](https://img.shields.io/github/stars/PiratesIRC/Dispatcharr-Dustarr-Plugin?logo=github)](https://github.com/PiratesIRC/Dispatcharr-Dustarr-Plugin/stargazers)
 
-**Phase 1 is read-only. It never changes a channel, a stream, or anything else in
-Dispatcharr's database.** It only reads Redis (to see who is watching what) and the
-channel list (to know what exists), and writes its own report files.
+![Top Language](https://img.shields.io/github/languages/top/PiratesIRC/Dispatcharr-Dustarr-Plugin)
+![Repo Size](https://img.shields.io/github/repo-size/PiratesIRC/Dispatcharr-Dustarr-Plugin)
+![Last Commit](https://img.shields.io/github/last-commit/PiratesIRC/Dispatcharr-Dustarr-Plugin)
+![License](https://img.shields.io/github/license/PiratesIRC/Dispatcharr-Dustarr-Plugin)
 
-## What it does
+**It never changes anything in Dispatcharr.** It reads which channels have viewers, and writes its own report files. Nothing else.
 
-A leader-elected collector polls Dispatcharr's live-proxy Redis state every 15
-seconds (configurable) and turns the raw client counts into watch sessions. A
-session only counts as a **watch** once it has run for at least `min_watch_seconds`
-(120s by default), so flipping through channels while looking for something to watch
-does not inflate the numbers. A short session that never reaches that threshold still
-gets recorded as a **tune**, which matters for the third list below.
+## Features
 
-Exactly one collector runs at a time (a Redis lease elects the leader across worker
-processes), it degrades safely if Redis or the plugin's own storage hiccups, and it
-never blocks Dispatcharr's web UI or the Celery workers. Reporting happens on a
-separate scheduled task, not inline with the collector.
+**Recording what is watched**
+* **A leader elected collector** samples Dispatcharr's live proxy state every 15 seconds and turns raw client counts into watch sessions. Exactly one collector runs at a time across all worker processes, so nothing is double counted.
+* **Watches and tunes are separate.** A session counts as a watch only once it has run for two minutes, so flipping through channels looking for something does not inflate the numbers. A shorter session is still recorded, as a tune, and that distinction is what produces the broken channel list below.
+* **Player hiccups do not split a watch.** A player may drop to zero clients for up to 90 seconds, during a reconnect or a retry, without the session being treated as finished.
+* **It never blocks Dispatcharr.** The collector runs on its own, and reporting is a separate scheduled job rather than something that happens while you are waiting for a page.
 
-## Where the reports land
+**The lists it produces**
+* **Never watched**: the dead weight, grouped by channel group so you can act on a whole group at once.
+* **Tuned but never qualified**: channels you tried to watch and gave up on within two minutes. This list is not "barely used", it is almost certainly **broken**: a dead source, a black screen, or a provider connection being dropped. Treat these as bug reports rather than turning them off.
+* **Channels going cold**: watched at some point, but not lately. Entries that are still being tuned are listed apart, because that shape also means broken rather than unwanted.
+* **Too new to judge** and **most / least used** round it out.
 
-| Where | What |
-|---|---|
-| `/config/dustarr/report.html` | The report, always the latest run. Self-contained, sortable HTML with collapsible sections and inline charts. `/config` is Dispatcharr's existing bind mount, so this is a real folder on your host: open the file by double-clicking it, or copy it anywhere you like. |
-| `/config/dustarr/report-<timestamp>.html` | The same report, kept as a dated archive. The last eight are retained. |
-| `/config/dustarr/report-<timestamp>.csv` | The same data as CSV, for a spreadsheet. The last eight are retained. |
-| Newsflasharr (optional) | A short message with the headline numbers, with the full HTML report attached, sent on whatever schedule you configure. See "Notifications via Newsflasharr" below. |
-| `/data/dustarr/report_count.json` | A running total of reports that have been successfully written, as `{"reports_built": N}`. It is there for another tool to read; you never need to look at it. See "Counting reports" below. |
+**Not judging channels that only look unused**
+* **Pay per view and live event slots** sit idle between events, and an M3U sync renames the same channel row in place, so a slot that idled on "NO EVENT" for a month would otherwise read as permanently dead.
+* **Local and over the air news** is the emergency broadcast tier. It is supposed to sit unused.
+* **Sports** has a legitimate off season.
+* **Channels the collector cannot see at all** (a stream profile set to Redirect writes none of the state the collector reads) are reported separately as unobservable rather than being counted as never watched. That is decided from the profile's structure, not from its name.
 
-**Nothing is served over HTTP, deliberately.** Earlier versions wrote the report
-into `/data/logos/`, which Dispatcharr's own nginx serves to your whole local
-network with no login. That was convenient and it was also an unauthenticated,
-unlisted-but-guessable page naming every channel your household watches. The
-report is now a file on a bind mount you already have, and it reaches you by
-email as an attachment if you turn notifications on.
+**Seeing what happened**
+* **A self contained HTML report**: sortable tables, collapsible sections and inline charts, with no external stylesheet, script, font or image. It opens straight off disk, and renders the same offline, on a television, or as an email attachment.
+* **A CSV export** of the same data, for a spreadsheet.
+* **Emailed reports**, optionally, delivered by the [Newsflasharr](https://github.com/PiratesIRC/Dispatcharr_Newsflasharr) plugin. Off by default.
+* **A loud banner when the numbers cannot be trusted**, rather than a clean looking report claiming your household watches nothing.
 
-## Reading the report
+See the **[user guide](docs/USER-GUIDE.md)** for how to use these, and for every setting and every button.
 
-Every section starts collapsed, so the page opens as an index rather than a wall
-of tables: six headings, each with its count and a one-line description of what
-it holds and what to do about it. Click a heading to open one. Collapsing is
-plain HTML, so it works with JavaScript off, and a browser that does not support
-it simply renders everything expanded. One caveat worth knowing: on some
-browsers find-in-page will not reach text inside a *collapsed* section, so
-expand a section before searching it. Every section says so itself.
+### The report
 
-Three charts, all drawn inline. Nothing is fetched from the internet, so the
-report renders the same offline, on a TV, or as an email attachment:
+The page opens as an index: the logo beside the title, the tracking window and sampling verdict, then seven sections that each start collapsed and carry their own count.
 
-- **The bar across the top** splits the channels the plugin is willing to judge
-  into never watched / watched / too new / tuned-but-never-qualified. It
-  deliberately leaves out the excluded channels, because they would otherwise
-  swamp it, and the caption underneath tells you how many were set aside and why.
-  Every number in the bar is repeated in the legend below it, so you never have to
-  squint at a colour to read a value.
-- **The meter** shows how densely the collector actually sampled, with a tick at
-  the 90% mark it needs to clear. The verdict on whether the data can be trusted
-  is the separate chip beside it, **not** the meter's colour. That separation is
-  intentional: a collector can tick along perfectly while seeing nothing, and a
-  green bar would make that look reassuring.
-- **The small bars in the group table** show what share of each group's *judged*
-  channels have never been watched. Judged, not total, so a group that is mostly
-  excluded does not draw a misleadingly short bar. Click that column header to
-  sort by share.
+![The Dustarr report as it opens: the logo beside the title, the tracking window and coverage on one line, a Report number chip, a four segment bar splitting the judged channels into never watched, watched, too new and tuned but never qualified, a sampling density meter with a sampling OK verdict beside it, and seven collapsed section headings each carrying a count](docs/images/report-index.png)
 
-Two columns answer the recency question directly: **Days since**, the number of
-days since a channel was last watched, and **Avg min**, the average length of a
-watch on it. Sorting by "Days since" turns the table into an ordered retirement
-queue. Channels never watched read "never" in that column and still sort as the
-coldest, and both columns appear in the CSV export too.
+Click a heading and its tables appear.
 
-Every column in every table sorts: click a header once for ascending, again for
-descending. Colour is used only to mean something, never for decoration, and the
-page follows your system's light or dark theme.
+![The same report with the Never watched section expanded, showing a per group rollup table with a share bar, and below it a sortable table of seven channels with their group, watch count, hours, average minutes, tune count, age in days, days since last watch, last watched date and reason](docs/images/report-expanded.png)
 
-## The lists that matter
+*Sample data, shown here in dark mode; the page follows whichever theme your reader uses. Click any column heading to sort by it. Numeric columns compare as numbers, so 9 sorts before 10 rather than after 100. The chip under the title is the running total of reports this installation has written.*
 
-- **Never watched**: the dead weight. Entries are grouped by channel group so you
-  can act on an entire group at once instead of clicking through channels one at a
-  time.
-- **Channels going cold**: watched at some point, but not once inside the cold
-  window. These earned a real watch before, so they are weaker candidates to turn
-  off than the never-watched list and stronger than anything below it. Two things
-  are deliberately kept out of the abandoned list: a channel the collector cannot
-  observe is never judged by its silence, and a channel tuned again recently but
-  given up on before the minimum watch length is listed separately as still being
-  tried, because that shape means broken rather than unwanted. If the tracked
-  dataset is younger than seven days the section says it cannot answer yet instead
-  of listing anything.
-- **Tuned but never qualified**: channels you *tried* to watch and gave up on
-  within two minutes. This list is not "barely used"; it is almost certainly
-  **broken**: a dead source, a black-screen slate, or a provider connection getting
-  kicked mid-stream. Treat entries here as bug reports and go fix the source rather
-  than disabling the channel.
-- **Most / least used**: the ordinary leaderboard, by watch count and hours.
+## Requirements
 
-Two more sections round out the report: **too new to judge** (channels created too
-recently to fairly call unused, so not dead weight, just not enough time has passed
-yet) and **excluded / unobservable** (see below).
+* Dispatcharr v0.20.0+
+* No internet access of any kind. The plugin never contacts your provider, never checks for its own updates, and fetches nothing when rendering a report.
+* The [Newsflasharr](https://github.com/PiratesIRC/Dispatcharr_Newsflasharr) plugin, only if you want emailed reports. It is what actually sends the mail. Dustarr does not require it: with Newsflasharr absent or disabled, nothing is sent and nothing fails.
 
-## Excluded by default
+## Installation
 
-Some channels look unused but are not, so Dustarr keeps them out of the
-never-watched judgment by default (all of this is configurable in the plugin
-settings):
+1. Log in to Dispatcharr's web UI.
+2. Navigate to **Plugins**.
+3. Click **Import Plugin** and upload the plugin zip file.
+4. Enable the plugin after installation.
 
-- **Auto-created channels**: PPV `LIVE EVENT` slots sit idle between fights and
-  events, and the provider's M3U sync renames the same channel row in place
-  (so a slot that idled on "NO EVENT" for a month would otherwise read as
-  permanently dead).
-- **Local/OTA news**: the emergency-broadcast tier. It is supposed to sit unused
-  most of the time.
-- **Sports**: has a legitimate off-season, so a quiet month does not mean unused.
+Upgrading has its own short procedure, and it does need a container restart: see [Updating the plugin](docs/USER-GUIDE.md#updating-the-plugin).
 
-A channel whose stream profile is not proxying (e.g. set to Redirect) never writes
-the Redis keys the collector polls, so it is structurally invisible to Dustarr. It
-is reported separately as **unobservable**, not folded into never-watched.
+## What to expect at first
+
+**Your first month of reports will carry a red "not trustworthy" banner, and that is the plugin working rather than failing.** The unused threshold defaults to 30 days, and a dataset younger than that cannot honestly call anything unused. There is no way to shorten this by importing history: Dispatcharr does not keep the state Dustarr reads, so a fresh installation genuinely starts at zero. Wait it out, or lower the threshold if you are comfortable judging on a shorter window.
+
+**Most of a typical lineup is excluded from judgment, and that is the point.** On a normal installation roughly 70 percent of channels are held back for the reasons listed above. The actionable answer is drawn from the remaining 30 percent, not from the whole lineup.
 
 ## Safety
 
-- **It never writes to Dispatcharr's database.** This is not just a promise in
-  the README. `tests/test_no_mutations.py` reads the AST of every shipped
-  module on every CI run and fails the build on any write-shaped Django ORM
-  call it can prove: `.save()`, `.bulk_create()`, `.bulk_update()`,
-  `.get_or_create()`, `.update_or_create()`, and the async ORM equivalents are
-  flagged unconditionally; `.update()`/`.create()`/`.add()`/`.remove()`/
-  `.set()`/`.clear()` are flagged once the receiver is proven to be a
-  Dispatcharr model or queryset, including through a local alias, a
-  `self.attr`, a for-loop variable, or a helper function's return value, not
-  just a literal `Channel.objects...` at the call site; and `.delete()` is
-  flagged **by default, on any receiver**, with a single narrow exception for
-  the plugin's own Redis client. The same test also fails the build on
-  `subprocess`/`os.system`/`os.popen`/`os.exec*`/`os.spawn*` and a bare
-  `ffprobe(...)` call, so there is no provider I/O, ever. What it does *not* and
-  cannot prove: it cannot see through reflection (`getattr(channel, "delete")()`),
-  `eval`/`exec`, a queryset arriving as a **function parameter** (rather than
-  being built or assigned in the same module the guard can see), or a write
-  issued through a driver or library this guard does not know to look for. It is a
-  strong, continuously-enforced structural guarantee against the natural ways
-  an author would reach for a write, not a formal proof that no Python code
-  anywhere could ever mutate the database.
-- **It never contacts your provider.** No ffprobe, and no stream requests of any
-  kind. A single probe consumes one of your provider connections and kicks whoever
-  is currently watching.
-- **Credentials are redacted.** Provider credentials live inside stream URLs in a
-  typical Dispatcharr setup, so every string that can reach a notification or a
-  logged error is passed through a redactor first, and the report only ever renders
-  an allowlisted set of fields (channel name, group, counts, timestamps), never a
-  stream URL.
-- **If the collector goes blind, the report says so loudly.** A Redis flush, a
-  Dispatcharr upgrade that reshapes the keyspace, or a wedged collector thread would
-  otherwise quietly produce a report claiming the household watches nothing.
-  Dustarr checks sampling coverage and watch plausibility before trusting its own
-  data, and if those checks fail it puts a loud banner at the top of the report
-  listing exactly what looked wrong, instead of silently telling you every channel
-  is dead.
+This is the part worth reading before installing anything that watches what your household watches.
 
-## What to expect early on, and why it is by design
+* **It never writes to Dispatcharr's database.** That is not a promise in a README. `tests/test_no_mutations.py` reads the syntax tree of every shipped module on every run and fails the build on any write shaped database call it can prove, on `subprocess` and its relatives, and on any stream probe. It proves the receiver is a Dispatcharr model or queryset rather than banning method names, so it is not fooled by a dictionary that happens to have an `update` method. What it cannot see: a call made through reflection or `eval`, a queryset arriving as a function parameter, or a write issued through a library it does not know about. It is a strong structural guarantee against the natural ways an author would reach for a write, not a formal proof.
+* **It never contacts your provider.** No stream requests and no probes. A single probe consumes one of your provider connections and drops whoever is currently watching.
+* **Credentials are redacted.** Provider credentials live inside stream URLs in a typical Dispatcharr setup, so every string that can reach a notification or a logged error passes through a redactor first, and the report renders an allowlisted set of fields only: channel name, group, counts and timestamps, never a stream URL.
+* **Nothing is served over HTTP.** The report is a file in a folder you already have mounted. An earlier version wrote it where Dispatcharr's own web server publishes files to the whole local network with no login, which made an unauthenticated page naming every channel your household watches.
+* **If the collector goes blind, the report says so loudly**, rather than quietly reporting that every channel is dead.
 
-- **Your first 30 days or so of reports will carry the "not trustworthy" banner.**
-  The default "unused threshold" is 30 days, and the dataset cannot be trusted
-  to call anything unused until it is actually that old. A fresh install (or
-  a fresh `usage.json`) is, by definition, younger than that. This is the age
-  gate working as intended, not a bug. Wait it out, or lower the threshold in
-  settings if you are comfortable judging on a shorter window.
-- **Most of a default lineup is excluded from judgment, and that is the point.**
-  On a typical box roughly 70% of channels (PPV/LIVE EVENT slots, 24/7
-  channels, local/OTA news, sports) are excluded by default. See "Excluded by
-  default" above for why. The actionable "turn this off" answer is drawn from
-  the remaining 30% or so, not the whole lineup; the never-watched ceiling gate
-  (see "Key settings") is deliberately rebased on that judged remainder rather
-  than the full channel count, so a healthy household can show a large
-  never-watched share among it without tripping a false alarm.
+## Where things are written
 
-## If you have just installed it
+The report and the CSV land in `/config/dustarr/`. `/config` is Dispatcharr's existing bind mount, so that is a real folder on your host: open the report by double clicking it. The full list of paths is in the [user guide](docs/USER-GUIDE.md#where-the-files-are-written).
 
-The plugin's settings page opens with a **Quick Start** panel, and the buttons
-sit in the order you want to press them: **Validate settings** first, then
-**Show summary** for the headline numbers, then **Build report** to write the
-HTML and CSV, which also emails them if you have Newsflasharr notifications on.
-**Report an issue** prints the link to the issue tracker.
+## Documentation
 
-The one thing worth knowing up front: your first reports will carry a "not
-trustworthy" banner, and that is the age gate working rather than a fault. See
-"What to expect early on" below.
-
-## Key settings
-
-Everything lives in the plugin's settings card in the Dispatcharr UI:
-
-- **Poll interval** (default 15s): how often the collector samples Redis. Must
-  stay under Dispatcharr's 30-second live-channel metadata TTL, or a fast channel
-  switch can be missed between polls.
-- **Minimum watch** (default 120s): the line between a recorded watch and a
-  channel-surf.
-- **Client gap grace** (default 90s): how long a player may show zero clients (a
-  reconnect or retry) before the watch session is considered over, so one real watch
-  with a brief player hiccup is not recorded as two or three separate ones.
-- **Excluded groups / excluded name pattern / exclude auto-created**: tune what is
-  kept out of the never-watched judgment (see "Excluded by default" above).
-- **Unused threshold (days)**: how old a channel must be before it can fairly be
-  called unused.
-- **Cold threshold (days)** (default 30, minimum 7): how long an absence counts as
-  cold, for the "Channels going cold" list. The minimum is seven days rather than
-  one because a watch is recorded only when the session ends, so a channel that has
-  been streaming continuously for longer than the window has no recent watch and no
-  recent tune on record while it is still on screen.
-- **Never-watched alarm ceiling** (default 0.98): the fraction of *judged*
-  channels (never-watched + too-new + tuned-but-never-qualified + watched, since
-  excluded and unobservable channels do not count) that must look never-watched
-  before the data itself is flagged as untrustworthy. It is deliberately high:
-  a normal household can show 80 to 90% never-watched among the channels it was
-  ever asked to judge, so this only fires on the mass-casualty shape where
-  essentially *every* judged channel looks dead.
-- **Send notifications to Newsflasharr**: off by default. See "Notifications via
-  Newsflasharr" below.
-- **Scheduled report**: off / daily / weekly / monthly, run by Celery Beat.
-
-## Counting reports
-
-Dustarr keeps a running total of the reports it has successfully written, in
-`/data/dustarr/report_count.json`:
-
-```json
-{"reports_built": 42}
-```
-
-It increments once per report whose HTML file actually reached the disk,
-whether you pressed the button or the schedule ran it. A build that failed to
-write does not count, which matters more than it sounds: the report writer
-degrades rather than raising, so a failed publish otherwise looks the same as
-a good one.
-
-It exists so another tool can display the number, for example as a badge. The
-notification email also carries a `report number N` line, but that is for a
-person reading the mail. Anything counting the number should read the file:
-the shared notification client has a fixed payload with no field for extra
-data, so nothing structured can travel that path.
-
-One honest limitation: the counter can undercount. Incrementing it is a
-read-then-write with no lock, and Dispatcharr runs several worker processes,
-so two reports finishing in the same instant can lose one increment. Locking a
-file on the request path is a worse trade than an occasional miss in a
-cosmetic number, and in practice reports are minutes apart.
-
-`docs/newsflasharr-report-count-spec.md` describes what the Newsflasharr
-plugin would need in order to turn this into a badge.
-
-## Notifications via Newsflasharr
-
-Dustarr no longer talks to Discord (or any webhook) directly. Instead it has
-one setting, **Send notifications to Newsflasharr** (off by default), that hands
-its report summary and any honesty-gate alerts to the
-[Newsflasharr](https://github.com/PiratesIRC/Dispatcharr_Newsflasharr) plugin if
-it is installed and enabled.
-
-Turning the toggle on is the whole caller-side setup. Everything else, meaning
-**which channel or channels it goes to (Discord, ntfy, email, a generic webhook,
-and so on), whether it is routed differently by severity, quiet hours, storm
-dedup**, lives entirely in Newsflasharr's own routing rules, keyed on the source
-name `dustarr`. See the Newsflasharr plugin's own docs for how to add a routing
-rule and pick a destination channel; nothing on Dustarr's side needs to
-change to redirect where its notifications land.
-
-If Newsflasharr is not installed or is not enabled, turning this setting on is
-harmless: Dustarr degrades safely and simply does not spool anything.
-
-### Build report
-
-**Build report** writes the report immediately and, if notifications are on,
-emails it with the file attached. It is the same job the schedule runs, so you
-get fresh data rather than a re-send of an older file. There used to be two
-buttons here, **Build report** and **Email report now**; they did the same work
-and differed only in whether the email step ran, which the **Send notifications
-to Newsflasharr** setting already answers.
-
-**The report is written either way**, so pressing this never wastes a run. If
-notifications are off it simply says so and stops, with no error: you asked for
-a file and you got one.
-
-If notifications are on, emailing needs Newsflasharr installed and enabled, with
-its SMTP configured and a routing rule sending dustarr to smtp. The button
-checks all of that and names anything missing, next to the report it just wrote.
-The routing check is the one that earns its keep: without a matching rule the
-event still spools successfully and is simply delivered somewhere else, which
-looks exactly like working.
-
-The wording it reports back is deliberate:
-
-- Success says **"queued for delivery"**, not "sent". Handing the report to
-  Newsflasharr means it was durably spooled; Newsflasharr delivers it afterwards
-  on its own retry schedule.
-- If nothing was published, or notifications are on but Newsflasharr is not
-  ready, declined the event, or its collector has stopped running, you get a
-  **red error** naming which one, never a green tick.
-
-**It does not prove the *schedule* works.** The button runs in the web worker
-using the settings currently on screen; the schedule runs on a background worker
-from saved settings. **Validate settings** is what tells you about the schedule:
-it reports when the scheduled report last ran, and warns if that run is more
-than twice the schedule cadence in the past, is disabled, or is queued to a
-worker that would reject it. On a fresh install it simply notes that the
-scheduled report has not run yet, which is normal until the first cadence
-passes, rather than raising an error.
-
-## Install / upgrade
-
-Copy the `dustarr/` folder into Dispatcharr's plugin directory, or install the
-release zip from the plugin UI. **Restart the Dispatcharr container after
-upgrading.** Dispatcharr's web workers hot-reload a plugin when `plugin.json`'s
-modified time changes, but the Celery workers that run the scheduled report task
-only import plugins once, at worker start, so an in-place upgrade leaves the old
-code running in Celery until the container restarts.
-
-## Further reading
-
-- [docs/troubleshooting.md](docs/troubleshooting.md) if something is not
-  working: no report arrived, nothing is being recorded, the numbers look wrong,
-  or the email is not turning up.
-- [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for how the plugin is put together
-  and the constraints that are not obvious from one file.
-- [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or a pull request.
-- [SECURITY.md](SECURITY.md) for what the plugin can reach, what the report
-  contains, and how to report a vulnerability privately.
-
-## Changelog
-
-Release notes are in [docs/CHANGELOG.md](docs/CHANGELOG.md), newest first. Each
-entry says what changed from the operator's point of view, not what changed in
-the code.
+* **[User guide](docs/USER-GUIDE.md)**: a first run, reading the report, every setting, every button.
+* **[Troubleshooting](docs/troubleshooting.md)**: arranged by symptom.
+* **[Changelog](docs/CHANGELOG.md)**: what changed in each version.
+* **[Development notes](docs/DEVELOPMENT.md)**: how the plugin is put together, and the constraints that are not obvious from one file.
+* **[Open work](docs/TODO.md)**: what is planned, what is deliberately not, and the known limitations.
+* **[Contributing](CONTRIBUTING.md)** before opening an issue or a pull request, and **[Security](SECURITY.md)** for what the plugin can reach and how to report a vulnerability privately.
 
 ## Versioning
 
-Calendar versioning, `Major.YY.DDDHHMM`: major version, two-digit year,
-day-of-year, then the UTC time the version was cut. `1.26.2241505` is major
-version 1, built on day 224 of 2026 at 15:05 UTC. A later version string is
-always a later build.
+Calendar versioning, `Major.YY.DDDHHMM`: major version, two digit year, day of year, then the UTC time the version was cut. `1.26.2241505` is major version 1, built on day 224 of 2026 at 15:05 UTC. A later version string is always a later build.
 
 ## Sponsor
 
-This plugin is free and always will be. If it saves you time and you would like
-to support the work, you can sponsor it at
-[github.com/sponsors/PiratesIRC](https://github.com/sponsors/PiratesIRC).
+This plugin is free and always will be. If it saves you time and you would like to support the work, you can sponsor it at [github.com/sponsors/PiratesIRC](https://github.com/sponsors/PiratesIRC).
 
-Sponsoring buys no priority, no private support and no influence over what gets
-built. Bug reports and pull requests are just as welcome from everyone.
+Sponsoring buys no priority, no private support and no influence over what gets built. Bug reports and pull requests are just as welcome from everyone.
 
 ## License
 

@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -322,3 +323,40 @@ def test_manifest_repo_url_agrees_with_the_url_the_report_renders():
     reports_src = (PLUGIN_DIR / "reports.py").read_text(encoding="utf-8")
     assert f'REPO_URL = "{manifest["repo_url"]}"' in reports_src
     assert f'ISSUES_URL = "{manifest["repo_url"]}/issues"' in reports_src
+
+
+_CONTRACTION = re.compile(
+    r"\b\w+n't\b|\b(it's|that's|there's|you're|we're|let's)\b", re.IGNORECASE)
+_GUI_TEXT_KEYS = ("label", "description", "help_text", "button_label")
+
+
+def _gui_strings():
+    """Every string this plugin puts on Dispatcharr's settings card."""
+    plugin = load_plugin()
+    for group, items in (("FIELDS", plugin.FIELDS), ("ACTIONS", plugin.ACTIONS)):
+        for item in items:
+            for key in _GUI_TEXT_KEYS:
+                text = item.get(key)
+                if isinstance(text, str):
+                    yield f"{group}[{item['id']}].{key}", text
+
+
+def test_settings_card_copy_has_no_dashes_that_read_as_em_dashes():
+    """Standing operator instruction: no em dashes in plugin facing copy. A
+    double hyphen renders as one to a reader, so it is barred here too.
+
+    This covers the settings card only. Comments and docstrings in this
+    repository use `--` freely and are deliberately out of scope.
+    """
+    for where, text in _gui_strings():
+        for dash in ("--", "—", "–"):
+            assert dash not in text, f"{where}: {text[:120]}"
+
+
+def test_settings_card_copy_has_no_contractions():
+    """Standing operator instruction, 2026-08-01: write "does not", "cannot",
+    "it is". Possessives are not contractions and are allowed.
+    """
+    for where, text in _gui_strings():
+        match = _CONTRACTION.search(text)
+        assert match is None, f"{where}: {match.group(0)!r} in {text[:120]}"

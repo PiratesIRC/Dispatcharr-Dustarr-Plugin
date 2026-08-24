@@ -14,7 +14,8 @@ from collections import namedtuple
 ChannelRow = namedtuple(
     "ChannelRow", "id uuid name group auto_created created_at proxying")
 
-# The 391 auto-created channels on this box are exactly US: PPV + 24/7 Streams.
+# On the reference installation the 391 auto-created channels are exactly
+# US: PPV + 24/7 Streams.
 # LIVE EVENT slots are PERSISTENT rows that M3U sync RENAMES -- one idled on
 # "NO EVENT" for 34 days and would read as unused (product #4).
 DEFAULT_EXCLUDE_GROUPS = ("US: PPV, US: STL, US: News, US: NBC, US: ABC, "

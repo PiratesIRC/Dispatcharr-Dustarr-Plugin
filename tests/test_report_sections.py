@@ -50,7 +50,8 @@ def test_every_section_is_a_details_with_the_specified_default_state(rp, gw):
 
 
 def test_empty_sections_still_render_with_their_default_state(rp, gw):
-    """too_new / tuned / unobservable are all realistically 0 on this box.
+    """too_new / tuned / unobservable are all realistically 0 on a typical
+    installation.
     Emptiness must never change the open/closed default."""
     built = model(rp, gw, n=5, watched=5)
     assert built["counts"]["too_new"] == 0

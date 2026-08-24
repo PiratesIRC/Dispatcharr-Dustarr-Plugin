@@ -1161,9 +1161,9 @@ def render_html(model):
 
     # The usage rankings are drawn from the JUDGED population only, so a
     # channel that is genuinely watched but sits in an excluded group (news,
-    # OTA, sports, auto-created slots) never appears in them -- on this box
-    # that silently hid a third of all watched channels, Fox News and the local
-    # affiliates among them. Omitting real viewing with no acknowledgement
+    # OTA, sports, auto-created slots) never appears in them. On the reference
+    # installation that silently hid a third of all watched channels, the news
+    # networks and the local affiliates among them. Omitting real viewing with no acknowledgement
     # makes "Most used" read as "what I watch most" when it only ever meant
     # "what I watch most among the channels I might turn off". State the gap.
     watched_excluded = sum(1 for entry in model["excluded"]
