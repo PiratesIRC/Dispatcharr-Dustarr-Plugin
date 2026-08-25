@@ -1,0 +1,25 @@
+{
+  "_comment": "SCHEMA ONLY. The real rules live in .publish-audit.json, which is gitignored and never committed, because it spells out the exact strings it exists to keep out of this repository. Continuous integration reads the same JSON from the PUBLISH_AUDIT_RULES repository secret. See docs/DEVELOPMENT.md for how to restore or change them.",
+
+  "_deny": "Strings that must never appear in a tracked file. This is the half that catches real leaks in a repository like this one, because a provider brand host, an account name suffix, a local network prefix and a personal drive path all look like ordinary words to a generic credential scanner. Write every pattern with a single character class, as in the example below, so the rules file does not match itself while scanning. Each rule needs a 'why'.",
+
+  "deny": [
+    {
+      "pattern": "exam[p]le-provider[.]tv",
+      "why": "illustration only. A real rule names the streaming provider whose brand appears in stream URLs, so that a copied URL cannot reach a commit"
+    },
+    {
+      "pattern": "10[.]0[.]0[.]",
+      "why": "illustration only. A real rule names the maintainer's own local network prefix, which a generic scanner has no way to recognise"
+    }
+  ],
+
+  "_allow": "Expected matches, each with a written reason. An allow entry suppresses a finding everywhere, so add one only after reading the finding and deciding it is harmless. Never loosen a deny pattern to silence something.",
+
+  "allow": [
+    {
+      "pattern": "exam[p]le[.]com",
+      "reason": "illustration only. A real entry names a placeholder that replaced a genuine host, and says why that particular placeholder was chosen"
+    }
+  ]
+}

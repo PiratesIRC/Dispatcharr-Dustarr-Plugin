@@ -6,6 +6,13 @@ __pycache__/
 .claude/
 .wolf/
 
+# The publish-audit deny list. NOT committed, deliberately: it spells out the
+# exact strings it exists to keep out of the repository, and the single
+# character classes that stop it matching itself during a scan do nothing to
+# stop a person reading it. Continuous integration gets these rules from a
+# repository secret instead. See .publish-audit.example.json for the schema.
+.publish-audit.json
+
 .superpowers/
 
 # Agent guidance and the design archive: kept on disk, out of the repo.

@@ -105,7 +105,7 @@ This plugin uses calendar versioning, `Major.YY.DDDHHMM`. Bump it with the
 script, which keeps `dustarr/plugin.json` and `dustarr/plugin.py` in step:
 
 ```bash
-python bump_version.py
+python scripts/bump_version.py
 ```
 
 Do not edit either version by hand. A mismatch fails the build.

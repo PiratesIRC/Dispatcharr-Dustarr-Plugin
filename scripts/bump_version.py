@@ -9,7 +9,8 @@ import pathlib
 import re
 import time
 
-ROOT = pathlib.Path(__file__).resolve().parent
+# This file lives in scripts/, so the repository root is two levels up.
+ROOT = pathlib.Path(__file__).resolve().parent.parent
 PLUGIN_PY = ROOT / "dustarr" / "plugin.py"
 PLUGIN_JSON = ROOT / "dustarr" / "plugin.json"
 

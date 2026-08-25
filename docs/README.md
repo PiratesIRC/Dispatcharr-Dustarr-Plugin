@@ -30,12 +30,11 @@ deliberately not being done, and the measurement behind each item.
 
 ## If you are building something that reads Dustarr's output
 
-**[Newsflasharr report count specification](newsflasharr-report-count-spec.md)**
-describes the one file Dustarr publishes for another tool to read,
-`/data/dustarr/report_count.json`, and what the Newsflasharr plugin would need
-in order to turn it into a badge. It exists because the shared notification
-client has a fixed payload with no field for extra data, so nothing structured
-can travel that path.
+**[Report count integration](report-count-integration.md)** specifies the one
+file Dustarr publishes for another tool to read,
+`/data/dustarr/report_count.json`, and how to consume it. It covers what the
+number does and does not count, why it is a file rather than a field in the
+notification payload, and how to verify an integration against it.
 
 ---
 

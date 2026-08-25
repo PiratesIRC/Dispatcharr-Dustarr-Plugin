@@ -38,7 +38,7 @@ Please confirm:
       addresses appear in the diff, the description, or any attached output.
       A stream URL usually carries a username and password in its path, and an
       M3U account name is often the provider's hostname.
-- [ ] The version was bumped with `python bump_version.py`, or this change does
+- [ ] The version was bumped with `python scripts/bump_version.py`, or this change does
       not need a version bump.
 - [ ] If this change writes anything to Dispatcharr, that is deliberate and the
       read-only guard in `tests/test_no_mutations.py` was updated on purpose

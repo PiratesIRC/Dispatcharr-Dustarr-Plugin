@@ -11,15 +11,20 @@ run locally before pushing.
 `git ls-files` is the authority on what would be published, not .gitignore: a
 file committed before an ignore rule was added is still tracked.
 """
-import json
 import pathlib
 import re
 import subprocess
 import sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+from audit_rules import RulesUnavailable, load_rules  # noqa: E402
+
 SKIP_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".zip", ".gz", ".woff", ".woff2"}
 
-rules = json.loads(pathlib.Path(".publish-audit.json").read_text(encoding="utf-8"))
+try:
+    rules, source = load_rules()
+except RulesUnavailable as exc:
+    sys.exit(str(exc))
 deny = [(re.compile(r["pattern"], re.I), r["pattern"], r["why"]) for r in rules["deny"]]
 allow = [re.compile(r["pattern"], re.I) for r in rules["allow"]]
 
@@ -45,8 +50,8 @@ for name in files:
             line = text.count("\n", 0, match.start()) + 1
             findings.append(f"{name}:{line} matched {pattern!r} ({why})")
 
-print(f"scanned {len(files) - len(skipped)} tracked file(s), "
-      f"skipped {len(skipped)} binary or undecodable")
+print(f"scanned {len(files) - len(skipped)} tracked file(s) against the rules "
+      f"from {source}, skipped {len(skipped)} binary or undecodable")
 for name in skipped:
     print("  not scanned:", name)
 

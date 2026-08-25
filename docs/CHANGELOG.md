@@ -253,7 +253,8 @@ Branding on the report, and a counter another plugin can turn into a badge.
   spool schema, and it is vendored byte-identically into five projects with a
   hash pin, so there is no structured field to put the number in and adding
   one would be a five-project change.
-- New: `docs/newsflasharr-report-count-spec.md`, a handoff describing what
+- New: `docs/newsflasharr-report-count-spec.md` (since renamed to
+  `docs/report-count-integration.md`), a handoff describing what
   Newsflasharr would need to do to surface the count as a badge. Nothing in
   Newsflasharr was changed.
 

@@ -18,8 +18,16 @@ LEGACY = re.compile(r"metricsarr", re.IGNORECASE)
 
 # Everything whose contents can still bind something at runtime or in CI.
 SCANNED_DIRS = ("dustarr", "tests", "scripts", ".github")
-SCANNED_FILES = ("bump_version.py", "ruff.toml", "README.md", "CLAUDE.md",
-                 "pytest.ini", "requirements-dev.txt")
+# Root files that must exist. A name that no longer resolves is a silent loss of
+# coverage, so `test_required_scanned_files_all_exist` fails on one rather than
+# letting the walker skip it. That test was added after bump_version.py moved
+# into scripts/ and pytest.ini and ruff.toml merged into pyproject.toml: the
+# walker skipped all three without a word, and the sweep quietly shrank.
+REQUIRED_FILES = ("README.md", "pyproject.toml", "requirements-dev.txt")
+# Scanned when present. CLAUDE.md is gitignored, so it exists on a maintainer
+# machine and never on a runner; requiring it would fail every CI run.
+OPTIONAL_FILES = ("CLAUDE.md",)
+SCANNED_FILES = REQUIRED_FILES + OPTIONAL_FILES
 SKIP_SUFFIXES = (".pyc",)
 SKIP_PARTS = ("__pycache__", ".ruff_cache", ".pytest_cache")
 # This guard names the thing it forbids; it cannot pass its own check.
@@ -59,6 +67,21 @@ def test_no_legacy_name_in_shipped_tree():
     assert not offenders, (
         f"the legacy name survives in {len(offenders)} place(s):\n{offender_list}"
     )
+
+
+def test_required_scanned_files_all_exist():
+    """A name in REQUIRED_FILES that no longer resolves scans nothing, silently.
+
+    `_candidate_files` skips a missing path without complaint, which is correct
+    for the optional entries and dangerous for the rest: renaming or moving a
+    root file used to shrink this guard's reach with no failure anywhere. Assert
+    the names still point at real files.
+    """
+    missing = [name for name in REQUIRED_FILES if not (REPO / name).is_file()]
+    assert not missing, (
+        f"REQUIRED_FILES names {missing}, which do not exist. If a file moved, "
+        f"update the list; if it was deleted, remove it. Leaving a dead name "
+        f"here silently reduces what this guard scans.")
 
 
 def test_guard_actually_scans_something():

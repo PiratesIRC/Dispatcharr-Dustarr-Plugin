@@ -108,10 +108,31 @@ does the same work without touching that timestamp.
 
 Run the workspace publish audit before any push. A second, narrower scan runs
 automatically in CI on every push to `master`
-(`.github/workflows/publish-audit.yml`), applying the deny list in
-`.publish-audit.json`. That deny list is the half that catches real problems,
-because a provider hostname and a local network prefix look like ordinary words
-to a generic scanner.
+(`.github/workflows/publish-audit.yml`), applying a repository-specific deny
+list. That deny list is the half that catches real problems, because a provider
+hostname and a local network prefix look like ordinary words to a generic
+scanner.
+
+**The deny list is not in this repository, deliberately.** It spells out the
+exact strings it exists to keep out. Each pattern is written with a single
+character class so the rules do not match themselves while scanning, and that
+defeats the scanner but not a person reading the file, so committing it would
+publish everything it protects. The rules come from one of two places, and
+`.github/scripts/audit_rules.py` is what loads them:
+
+| Where | Used by | Notes |
+|---|---|---|
+| `PUBLISH_AUDIT_RULES` environment variable, holding the rules as JSON | CI | Supplied from the `PUBLISH_AUDIT_RULES` repository secret. |
+| `.publish-audit.json` in the repository root | A maintainer machine, and the pre-commit hook | Gitignored, so a fresh clone does not have it and never will. |
+
+`.publish-audit.example.json` is committed and documents the schema with
+illustrative values only.
+
+**If neither source is available the scripts exit non-zero rather than skipping
+the scan.** That direction is deliberate: a check whose input is missing must
+fail loudly, because a silent pass is indistinguishable from a genuinely clean
+tree. If CI starts failing on a fresh fork or a new checkout, a missing secret
+is the first thing to check.
 
 **A clean scan and a broken rule look identical**, so plant a canary containing
 each denied string at a path that is actually scanned and confirm every rule

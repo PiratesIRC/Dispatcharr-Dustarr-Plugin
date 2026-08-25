@@ -1,0 +1,46 @@
+# Tooling configuration for the Dustarr plugin repository.
+#
+# This file replaces the separate pytest.ini and ruff.toml. There is no build
+# system section and no project metadata section on purpose: this repository is
+# not a Python package and is never installed with pip. The plugin is deployed
+# by copying the dustarr/ directory into Dispatcharr's plugin directory, and its
+# own metadata lives in dustarr/plugin.json, which is the manifest Dispatcharr
+# reads. Adding a [project] table here would create a second version number that
+# could disagree with that manifest.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# tests/ is on the path because conftest.py is imported directly by several test
+# modules, not only used as a pytest plugin.
+pythonpath = ["tests"]
+addopts = "-q"
+
+# Mirrors the workspace-wide ruff conventions so `ruff check .` behaves
+# identically whether it runs from inside this repository alone (as continuous
+# integration does, since it checks out only this repository) or from within the
+# parent workspace. Do not delete this section: without it, ruff falls back to
+# its bare defaults (select = E4, E7, E9, F) with no per-file ignores, and both
+# tests/conftest.py's dynamic sys.modules setup and the re-exported imports in
+# tests/*.py fail the default F401 and E402 checks.
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+ignore = [
+    "E501",   # line too long
+    "E741",   # ambiguous variable name (l/I/O)
+    "B008",   # function call in default arg, a common Django and plugin pattern
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests stub modules into sys.modules and import dynamically; that legitimately
+# trips import-order and unused-import rules.
+"**/tests/**" = ["E402", "F401", "F811"]
+"**/conftest.py" = ["E402", "F401"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

@@ -1,26 +1,28 @@
-"""Fail the build if .publish-audit.json is missing, malformed, or undocumented.
+"""Fail the build if the publish-audit rules are missing, malformed or undocumented.
 
 The deny list is the half that catches real leaks here, because a provider brand
 host, an M3U account suffix and a LAN prefix all look like ordinary words to a
-generic scanner. A missing rules file must therefore be an error, not a silent
-pass.
+generic scanner. Missing rules must therefore be an error, not a silent pass.
+
+The rules themselves are NOT committed: they spell out the strings they exist to
+protect, and a single-character class hides that from the scanner but not from a
+person reading the file. See audit_rules.py for where they come from instead.
 
 Kept as a FILE rather than inline in the workflow so the identical code can be
 run locally before pushing. A workflow step that only ever executes on a runner
 is a step nobody has tested.
 """
-import json
 import pathlib
 import re
 import sys
 
-RULES_FILE = pathlib.Path(".publish-audit.json")
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+from audit_rules import RulesUnavailable, load_rules  # noqa: E402
 
-if not RULES_FILE.exists():
-    sys.exit(".publish-audit.json is missing: the deny list is the half that "
-             "catches real leaks in this repository")
-
-rules = json.loads(RULES_FILE.read_text(encoding="utf-8"))
+try:
+    rules, source = load_rules()
+except RulesUnavailable as exc:
+    sys.exit(str(exc))
 
 problems = []
 for group, reason_key in (("deny", "why"), ("allow", "reason")):
@@ -42,7 +44,7 @@ for group, reason_key in (("deny", "why"), ("allow", "reason")):
 
 if problems:
     print("\n".join(problems))
-    sys.exit(f"{len(problems)} problem(s) in .publish-audit.json")
+    sys.exit(f"{len(problems)} problem(s) in the rules from {source}")
 
-print(f"{len(rules['deny'])} deny and {len(rules['allow'])} allow rules, "
-      f"all compile and all documented")
+print(f"{len(rules['deny'])} deny and {len(rules['allow'])} allow rules "
+      f"from {source}: all compile and all documented")

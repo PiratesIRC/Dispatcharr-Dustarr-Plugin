@@ -1,17 +1,29 @@
 # Fails when the tree would publish a provider hostname, an M3U account suffix,
 # a LAN address or a personal path. Every real leak in this workspace has been in
 # that category rather than the cloud-token category a generic scanner looks for,
-# which is why .publish-audit.json carries a repository-specific deny list.
+# which is why the audit uses a repository-specific deny list.
+#
+# THE DENY LIST IS NOT IN THIS REPOSITORY. It names the exact strings it exists
+# to keep out, and the single-character classes that stop it matching itself
+# while scanning do nothing to stop a person reading it, so committing it would
+# publish everything it protects the moment the repository became public. The
+# rules reach this workflow from the PUBLISH_AUDIT_RULES repository secret and
+# reach a maintainer machine from a gitignored .publish-audit.json.
+# .publish-audit.example.json documents the schema without any real values.
+#
+# If the secret is missing the scripts EXIT NON-ZERO rather than skipping the
+# scan. That is the point: a check whose input is absent must fail loudly, never
+# report a clean result it could not compute. A silent pass here would look
+# exactly like a genuinely clean tree.
+#
+# Secrets are not available to a pull request opened from a fork, so that case
+# fails rather than passing quietly. This repository has a single maintainer who
+# pushes directly, so no real workflow is blocked by it. Revisit if that changes.
 #
 # This repository is PRIVATE today. That is not a reason to skip the scan: a
 # repository can be flipped to public in two clicks, a collaborator can be added
 # at any time, and the tree is also the source of any release archive. The audit
 # is about what the tree WOULD publish, not about who can read it right now.
-#
-# The rules are applied inline below rather than by the workspace audit script,
-# which is not committed here. That is deliberate: the script only applies the
-# repository-specific rules when it is given --rules on the command line, and a
-# workflow that forgot the flag would pass while checking almost nothing.
 #
 # The push trigger is load bearing. The maintainer pushes to master directly, so
 # a pull-request-only trigger would leave every direct push unaudited. That
@@ -36,6 +48,8 @@ permissions:
 jobs:
   audit:
     runs-on: ubuntu-latest
+    env:
+      PUBLISH_AUDIT_RULES: ${{ secrets.PUBLISH_AUDIT_RULES }}
     steps:
       - uses: actions/checkout@v4
 
