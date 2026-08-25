@@ -25,7 +25,14 @@ try:
     rules, source = load_rules()
 except RulesUnavailable as exc:
     sys.exit(str(exc))
-deny = [(re.compile(r["pattern"], re.I), r["pattern"], r["why"]) for r in rules["deny"]]
+# Rules are carried by POSITION, not by their text. Continuous integration logs
+# follow repository visibility, so anything printed here is published on a
+# public repository, and a deny pattern names the exact string it exists to
+# keep out. Reporting "deny rule 2" keeps a finding actionable without
+# republishing the pattern: a maintainer counts to the second entry in their
+# own copy of the rules.
+deny = [(re.compile(r["pattern"], re.I), number)
+        for number, r in enumerate(rules["deny"], start=1)]
 allow = [re.compile(r["pattern"], re.I) for r in rules["allow"]]
 
 listed = subprocess.run(["git", "ls-files"], capture_output=True, text=True, check=True)
@@ -43,12 +50,14 @@ for name in files:
     except (UnicodeDecodeError, OSError):
         skipped.append(name)
         continue
-    for regex, pattern, why in deny:
+    for regex, number in deny:
         for match in regex.finditer(text):
             if any(a.search(match.group(0)) for a in allow):
                 continue
             line = text.count("\n", 0, match.start()) + 1
-            findings.append(f"{name}:{line} matched {pattern!r} ({why})")
+            # The matched TEXT is not printed either: on a real finding it IS
+            # the secret.
+            findings.append(f"{name}:{line} matched deny rule {number}")
 
 print(f"scanned {len(files) - len(skipped)} tracked file(s) against the rules "
       f"from {source}, skipped {len(skipped)} binary or undecodable")
@@ -59,6 +68,8 @@ if findings:
     print()
     print("\n".join(sorted(set(findings))))
     sys.exit(f"{len(set(findings))} finding(s): read every one before this "
-             f"reaches the remote")
+             f"reaches the remote. Rules are numbered by their position in "
+             f"the deny list; the patterns are deliberately not printed, "
+             f"because this output is published on a public repository.")
 
 print("no deny-list findings")

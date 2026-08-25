@@ -128,6 +128,15 @@ publish everything it protects. The rules come from one of two places, and
 `.publish-audit.example.json` is committed and documents the schema with
 illustrative values only.
 
+**A finding names the rule by its POSITION in the deny list, never by its
+pattern.** Continuous integration logs follow repository visibility, so on a
+public repository anything these scripts print is published, and a deny pattern
+spells out the string it exists to keep out. A finding reads
+`path/to/file.py:42 matched deny rule 2`, which is enough to act on with a local
+copy of the rules in front of you. The matched text is not printed either: on a
+real finding, that text is the secret. `tests/test_audit_scripts.py` plants a
+match and asserts the pattern does not reach the output.
+
 **If neither source is available the scripts exit non-zero rather than skipping
 the scan.** That direction is deliberate: a check whose input is missing must
 fail loudly, because a silent pass is indistinguishable from a genuinely clean
