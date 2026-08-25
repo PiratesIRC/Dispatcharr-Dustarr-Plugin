@@ -1,3 +1,5 @@
+<img src="dustarr/logo.png" alt="The Dustarr logo: a dark radar scope with a green sweep line and coloured blips scattered across it" width="110" align="right">
+
 # Dustarr
 
 A Dispatcharr plugin that records which channels are actually watched, and reports the ones that are not, so you can turn off the dead weight in your lineup.
