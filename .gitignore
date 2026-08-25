@@ -1,9 +1,10 @@
-﻿__pycache__/
+__pycache__/
 *.pyc
 .pytest_cache/
 .hypothesis/
 .ruff_cache/
-.claude/settings.local.json
+.claude/
+.wolf/
 
 .superpowers/
 
