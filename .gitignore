@@ -19,4 +19,10 @@ __pycache__/
 # The published tree is the plugin, its tests, its tooling and its README.
 CLAUDE.md
 docs/CLAUDE-HISTORY.md
+# Draft text for posting elsewhere (Discord, upstream issues). Internal
+# working documents, not part of the published plugin. The CLAUDE-PROMPT-
+# prefix keeps them inside the workspace notes backup sweep, which matches
+# docs/CLAUDE-*.md; a name outside that pattern would have no backup and no
+# git coverage at all.
+docs/CLAUDE-PROMPT-*.md
 docs/superpowers/
