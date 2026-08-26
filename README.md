@@ -10,7 +10,7 @@ A Dispatcharr plugin that records which channels are actually watched, and repor
 
 [![Dispatcharr plugin](https://img.shields.io/badge/Dispatcharr-plugin-8A2BE2)](https://github.com/Dispatcharr/Dispatcharr)
 [![Workflow Guide](https://img.shields.io/badge/%F0%9F%93%96-Workflow_Guide-1F6FEB?style=flat)](https://piratesirc.github.io/Dispatcharr-Plugin-Workflow/)
-[![Discord](https://img.shields.io/badge/Discord-Discussion-5865F2?logo=discord&logoColor=white)](https://discord.gg/Sp45V5BcxU)
+[![Discord](https://img.shields.io/badge/Discord-Discussion-5865F2?logo=discord&logoColor=white)](https://discord.com/channels/1340492560220684331/1542141054080524310)
 [![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/PiratesIRC)
 
 [![GitHub Release](https://img.shields.io/github/v/release/PiratesIRC/Dispatcharr-Dustarr-Plugin?include_prereleases&logo=github)](https://github.com/PiratesIRC/Dispatcharr-Dustarr-Plugin/releases)
