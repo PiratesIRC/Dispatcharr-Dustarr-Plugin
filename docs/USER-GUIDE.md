@@ -247,7 +247,7 @@ in place upgrade leaves the old code running the schedule until a restart.
 
 Dustarr does not send mail itself and does not talk to Discord or any webhook
 directly. It hands its report to the
-[Newsflasharr](https://github.com/PiratesIRC/Dispatcharr_Newsflasharr) plugin,
+[Newsflasharr](https://github.com/PiratesIRC/Dispatcharr-Newsflasharr-Plugin) plugin,
 which delivers it.
 
 Turning on **Send notifications to Newsflasharr** is the whole setup on this
@@ -274,9 +274,11 @@ does not spool anything and does not fail.
 
 ## Updating the plugin
 
-1. Install the new version, either by uploading the release zip on the
-   **Plugins** page or by copying the `dustarr/` folder into Dispatcharr's
-   plugin directory.
+1. Install the new version. Three routes, all equivalent: update it from the
+   **Plugin Hub** in Dispatcharr's plugin browser, upload the release zip with
+   **Import Plugin** on the **Plugins** page, or copy the `dustarr/` folder
+   into Dispatcharr's plugin directory. The Hub re-hosts the release archive
+   byte for byte, so no route gives you different code.
 2. **Restart the Dispatcharr container.** See
    [the scheduled report](#the-scheduled-report) for why a restart is needed
    rather than optional.

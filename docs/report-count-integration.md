@@ -51,7 +51,7 @@ successful one.
 ## Why the number is not in the notification payload
 
 The obvious design is for Dustarr to put the number in the event it already
-sends to the [Newsflasharr](https://github.com/PiratesIRC/Dispatcharr_Newsflasharr)
+sends to the [Newsflasharr](https://github.com/PiratesIRC/Dispatcharr-Newsflasharr-Plugin)
 notification plugin. That does not work, and the reason is worth stating so it
 does not get re-proposed.
 

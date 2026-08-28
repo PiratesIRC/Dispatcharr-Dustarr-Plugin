@@ -54,9 +54,25 @@ always written before anything is emailed.
 
 ### Branch protection on the repository
 
-Not applied. Repository rulesets require a paid plan on a private repository and
-the API refuses the request. Either the repository becomes public, or the
-protection waits, which is a reasonable position for a single maintainer.
+Not applied. The reason it was not applied has expired: repository rulesets
+require a paid plan only on a private repository, and this one has been public
+since 2026-08-25. Leaving the default branch unprotected is defensible for a
+single maintainer who pushes directly and runs the full test suite plus a
+publish audit before every push, but it is now a choice rather than a
+limitation.
+
+### The Discord thread is missing from the plugin's own manifest
+
+`dustarr/plugin.json` has no `discord_thread` field, while the sibling plugins
+carry one and the Plugin Hub listing already has it.
+
+This is deliberate rather than forgotten. Dispatcharr does not read that field
+from a plugin manifest, measured by searching the running container, so adding
+it changes nothing at runtime. Editing a file that ships in the release archive
+for no functional reason would make the repository, the release and the
+installed copy differ with nothing in the version to explain it, and verifying
+those three against each other is how every deploy here is checked. It goes in
+with the next release.
 
 ## Deliberately not planned
 

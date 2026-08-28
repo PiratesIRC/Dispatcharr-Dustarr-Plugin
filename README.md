@@ -47,7 +47,7 @@ A Dispatcharr plugin that records which channels are actually watched, and repor
 **Seeing what happened**
 * **A self contained HTML report**: sortable tables, collapsible sections and inline charts, with no external stylesheet, script, font or image. It opens straight off disk, and renders the same offline, on a television, or as an email attachment.
 * **A CSV export** of the same data, for a spreadsheet.
-* **Emailed reports**, optionally, delivered by the [Newsflasharr](https://github.com/PiratesIRC/Dispatcharr_Newsflasharr) plugin. Off by default.
+* **Emailed reports**, optionally, delivered by the [Newsflasharr](https://github.com/PiratesIRC/Dispatcharr-Newsflasharr-Plugin) plugin. Off by default.
 * **A loud banner when the numbers cannot be trusted**, rather than a clean looking report claiming your household watches nothing.
 
 See the **[user guide](docs/USER-GUIDE.md)** for how to use these, and for every setting and every button.
@@ -68,16 +68,19 @@ Click a heading and its tables appear.
 
 * Dispatcharr v0.20.0+
 * No internet access of any kind. The plugin never contacts your provider, never checks for its own updates, and fetches nothing when rendering a report.
-* The [Newsflasharr](https://github.com/PiratesIRC/Dispatcharr_Newsflasharr) plugin, only if you want emailed reports. It is what actually sends the mail. Dustarr does not require it: with Newsflasharr absent or disabled, nothing is sent and nothing fails.
+* The [Newsflasharr](https://github.com/PiratesIRC/Dispatcharr-Newsflasharr-Plugin) plugin, only if you want emailed reports. It is what actually sends the mail. Dustarr does not require it: with Newsflasharr absent or disabled, nothing is sent and nothing fails.
 
 ## Installation
 
-1. Log in to Dispatcharr's web UI.
-2. Navigate to **Plugins**.
-3. Click **Import Plugin** and upload the plugin zip file.
-4. Enable the plugin after installation.
+Dustarr is listed on the **Dispatcharr Plugin Hub**, so the easiest route is the plugin browser:
 
-Upgrading has its own short procedure, and it does need a container restart: see [Updating the plugin](docs/USER-GUIDE.md#updating-the-plugin).
+1. Log in to Dispatcharr's web UI.
+2. Navigate to **Plugins**, find **Dustarr** in the browser, and install it.
+3. Enable the plugin after installation.
+
+To install from a file instead, download the zip from the [latest release](https://github.com/PiratesIRC/Dispatcharr-Dustarr-Plugin/releases/latest), then use **Import Plugin** on the same page. Both routes deliver the same archive: the Hub re-hosts the release asset, byte for byte.
+
+**Restart the Dispatcharr container after installing or upgrading.** This is not optional, and the reason is in [Updating the plugin](docs/USER-GUIDE.md#updating-the-plugin).
 
 ## What to expect at first
 

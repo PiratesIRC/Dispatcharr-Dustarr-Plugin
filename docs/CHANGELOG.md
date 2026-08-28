@@ -2,6 +2,13 @@
 
 ## 1.26.2362242, August 24, 2026
 
+**This is the first published version.** It is the first release with a git tag
+and a GitHub release, the repository became public on August 25, and the plugin
+was listed on the Dispatcharr Plugin Hub on August 26, so it can now be
+installed from Dispatcharr's plugin browser rather than only from a downloaded
+zip. Both routes deliver the same archive: the Hub re-hosts the release asset
+and its copy was checked byte for byte against ours.
+
 **Release preparation.** No change to how usage is recorded or judged. The
 plugin is being readied for its first public release, so this version is about
 the manifest, the documentation and the settings card copy.
