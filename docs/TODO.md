@@ -71,8 +71,14 @@ from a plugin manifest, measured by searching the running container, so adding
 it changes nothing at runtime. Editing a file that ships in the release archive
 for no functional reason would make the repository, the release and the
 installed copy differ with nothing in the version to explain it, and verifying
-those three against each other is how every deploy here is checked. It goes in
-with the next release.
+those three against each other is how every deploy here is checked.
+
+**This note previously said it would go in with the next release. Release
+1.26.2481620 shipped on 2026-09-05 without it**, because it was not in that
+release's scope and adding a field after the publish audit had run would have
+changed what was audited. Carrying it now would need its own version bump. It
+is still worth doing, and the honest status is that it is pending rather than
+scheduled.
 
 ## Deliberately not planned
 
@@ -90,7 +96,7 @@ with the next release.
   that an M3U sync renames in place. The rankings say on the page that they omit
   excluded channels; that note is the fix, not removing the exclusions.
 - **Backfilling history.** Dispatcharr does not retain the state the collector
-  reads, so there is nothing to import. A fresh installation genuinely starts at
+  reads, so there is nothing to import. A fresh installation really does start at
   zero.
 
 ## Known limitations, accepted
@@ -120,6 +126,20 @@ with the next release.
 
 ## Verification
 
+- **The publish audit's new skip path has NOT been seen on a real pull request,
+  measured 2026-09-05.** The workflow used to fail on every Dependabot pull
+  request, because GitHub withholds repository secrets from those and the audit
+  scripts fail closed when the deny list is absent. It now skips with a notice,
+  and only when the value is empty and the event is a pull request.
+
+  All five branches of that decision were exercised locally, and a manual run on
+  the real runner confirmed the scan still executes when the secret IS present:
+  7 deny and 11 allow rules compiled, 69 files scanned, no findings. What has
+  not been observed is the skip itself, because no fork or Dependabot pull
+  request has been open since. **The next Dependabot update is its first real
+  test. Check that it reports a skip rather than a pass, and that a push to the
+  default branch still fails hard when the deny list is missing.**
+
 - **The scheduled report is confirmed running, measured 2026-08-24.** This was
   open for a month: a schedule row deleted by a plugin reload had cost two
   chances, and no scheduled run had been observed since the plugin was renamed.
@@ -128,7 +148,7 @@ with the next release.
   and two report files sit on disk timestamped 03:00 local on 2026-08-17 and
   2026-08-24, which are the Mondays the weekly schedule names.
 
-  Judging it this way was the whole point. Celery's own run counter reads 2, and
+  Judging it by side effects is the reason it is settled. Celery's own run counter reads 2, and
   it would read 2 whether or not the task ever executed, because it counts
   messages sent. Pressing the Build report button deliberately does not write
   the timestamp, so that the one signal answering this question could not be

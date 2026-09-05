@@ -46,7 +46,8 @@ A Dispatcharr plugin that records which channels are actually watched, and repor
 
 **Seeing what happened**
 * **A self contained HTML report**: sortable tables, collapsible sections and inline charts, with no external stylesheet, script, font or image. It opens straight off disk, and renders the same offline, on a television, or as an email attachment.
-* **A CSV export** of the same data, for a spreadsheet.
+* **A CSV export** of the same data, for a spreadsheet. It opens with a commented preamble recording what the run found and which settings it used, so tell your spreadsheet to skip lines beginning with a hash when you import it.
+* **Housekeeping for old reports**, off by default. Set a number of days and the dated copies are deleted after each build. The report just written is never deleted and at least one of each kind always survives.
 * **Emailed reports**, optionally, delivered by the [Newsflasharr](https://github.com/PiratesIRC/Dispatcharr-Newsflasharr-Plugin) plugin. Off by default.
 * **A loud banner when the numbers cannot be trusted**, rather than a clean looking report claiming your household watches nothing.
 
