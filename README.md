@@ -24,7 +24,7 @@ A Dispatcharr plugin that records which channels are actually watched, and repor
 
 **It never changes anything in Dispatcharr.** It reads which channels have viewers, and writes its own report files. Nothing else.
 
-## Features
+## What it does
 
 **Recording what is watched**
 * **A leader elected collector** samples Dispatcharr's live proxy state every 15 seconds and turns raw client counts into watch sessions. Exactly one collector runs at a time across all worker processes, so nothing is double counted.
@@ -84,9 +84,9 @@ To install from a file instead, download the zip from the [latest release](https
 
 ## What to expect at first
 
-**Your first month of reports will carry a red "not trustworthy" banner, and that is the plugin working rather than failing.** The unused threshold defaults to 30 days, and a dataset younger than that cannot honestly call anything unused. There is no way to shorten this by importing history: Dispatcharr does not keep the state Dustarr reads, so a fresh installation genuinely starts at zero. Wait it out, or lower the threshold if you are comfortable judging on a shorter window.
+**Your first month of reports will carry a red "not trustworthy" banner, and that is the plugin working rather than failing.** The unused threshold defaults to 30 days, and a dataset younger than that cannot honestly call anything unused. There is no way to shorten this by importing history: Dispatcharr does not keep the state Dustarr reads, so a fresh installation really does start at zero. Wait it out, or lower the threshold if you are comfortable judging on a shorter window.
 
-**Most of a typical lineup is excluded from judgment, and that is the point.** On a normal installation roughly 70 percent of channels are held back for the reasons listed above. The actionable answer is drawn from the remaining 30 percent, not from the whole lineup.
+**Most of a typical lineup is excluded from judgment, and that is the point.** On a normal installation roughly 70 percent of channels are held back for the reasons listed above. The answer you can act on is drawn from the remaining 30 percent, not from the whole lineup.
 
 ## Safety
 

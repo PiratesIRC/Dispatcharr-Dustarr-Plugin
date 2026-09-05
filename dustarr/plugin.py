@@ -36,7 +36,7 @@ except ImportError:                     # standalone (non-package) import path
 
 _LOGGER = logging.getLogger(__name__)
 
-PLUGIN_VERSION = "1.26.2362242"
+PLUGIN_VERSION = "1.26.2481620"
 
 DATA_DIR = "/data/dustarr"           # plugin state (named volume)
 # Both outputs go to the SAME directory, under Dispatcharr's existing /config
@@ -98,6 +98,14 @@ FIELDS = [
     {"id": "info", "type": "info", "label": "Dustarr is read-only",
      "description": "It records which channels are watched and reports the dead "
                     "weight. It never changes a channel."},
+    {"id": "_section_collection", "type": "info", "label": "How watching is measured",
+     "description": "These four settings control how the background collector turns "
+                    "Dispatcharr's live channel state into watch sessions. They are "
+                    "the only settings the collector itself reads, and changing any "
+                    "of them restarts it, which forfeits any watch already in "
+                    "progress, so prefer to change them while nothing is streaming. "
+                    "Every setting below this section is applied when the report is "
+                    "built instead, and costs nothing to change at any time."},
     {"id": "poll_interval_s", "label": "Poll interval (s)", "type": "number",
      "default": 15, "min": 5, "max": 25,
      "description": "Sampling cadence. Must stay under Dispatcharr's 30s metadata "
@@ -114,6 +122,15 @@ FIELDS = [
      "default": 120,
      "description": "A channel re-tuned within this window continues the same "
                     "watch instead of starting a new one."},
+    {"id": "_section_judging", "type": "info",
+     "label": "When a channel counts as unused",
+     "description": "These settings decide what the report is willing to call "
+                    "unused. They are applied when the report is built, against the "
+                    "history already collected, so changing one re-judges the past "
+                    "rather than starting the record again. The alarm ceiling is the "
+                    "odd one out: it does not judge a channel at all, it decides when "
+                    "so much of the lineup looks dead that the collector is probably "
+                    "blind, and the report says it cannot be trusted."},
     {"id": "unused_threshold_days", "label": "Unused threshold (days)",
      "type": "number", "default": 30,
      "description": "A channel younger than this cannot be judged unused."},
@@ -122,7 +139,6 @@ FIELDS = [
      "description": "How long an absence counts as cold. A channel watched at "
                     "some point, but not once inside this window, is listed as "
                     "going cold."},
-    {"id": "top_n", "label": "Top/bottom N", "type": "number", "default": 20},
     {"id": "never_watched_ceiling", "label": "Never-watched alarm ceiling",
      "type": "number", "default": 0.98,
      "description": "Fraction of JUDGED channels (never-watched + too-new + "
@@ -134,6 +150,15 @@ FIELDS = [
                     "show 80-90% never-watched among the rest; this high "
                     "default only catches the mass-casualty shape where "
                     "essentially EVERY judged channel looks dead."},
+    {"id": "_section_exclusions", "type": "info",
+     "label": "Channels that are never judged",
+     "description": "These settings hold channels back from the unused lists "
+                    "entirely, which is how the local and news tier and the event "
+                    "slots are protected from being switched off on a quiet month. "
+                    "The cost is not obvious from the labels: an excluded channel is "
+                    "also absent from the Most used and Least used rankings even when "
+                    "it is watched every day, so those rankings answer what you can "
+                    "safely turn off and are not a summary of your viewing."},
     {"id": "exclude_auto_created", "label": "Exclude auto-created channels",
      "type": "boolean", "default": True,
      "description": "Protects PPV/LIVE EVENT slots and 24/7 channels, which M3U "
@@ -144,6 +169,20 @@ FIELDS = [
                     "sports has a legitimate off-season."},
     {"id": "exclude_name_regex", "label": "Excluded name regex", "type": "string",
      "default": gateway.DEFAULT_EXCLUDE_NAME_RE},
+    {"id": "_section_report", "type": "info",
+     "label": "The report, and what happens to it",
+     "description": "These settings cover what the report contains, when it is "
+                    "built, whether it is emailed, and how long old copies are kept. "
+                    "The Build report button and the schedule run the same job, but "
+                    "the button runs in the web worker while the schedule runs on a "
+                    "Celery worker, so a button that works is not evidence that the "
+                    "schedule fires. Validate settings reports the age of the last "
+                    "scheduled run, which is the signal that answers that."},
+    {"id": "top_n", "label": "Rows in the Most used and Least used tables",
+     "type": "number", "default": 20,
+     "description": "How many channels each ranking table lists. It changes the "
+                    "report only, never what is collected or how a channel is "
+                    "judged."},
     {"id": "notify_enabled", "label": "Send notifications to Newsflasharr",
      "type": "boolean", "default": False,
      "help_text": "Requires the Newsflasharr plugin. What routes where is "
@@ -155,6 +194,18 @@ FIELDS = [
                  {"value": "daily", "label": "Daily (03:00)"},
                  {"value": "weekly", "label": "Weekly (Mon 03:00)"},
                  {"value": "monthly", "label": "Monthly (1st, 03:00)"}]},
+    {"id": "report_retention_days", "label": "Delete saved reports older than (days)",
+     "type": "number", "default": 0, "min": 0, "max": 3650,
+     "description": "Housekeeping for the dated report files this plugin writes "
+                    "to its own report directory. After each report is built, "
+                    "its own report-<stamp>.html and report-<stamp>.csv files "
+                    "older than this many days are deleted. 0 keeps every file, "
+                    "which is the default, so nothing is removed unless you ask "
+                    "for it. The report just written is never deleted, at least "
+                    "one file of each kind always survives, and the live "
+                    "report.html is never touched. Only files this plugin wrote "
+                    "are considered. This is on top of the existing cap that "
+                    "keeps the newest few of each kind regardless of age."},
 ]
 
 ISSUES_URL = "https://github.com/PiratesIRC/Dispatcharr-Dustarr-Plugin/issues"
@@ -168,7 +219,7 @@ ACTIONS = [
      "description": "Check every setting parses, and report on the collector, "
                     "the schedule and email readiness. Writes nothing.",
      "button_label": "✅ Validate",
-     "button_variant": "outline", "button_color": "green"},
+     "button_variant": "outline", "button_color": "blue"},
     {"id": "show_summary", "label": "Show summary",
      "description": "Tracking window, coverage, never-watched count.",
      "button_label": "📊 Summary",
@@ -190,7 +241,7 @@ ACTIONS = [
                     "plugin action cannot open a browser tab, so it prints the "
                     "address for you to copy.",
      "button_label": "🐞 Report an issue",
-     "button_variant": "outline", "button_color": "gray"},
+     "button_variant": "outline", "button_color": "cyan"},
 ]
 
 # recent_window_days floors at 7, not 1: a channel that has been streaming
@@ -209,7 +260,8 @@ _NUMERIC_FLOORS = {"poll_interval_s": (5, MAX_POLL_INTERVAL_S),
                    "unused_threshold_days": (1, 3650),
                    "recent_window_days": (7, 3650),
                    "top_n": (1, 500),
-                   "never_watched_ceiling": (0.05, 1.0)}
+                   "never_watched_ceiling": (0.05, 1.0),
+                   "report_retention_days": (0, 3650)}
 
 
 def coerce_settings(settings):
@@ -236,7 +288,8 @@ def coerce_settings(settings):
             low, high = _NUMERIC_FLOORS.get(fid, (None, None))
             if low is not None:
                 value = max(low, min(high, value))
-            if fid in ("top_n", "unused_threshold_days", "recent_window_days"):
+            if fid in ("top_n", "unused_threshold_days", "recent_window_days",
+                       "report_retention_days"):
                 value = int(value)
             elif fid == "poll_interval_s" and value == int(value):
                 value = int(value)
@@ -403,7 +456,7 @@ def ensure_collector(settings=None):
 
 
 # ---- report ------------------------------------------------------------------
-def _build_report(settings):
+def _build_report(settings, is_scheduled=False):
     thresholds = coerce_settings(settings)
     store = storage.Storage(DATA_DIR)
     gw = _gateway()
@@ -421,7 +474,22 @@ def _build_report(settings):
     # Set on the model rather than passed as an argument because `reports.py`
     # must not import `plugin.py`, and `read_report_count` lives here.
     model["report_number"] = read_report_count() + 1
-    written = reports.write_report(model, REPORT_DIR, CSV_DIR, now)
+    # Both of these are recorded ON THE MODEL rather than passed as arguments,
+    # for the same reason report_number is: reports.py must not import
+    # plugin.py. `thresholds` is the coerced settings this run was actually
+    # judged against, which is what the CSV preamble records, so the file
+    # describes the run that produced it rather than whatever is stored now.
+    model["thresholds"] = thresholds
+    # A run that the scheduler started must not describe itself as manual. The
+    # value travels from the caller because both entry points reach this same
+    # function and neither can be identified from inside it.
+    model["is_scheduled"] = bool(is_scheduled)
+    # Age-based cleanup of the dated archives happens inside write_report, at
+    # the single point where a file is written, so it covers this action and
+    # the scheduled build alike. It is report-only, so it is deliberately not
+    # part of _thresholds_fingerprint and cannot respawn the collector.
+    written = reports.write_report(model, REPORT_DIR, CSV_DIR, now,
+                                   retention_days=thresholds["report_retention_days"])
 
     counts = model["counts"]
     message = (f"{counts['never_watched']} of {model['total_channels']} channels "
@@ -577,7 +645,7 @@ def build_report_task():
     try:
         close_old_connections()
         settings = _load_settings()
-        _, model, written = _build_report(settings)
+        _, model, written = _build_report(settings, is_scheduled=True)
         if not written.get("html_path"):
             # bug-078: nothing was published, so returning counts here would
             # record SUCCESS for a run that wrote no files. Raised INSIDE the

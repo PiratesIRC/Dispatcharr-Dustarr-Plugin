@@ -1266,7 +1266,7 @@ def test_an_unwritable_scheduled_run_file_never_breaks_the_run(plugin, monkeypat
 
 
 def _stub_a_successful_build(plugin, monkeypatch):
-    monkeypatch.setattr(plugin, "_build_report", lambda s: (
+    monkeypatch.setattr(plugin, "_build_report", lambda s, **kwargs: (
         {"status": "ok", "message": "built"},
         _minimal_model(ok=True, tracked_days=45),
         {"html_path": "/tmp/report.html", "archive_path": "/tmp/report-1.html"}))
@@ -1292,7 +1292,7 @@ def test_only_the_scheduled_task_stamps_the_schedule(plugin, monkeypatch, tmp_pa
 def test_a_failed_publish_does_not_record_a_scheduled_run(plugin, monkeypatch, tmp_path):
     """bug-078's lesson: a run that published nothing is not a healthy run."""
     monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
-    monkeypatch.setattr(plugin, "_build_report", lambda s: (
+    monkeypatch.setattr(plugin, "_build_report", lambda s, **kwargs: (
         {"status": "error"}, _minimal_model(ok=True, tracked_days=45),
         {"html_path": None, "error": "Permission denied"}))
     monkeypatch.setattr(plugin, "_load_settings", lambda: {})
@@ -1544,7 +1544,7 @@ def _stub_build(plugin, monkeypatch, html_path="/tmp/report.html", err=None):
               "file": html_path}
     if not html_path:
         result["error"] = f"Report was NOT published: {err or 'unknown'}"
-    monkeypatch.setattr(plugin, "_build_report", lambda s: (
+    monkeypatch.setattr(plugin, "_build_report", lambda s, **kwargs: (
         result, _minimal_model(ok=True, tracked_days=45), written))
 
 

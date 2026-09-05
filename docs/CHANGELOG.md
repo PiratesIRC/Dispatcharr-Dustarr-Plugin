@@ -1,5 +1,63 @@
 # Changelog
 
+## 1.26.2481620, September 5, 2026
+
+**Housekeeping for saved reports, a record at the top of the CSV, and a
+settings form divided into sections.** Nothing about how usage is recorded or
+judged has changed.
+
+- **A new setting deletes saved reports after a number of days.** Delete saved
+  reports older than (days) defaults to 0, which is off, so nothing is removed
+  unless you ask for it. When you do set it, the dated `report-<stamp>.html`
+  and `report-<stamp>.csv` copies in the config folder are swept after each
+  report is built. The report just written is never deleted, at least one file
+  of each kind always survives, and the live `report.html` is never touched.
+  This sits alongside the existing cap that keeps the newest eight of each kind
+  whatever their age, so the folder is now bounded both ways.
+- **The CSV export opens with a record of the run that produced it.** It had
+  none: a file named `report-<stamp>.csv` sitting in a folder said nothing
+  about what it was, which run wrote it, what that run found, or what settings
+  it was judged against. The new preamble says all four, and says plainly that
+  its lines are an explanation to skip on import rather than data. Counts of
+  what the run found come first, before the settings it used.
+- **A scheduled run no longer describes itself as a manual one.** The new
+  record carries a run mode line, and the scheduled job marks its own runs, so
+  the two entry points cannot be confused when comparing two exports.
+- **Settings the record shows now read the way a person would write them.**
+  Toggles print Yes and No rather than Python's True and False, and they do so
+  whether the value was stored as a boolean or as a string. The schedule prints
+  Weekly (Mon 03:00) rather than the bare word weekly. A whole number prints as
+  120 rather than 120.0. A number whose meaning is not obvious carries a short
+  note saying what it means and which direction is stricter.
+- **A channel whose name begins with a hash is no longer lost.** Because the
+  new preamble marks its lines with a hash and tells the reader to skip them, a
+  channel called "#1 Sports HD" would have been dropped by any import that
+  followed that instruction. It is now neutralised the same way a name starting
+  with an equals sign already was, with a leading quote that a spreadsheet
+  renders as text.
+- **A line break inside a setting can no longer break the export.** Settings
+  arrive unvalidated, and two of them are free text. A newline in one used to
+  end the preamble early, which made the next line look like the column header
+  row and left the whole file unreadable with no error. Line breaks are now
+  collapsed to spaces.
+- **The settings form is divided into four sections.** Fourteen settings ran as
+  one flat list. They now sit under How watching is measured, When a channel
+  counts as unused, Channels that are never judged, and The report, and what
+  happens to it. Each section says what it governs plus one thing the field
+  labels do not tell you. One setting moved: Top/bottom N is now called Rows in
+  the Most used and Least used tables and sits with the report settings, since
+  it sets how many rows the two ranking tables show and judges nothing. Its
+  stored value is unaffected.
+- **Two buttons changed colour so that colour means one thing.** Validate
+  settings was green and is now blue, because it reads and reports and writes
+  nothing. Report an issue was grey, which carried no meaning, and is now cyan,
+  the colour used for anything pointing outward. No button here is red, because
+  this plugin never changes anything in Dispatcharr.
+- **Documentation.** The user guide documents the three settings it was
+  missing, its headings match the ones the settings form now shows, and every
+  setting is documented under the section the form actually shows it under. A
+  test checks that against the plugin's own field list rather than by eye.
+
 ## 1.26.2362242, August 24, 2026
 
 **This is the first published version.** It is the first release with a git tag
@@ -36,9 +94,9 @@ the manifest, the documentation and the settings card copy.
 
 ## 1.26.2281841, August 16, 2026
 
-**Review hardening.** A comprehensive code review produced fourteen verified
+**Review hardening.** A full code review produced fourteen verified
 findings; this release fixes all but three deliberately skipped minor
-cleanups. No new features. Every fix carries a test that fails against the
+cleanups. Nothing new was added. Every fix carries a test that fails against the
 previous code.
 
 Robustness against a damaged or hand edited `usage.json`:
@@ -429,7 +487,7 @@ the name now says so.
 
 - **The usage rankings now say when they are omitting real viewing.** "Most
   used" and "Least used" are drawn from the JUDGED population only, so a
-  channel that is genuinely watched but sits in an excluded group never
+  channel that really is watched but sits in an excluded group never
   appears in them. On the reference box that silently hid **21 of 65** watched
   channels, Fox News and the local OTA affiliates among them.
   That is the exclusions working as designed, and it is correct for the
@@ -494,26 +552,26 @@ the name now says so.
 
 ## v1.26.2071541 (July 26, 2026)
 
-Visual polish for the generated HTML report. Presentation only — no change to
+Visual polish for the generated HTML report. Presentation only - no change to
 what anything means, no new per-channel field, no relaxation of the credential
 allowlist. Two exceptions, both deliberate and both listed under Fixed/Changed.
 
 ### Added
 
 - **Collapsible sections.** Each of the six report sections is now a
-  `<details>`/`<summary>` — plain HTML, no JavaScript, so it still works on a TV
+  `<details>`/`<summary>` - plain HTML, no JavaScript, so it still works on a TV
   browser and in a mail attachment opened with scripting off. A client that does
   not implement `<details>` renders everything expanded, so the failure mode is
   "all visible", never "content lost". Open by default: Never watched, Tuned but
   never qualified, Most used. Closed: Too new, Least used, and Excluded and
-  unobservable — the last of which is ~1010 rows that used to cost a scroll on
+  unobservable - the last of which is ~1010 rows that used to cost a scroll on
   every load. The three closed sections carry a note that find-in-page does not
   reach inside a collapsed section on some browsers.
 - **A split bar over the judged population**, with an HTML legend carrying every
   count and a caption stating the narrowing (e.g. "1440 channels · 430 judged ·
   not judged: 1010 excluded, 0 unobservable"). It is denominated on the judged
   population deliberately: over the full universe roughly 70% of the bar's ink
-  went to `excluded` — the category explicitly outside judgment — while
+  went to `excluded` - the category explicitly outside judgment - while
   "tuned but never qualified", the list that matters most, rendered as an
   unlabeled sliver.
 - **A sampling-density meter** with a hairline tick at the 90% coverage gate.
@@ -524,15 +582,15 @@ allowlist. Two exceptions, both deliberate and both listed under Fixed/Changed.
   Coverage attests to sampling density, never to data validity.
 - **Per-group never-watched bars** inside the rollup table, on a **judged**
   denominator rather than the group's ORM total. `total` includes excluded rows,
-  so a bar drawn over it would assert a proportion the data does not support — a
+  so a bar drawn over it would assert a proportion the data does not support - a
   95%-excluded group would draw a short bar reading "few never-watched" when
   almost nothing in it was judged. The cell carries `data-v`, so the column sorts
   by proportion rather than looking sortable and silently doing nothing.
 - Semantic colour throughout, as CSS custom properties declared for both light
-  and dark. The hexes are load-bearing, not decorative: they were validated
+  and dark. The hexes are not decorative: they were validated
   all-pairs for colourblind safety against this page's own surfaces. Segments
   with a zero count are dropped entirely, which is *why* all-pairs rather than
-  adjacent-pairs — dropping a segment makes any two others neighbours.
+  adjacent-pairs - dropping a segment makes any two others neighbours.
   Never-watched is blue rather than the more obvious warning-orange because
   orange and red fall below the normal-vision separation floor in both modes, and
   red was worth more on "probably broken".
@@ -543,11 +601,11 @@ allowlist. Two exceptions, both deliberate and both listed under Fixed/Changed.
 ### Fixed
 
 - **An action that raised rendered as success.** `run()`'s catch-all set `status`
-  and `message` but no `error` — and Dispatcharr renders `error` (red,
+  and `message` but no `error` - and Dispatcharr renders `error` (red,
   persistent) and `message` (a transient GREEN toast) while rendering `status`
   nowhere. This mattered before any chart existed, because `write_report` catches
   only `OSError`: anything else from `render_html` escapes to the action layer.
-  The three SVG generators are correspondingly total over their inputs — NaN,
+  The three SVG generators are correspondingly total over their inputs - NaN,
   both infinities, `None`, unparseable strings, negatives and zero denominators
   all degrade rather than raise.
 
@@ -571,11 +629,11 @@ allowlist. Two exceptions, both deliberate and both listed under Fixed/Changed.
   `create_or_update_periodic_task` has no `queue` parameter, so the hand-applied
   `queue='dvr'` was destroyed by the next Validate/Build/Summary press.
   `sync_schedule` now re-asserts the queue, and self-heals from `queue=None` on the
-  next click. The AST mutation guard was NOT loosened -- it gained a narrow
+  next click. The AST mutation guard was NOT loosened. It gained a narrow
   `(file, receiver-name)` allowance plus five counter-fixtures proving it cannot
   widen.
 - **A refused notify was recorded as if it had been delivered.** `emit_gate`
-  ignored `notify_fn`'s return, and `notify()` never raises -- it returns False. So
+  ignored `notify_fn`'s return, and `notify()` never raises, it returns False. So
   a critical "usage sensor not trustworthy" that was never spooled still recorded
   `prev_ok=False`, and a later recovery emitted "trustworthy again" for a problem
   the operator was never told about. State now advances only when the emit landed,
@@ -583,8 +641,8 @@ allowlist. Two exceptions, both deliberate and both listed under Fixed/Changed.
 - `_emit_notifications` no longer discards `emit_report`'s bool; it returns
   `{"enabled", "report_emitted", "error"}`, error redacted.
 - **Every failure now sets `error`.** Dispatcharr's plugin card renders `.file`,
-  `.error` (red, persistent) and `message` (a transient GREEN toast) -- `status`
-  renders nowhere -- so metricsarr's failures, including the pre-existing bug-078
+  `.error` (red, persistent) and `message` (a transient GREEN toast), while `status`
+  renders nowhere, so metricsarr's failures, including the pre-existing bug-078
   publish guard, were pixel-identical to success.
 - **`_atomic_write` uses a process-unique temp name.** A fixed `{path}.tmp` let
   two concurrent writers interleave and both `os.replace` it, publishing a torn
@@ -593,18 +651,18 @@ allowlist. Two exceptions, both deliberate and both listed under Fixed/Changed.
 ### Added
 
 - **"Email report now" action** (`email_report_now`). Runs the SAME three steps as
-  the scheduled task -- build, verify it published, emit -- so a manual send is a
+  the scheduled task, which is build, verify it published, then emit, so a manual send is a
   real report, not a re-send of an old file. It deliberately does **not** write
   `last_scheduled_run_ts`: only the scheduled task may, or the button would mask a
   dead scheduler exactly as Newsflasharr's provenance-blind
   `last_attachment_delivered_ts` already does.
-  Success says **"queued for delivery"**, never "sent" -- `notify()` returning True
+  Success says **"queued for delivery"**, never "sent", because `notify()` returning True
   means durably spooled, and delivery happens later on Newsflasharr's retry ladder.
   Failure rows are ordered and all set `error`: nothing published / emit error /
   notifications off / not accepted / collector not ticking. The message also
   discloses that the honesty-gate check ran, since the button can fire a critical
   page as a side effect.
-  **It does NOT prove the SCHEDULE works** -- it runs in the web worker and reads
+  **It does NOT prove the SCHEDULE works.** It runs in the web worker and reads
   the current form state, while the schedule runs on a Celery worker from stored
   settings. That is what `last_scheduled_run_ts` is for.
 - `notify_report.emit_report_result` -> `(ok, reason)`. `emit_report` keeps its
@@ -612,14 +670,14 @@ allowlist. Two exceptions, both deliberate and both listed under Fixed/Changed.
 - **`last_scheduled_run_ts`** (`scheduled_run.json`), written by
   `build_report_task` ONLY and only after the publish guard. Neither Beat's
   `total_run_count` (it counts messages SENT, not executed) nor Newsflasharr's
-  `last_attachment_delivered_ts` (provenance-blind -- a manual send satisfies it
+  `last_attachment_delivered_ts` (provenance-blind, because a manual send satisfies it
   identically) can answer "did the schedule run".
   **On first deploy this reports "the scheduled report has never run" until the
   first scheduled run lands**, since there is no prior record. That is accurate
   here and self-clears.
 - `validate_settings` reports schedule health (missing / disabled / wrong queue /
   never ran) and, when `notify_enabled` is on, a Newsflasharr collector that has
-  stopped ticking -- `notify()` CREATES the spool directory it writes into, so it
+  stopped ticking. `notify()` CREATES the spool directory it writes into, so it
   returns True even when nothing will ever collect the event.
 - ACTION contract tests (metricsarr pinned fields only, and its single action
   assertion was a SUBSET check, so a dropped or renamed action passed).
@@ -632,7 +690,7 @@ allowlist. Two exceptions, both deliberate and both listed under Fixed/Changed.
   summary and honesty-gate alerts to the Newsflasharr plugin, if installed and
   enabled, keyed on the source name `metricsarr`. Routing (which channel, by
   what severity, quiet hours, storm dedup) now lives entirely in Newsflasharr's
-  own settings rather than in a plugin-specific webhook URL/format pair — see
+  own settings rather than in a plugin-specific webhook URL/format pair - see
   the README's "Notifications via Newsflasharr" section. The three
   credential-scrubbing regexes and `redact()` moved out of `webhook.py` into
   their own module, `redaction.py`, unchanged in behavior. `reports.
@@ -650,7 +708,7 @@ Deployed + verified live on Dispatcharr 0.28.0 on 2026-07-20. 334 tests.
 - **A green report run no longer outlives a failed publish (bug-078).** The
   report's counts are computed *before* the write, and `write_report()` never
   raises (it degrades by design, returning `html_path=None` plus an error
-  string) — but neither caller inspected that signal. `_build_report()`
+  string) - but neither caller inspected that signal. `_build_report()`
   hardcoded `status="ok"` and merely appended the error in parentheses, and
   `build_report_task()` discarded the write result entirely and returned the
   counts, which Celery records as SUCCESS like any other return value. The
@@ -662,7 +720,7 @@ Deployed + verified live on Dispatcharr 0.28.0 on 2026-07-20. 334 tests.
   mtime never moving.
 
   The action's status now derives from whether the HTML was actually published,
-  and the scheduled task raises when it wasn't — inside the existing handler, so
+  and the scheduled task raises when it wasn't - inside the existing handler, so
   the message is still redacted and re-raised `from None`, preserving both the
   credential guarantee and Celery's failure/retry semantics. The webhook now
   fires only after a confirmed publish, since its summary links to the report.
@@ -676,9 +734,9 @@ Deployed + verified live on Dispatcharr 0.28.0 on 2026-07-20. 334 tests.
   returned error value read as SUCCESS), one layer down: there an exception was
   swallowed into a return value, here no exception was ever created. **The
   general rule: a green Celery result proves the task returned, not that it
-  accomplished anything — assert on the artifact.**
+  accomplished anything - assert on the artifact.**
 
-## v1.26.1941407 — Phase 1 (July 14, 2026)
+## v1.26.1941407 - Phase 1 (July 14, 2026)
 
 First release. Merged to `master` and **deployed + verified live** on the
 production Dispatcharr container (0.27.2) on 2026-07-14: collector elected
@@ -691,10 +749,10 @@ the real box, not just by the AST guard). 331 tests. Not yet released to the
 Dispatcharr Hub (no GitHub remote / tag / Hub PR).
 
 The **Fixed** and **Improved** sections below are pre-release hardening driven
-by adversarial per-task and whole-branch review during development — not
+by adversarial per-task and whole-branch review during development - not
 changes to previously-shipped behavior. They are recorded because several were
 defects in the design/plan (a clock-jump test that forced watch-qualification
-onto raw wall-clock time and silently discarded genuine watches; a `shutdown()`
+onto raw wall-clock time and silently discarded real watches; a `shutdown()`
 path that let a non-leader wipe `usage.json`; a never-watched ceiling that was
 mathematically unreachable on a real lineup), and the history is worth keeping.
 
@@ -702,12 +760,12 @@ mathematically unreachable on a real lineup), and the history is worth keeping.
 
 - **Critical: the collector never started.** Nothing but `Plugin.run()` ever
   called `ensure_collector()`, and Dispatcharr's settings-save flow never
-  calls `run()` — a user who installed, configured, and walked away collected
+  calls `run()` - a user who installed, configured, and walked away collected
   nothing, forever. `Plugin.__init__` now calls `ensure_collector()` itself
   (matching the platform hook: `apps/plugins/apps.py`'s `ready()` instantiates
   the plugin class in every uWSGI worker), gated the same way as before by a
   cheap procfs check so it's a no-op everywhere except a live uWSGI worker,
-  and stays I/O-free beyond spawning the daemon thread — no settings are read
+  and stays I/O-free beyond spawning the daemon thread - no settings are read
   in the constructor itself.
 - A running collector now picks up a changed setting instead of polling
   forever at a stale cadence. Thread supersession is keyed on
@@ -722,7 +780,7 @@ mathematically unreachable on a real lineup), and the history is worth keeping.
   below any sane threshold on a real box (most channels are excluded by
   policy), so the gate could never fire under any failure; rebasing on the
   judged population alone would make a perfectly healthy household (which can
-  show 80–90% never-watched among the channels it was ever asked to judge)
+  show 80-90% never-watched among the channels it was ever asked to judge)
   trip a 0.60 ceiling permanently, hence the higher default.
 - The default stream profile is now resolved once per report run and used as
   the fallback for a `NULL` `stream_profile` (99.9% of a real lineup), instead
@@ -732,7 +790,7 @@ mathematically unreachable on a real lineup), and the history is worth keeping.
   correctly reported as unobservable instead of silently misreported as
   proxying.
 - The webhook/toast "link to the full report" is now a real clickable URL
-  when the new `report_base_url` setting is configured — previously it was
+  when the new `report_base_url` setting is configured - previously it was
   always a bare path, which Discord renders as inert text.
 - The collector's tick loop now logs (rate-limited) when an exception escapes
   `run_tick` entirely. Previously such a failure was completely invisible: no
@@ -745,8 +803,9 @@ mathematically unreachable on a real lineup), and the history is worth keeping.
   and implicit (`__context__`) chaining.
 - The structural read-only guard (`tests/test_no_mutations.py`) now also
   catches a Django ORM write bound via `with ... as`, the walrus operator,
-  an annotated assignment, or tuple/list-unpack assignment — not just plain
-  assignment and `for` loops — and its raw-SQL detector no longer keys on the
+  an annotated assignment, or an assignment that spreads a tuple or list across
+  several names, not just plain
+  assignment and `for` loops - and its raw-SQL detector no longer keys on the
   literal variable name `cursor` (a rename such as
   `with connection.cursor() as cur:`, the Django-docs idiom, used to slide
   straight past it). Re-verified zero false positives on every legitimate
@@ -755,8 +814,8 @@ mathematically unreachable on a real lineup), and the history is worth keeping.
 ### Improved
 
 - The HTML report now shows a "Last watched" column (channel and group
-  tables) — arguably the single highest-value signal for deciding what to
-  turn off — and the CSV export now formats `last_watched`/`last_tuned` as
+  tables) - arguably the single highest-value signal for deciding what to
+  turn off - and the CSV export now formats `last_watched`/`last_tuned` as
   ISO 8601 instead of a raw epoch float.
 - The "Least used" section now explains itself with a one-line note when it's
   empty because every watched channel already fit inside "Most used", instead
@@ -766,7 +825,7 @@ mathematically unreachable on a real lineup), and the history is worth keeping.
   `reports.EMPTY` now delegate to `sessionizer.bucket_key` /
   `sessionizer._blank_record` instead of duplicating their shape.
 - README: documented that a queryset arriving as a function parameter is a
-  genuine (not evasive) blind spot of the read-only guard, and that the first
+  real (not evasive) blind spot of the read-only guard, and that the first
   ~30 days of reports carrying the "not trustworthy" banner, and ~70% of a
   default lineup being excluded from judgment, are both by design.
 
@@ -778,12 +837,12 @@ mathematically unreachable on a real lineup), and the history is worth keeping.
   retries, and per-poll duration accumulation that stays safe across clock
   jumps and backward NTP steps.
 - Report joining the Dispatcharr channel universe (the ORM) against a sparse
-  usage overlay (`usage.json`) — a channel absent from the overlay is
+  usage overlay (`usage.json`) - a channel absent from the overlay is
   never-watched, the default and expected state, not an error.
-- Self-contained HTML report served at `/logos/metricsarr/report.html` — the
+- Self-contained HTML report served at `/logos/metricsarr/report.html` - the
   same host and port as the Dispatcharr UI you already have open
   (Dispatcharr's own nginx static route), so it's one click, no extra
-  container, no extra port, and it works from a phone or a TV browser — plus
+  container, no extra port, and it works from a phone or a TV browser - plus
   a CSV export to `/config/metricsarr/`, and a Discord/generic-JSON webhook
   nudge with the headline numbers and a link to the report.
 - The "tuned but never qualified" list: channels tried and abandoned inside
@@ -804,7 +863,7 @@ mathematically unreachable on a real lineup), and the history is worth keeping.
   plugin actions to build the report, show a quick summary, send the webhook
   on demand, and validate settings.
 - Structural read-only guard (`tests/test_no_mutations.py`): the build fails
-  on any write-shaped Django ORM call it can prove — `.save()`,
+  on any write-shaped Django ORM call it can prove - `.save()`,
   `.bulk_create()`, `.bulk_update()`, `.get_or_create()`,
   `.update_or_create()`, and the async ORM equivalents are flagged
   unconditionally; `.update()`/`.create()`/`.add()`/`.remove()`/`.set()`/
@@ -813,14 +872,14 @@ mathematically unreachable on a real lineup), and the history is worth keeping.
   a for-loop variable, or a helper function's return value all count, not
   just a literal `Channel.objects...` at the call site); and `.delete()` is
   flagged by default on ANY receiver, with a single narrow exception for the
-  plugin's own Redis client — a guard whose job is proving a negative must
+  plugin's own Redis client - a guard whose job is proving a negative must
   default to "fail", not "pass", on a receiver it cannot classify. The same
   test fails the build on any subprocess/`os.system`/`os.popen`/`os.exec*`/
   `os.spawn*` or bare `ffprobe` call. It does not and cannot see through
   reflection (`getattr(obj, "delete")()`), `eval`/`exec`, or a write issued
   through a driver this guard doesn't know to look for. The Redis-facing
   modules (`collector`, `sessionizer`, `storage`, `gates`, `webhook`) are
-  additionally verified to import no Django, ORM, or Celery code at all, and
+  also verified to import no Django, ORM, or Celery code at all, and
   `gateway.py`/`reports.py`/`plugin.py` are verified to keep every
   Django/ORM/Celery import function-local (module-scope imports break the
   plugin loader) except the one `from celery import shared_task` that

@@ -25,16 +25,20 @@ import base64
 import csv
 import html as html_mod
 import io
+import logging
 import math
 import os
 import time
 
 try:
-    from . import gates, gateway, sessionizer
+    from . import gates, gateway, redaction, sessionizer
 except ImportError:                     # standalone (non-package) import path
     import gates
     import gateway
+    import redaction
     import sessionizer
+
+LOGGER = logging.getLogger(__name__)
 
 # M3: same shape as sessionizer._blank_record(now) (the record a live tick
 # creates), not hand-duplicated -- calling it with now=None gives exactly the
@@ -1357,21 +1361,35 @@ def render_html(model):
 # (CWE-1236). Provider-controlled channel/group names reach this file raw.
 _FORMULA_LEAD_CHARS = ("=", "+", "-", "@")
 
+# The preamble marks every one of its lines with this, and the file tells its
+# reader to skip lines that start with it. A channel genuinely named
+# "#1 Sports HD" is therefore indistinguishable from a preamble line and is
+# DROPPED by any comment-aware import, silently and with no error. Measured
+# 2026-09-05 before this was added: an export of two such channels left only
+# the column header row once comment lines were stripped.
+_COMMENT_LEAD_CHAR = "#"
+
+# One list, so a cell is checked once rather than by two separate rules.
+_UNSAFE_LEAD_CHARS = _FORMULA_LEAD_CHARS + (_COMMENT_LEAD_CHAR,)
+
 
 def _csv_safe(value):
-    """Neutralize CSV formula injection for a single cell.
+    """Neutralize a cell that would be read as something other than data.
+
+    Two hazards, one mitigation. A cell starting with =, +, - or @ is
+    evaluated as a formula by Excel and LibreOffice (CWE-1236). A cell
+    starting with # is read as a preamble comment line and discarded. Both
+    are fixed by the same leading single quote, which those programs render
+    as literal text.
 
     Only strings are touched -- watch_count/hours/tune_count/age_days are
     always int/float here, so a genuinely negative *number* is written
-    unmangled. A string cell (channel name, group, reason) whose content --
-    after stripping ALL leading Unicode whitespace (M9: a bare " \t" strip
-    missed \r and NBSP-prefixed payloads) -- starts with =, +, -, or @ gets
-    a leading single quote, the standard mitigation: Excel/LibreOffice then
-    render it as literal text instead of evaluating it as a formula.
+    unmangled. The check strips ALL leading Unicode whitespace first (M9: a
+    bare " \t" strip missed \r and NBSP-prefixed payloads).
     """
     if not isinstance(value, str):
         return value
-    if value.lstrip().startswith(_FORMULA_LEAD_CHARS):
+    if value.lstrip().startswith(_UNSAFE_LEAD_CHARS):
         return "'" + value
     return value
 
@@ -1393,9 +1411,238 @@ def _iso_utc(ts):
         return ""
 
 
+# The label each setting carries in the settings form, in the order the form
+# shows them. DUPLICATED from plugin.py's FIELDS, for the same reason
+# ISSUES_URL and REPO_URL are: reports.py must not import plugin.py. A test
+# binds every entry back to the field the plugin actually declares, both that
+# the id exists and that the label still matches, so a preamble line cannot end
+# up reading a setting that was never there.
+SETTING_LABELS = {
+    "poll_interval_s": "Poll interval (s)",
+    "min_watch_seconds": "Minimum watch (s)",
+    "client_gap_grace_s": "Client gap grace (s)",
+    "merge_gap_s": "Session merge gap (s)",
+    "unused_threshold_days": "Unused threshold (days)",
+    "recent_window_days": "Cold threshold (days)",
+    "never_watched_ceiling": "Never-watched alarm ceiling",
+    "exclude_auto_created": "Exclude auto-created channels",
+    "exclude_groups": "Excluded groups (comma separated)",
+    "exclude_name_regex": "Excluded name regex",
+    "top_n": "Rows in the Most used and Least used tables",
+    "notify_enabled": "Send notifications to Newsflasharr",
+    "report_schedule": "Scheduled report",
+    "report_retention_days": "Delete saved reports older than (days)",
+}
+
+_BOOLEAN_SETTINGS = ("exclude_auto_created", "notify_enabled")
+
+# The stored schedule value is a bare word; the form offers a longer label
+# carrying the time of day, which is the part a reader of the record wants.
+# DUPLICATED from plugin.py's report_schedule options for the same reason
+# SETTING_LABELS is, and bound back by the same kind of test.
+SCHEDULE_LABELS = {
+    "off": "Off",
+    "daily": "Daily (03:00)",
+    "weekly": "Weekly (Mon 03:00)",
+    "monthly": "Monthly (1st, 03:00)",
+}
+
+_MISSING = "(not recorded)"
+
+
+def _trim_number(value):
+    """`coerce_settings` returns floats, so a whole number reaches the record as
+    120.0, which invites a reader to wonder what the fraction is for. A
+    genuinely fractional value keeps its fraction."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, float):
+        if value != value or value in (float("inf"), float("-inf")):
+            return str(value)
+        if value == int(value):
+            return str(int(value))
+    return str(value)
+
+
+# The exact vocabulary plugin.py's coerce_settings uses for a boolean field.
+# DUPLICATED for the usual reason (reports.py must not import plugin.py) and
+# bound back by a test. It must stay the same list: this record says what the
+# run did, so a record that reads No while the plugin behaved as Yes is worse
+# than no record. Measured 2026-09-05, when the two lists differed: they
+# disagreed on "off", "disabled" and "enabled".
+_FALSE_STRINGS = ("", "false", "0", "no")
+
+
+def _yes_no(value):
+    """Render a stored boolean the way the plugin itself reads it.
+
+    Dispatcharr stores some booleans as the strings true and false, and
+    bool("false") is True because any non-empty string is truthy, so a plain
+    truth test on the stored value reports Yes for the string "false".
+    """
+    if isinstance(value, str):
+        return "No" if value.strip().lower() in _FALSE_STRINGS else "Yes"
+    return "Yes" if value else "No"
+
+
+# Every character str.splitlines() breaks on. A CSV reader only breaks on
+# \r and \n, but a Python consumer stripping comment lines uses splitlines,
+# which also breaks on U+2028 and U+2029 among others, so the two readers
+# would disagree about where the preamble ends. Built from codepoints rather
+# than typed, because a literal one is unreviewable by eye.
+_LINE_BREAKS = tuple(chr(c) for c in (0x0A, 0x0B, 0x0C, 0x0D, 0x1C, 0x1D,
+                                      0x1E, 0x85, 0x2028, 0x2029))
+
+
+def _one_line(text):
+    """Collapse anything that would end a line into a single space.
+
+    Settings arrive unvalidated from the API and two of them are free text
+    the operator typed. A line break inside one ended the comment block
+    early: measured 2026-09-05, a value of "FOO\\nBAR" made "BAR" the first
+    non-comment line, so an importer read BAR as the column header row and
+    the whole export became unreadable, with no error anywhere.
+    """
+    out = str(text)
+    for char in _LINE_BREAKS:
+        out = out.replace(char, " ")
+    return out
+
+
+def _setting_line(key, thresholds):
+    """One preamble line for one setting, as `# Label: value`.
+
+    A number on its own tells the reader nothing about what to change, so the
+    few settings whose value is not self explanatory carry a short note. A
+    setting absent from the record says so rather than printing a blank, which
+    would read as a real, empty configuration.
+    """
+    label = SETTING_LABELS[key]
+    if key not in thresholds:
+        return f"# {label}: {_MISSING}"
+    value = thresholds[key]
+
+    if key in _BOOLEAN_SETTINGS:
+        return f"# {label}: {_yes_no(value)}"
+
+    if key == "never_watched_ceiling":
+        try:
+            # The same percent format spec the rest of this file uses, rather
+            # than multiplying by 100 by hand.
+            percent = f"{float(value):.0%}"
+        except (TypeError, ValueError):
+            return f"# {label}: {_MISSING}"
+        return (f"# {label}: {value} ({percent} of judged channels must look "
+                f"never watched before the report calls the data untrustworthy; "
+                f"a higher number is more tolerant)")
+
+    # `top_n` has no branch of its own on purpose. The generic tail below
+    # already renders it correctly, and it does so BETTER: a stored None or
+    # empty string reads as "(none)" there, where a dedicated branch printed
+    # the literal "None" or an empty value.
+
+    if key == "report_schedule":
+        text = "" if value is None else _one_line(value)
+        named = SCHEDULE_LABELS.get(text)
+        # A value the form no longer offers is printed as it stands rather than
+        # hidden: it is what the run used, and dropping it hides the cause of a
+        # surprise.
+        return f"# {label}: {named or text or '(none)'}"
+
+    if key == "report_retention_days":
+        try:
+            days = int(float(value))
+        except (TypeError, ValueError):
+            days = 0
+        if days <= 0:
+            return f"# {label}: {value} (off, so every saved report is kept)"
+        return f"# {label}: {days} days"
+
+    text = "" if value is None else _one_line(_trim_number(value))
+    if not text.strip():
+        return f"# {label}: (none)"
+    # The exclusion regular expression is free text the operator typed. Nothing
+    # here should carry a credential, but this file is emailed as an
+    # attachment, so anything URL shaped is stripped before it travels.
+    return f"# {label}: {redaction.redact(text)}"
+
+
+def csv_preamble(model):
+    """The commented block above the data, describing the file and the run.
+
+    Everything it reads is optional: `write_report` catches only OSError, so a
+    KeyError raised here would escape all the way to `run()` and turn a
+    successful report into a crash. A missing value reads as not recorded.
+    """
+    model = model or {}
+    counts = model.get("counts") or {}
+    gate = model.get("gate") or {}
+    thresholds = model.get("thresholds") or {}
+
+    def count(key):
+        value = counts.get(key)
+        return _MISSING if value is None else value
+
+    coverage = model.get("coverage")
+    try:
+        # The same percent format spec the rest of this file uses.
+        coverage_text = f"{float(coverage):.0%}"
+    except (TypeError, ValueError):
+        coverage_text = _MISSING
+
+    lines = [
+        "# Dustarr channel usage export",
+        "#",
+        "# This file lists your Dispatcharr channels and records which of them"
+        " were actually",
+        "# watched over the tracking window below. It exists to answer one"
+        " question: what",
+        "# can you safely turn off.",
+        "#",
+        "# EVERY LINE STARTING WITH A HASH IS AN EXPLANATION, NOT DATA. Tell"
+        " your spreadsheet",
+        "# to skip comment lines, or delete them, before importing. The data"
+        " starts at the",
+        "# first line that does not start with a hash, which is the column"
+        " header row.",
+        "#",
+        "# WHAT THIS RUN FOUND",
+        f"# Channels examined: {model.get('total_channels', _MISSING)}",
+        f"# Never watched: {count('never_watched')}",
+        f"# Tuned but never qualified: {count('tuned_never_qualified')}"
+        " (tried and given up on inside the minimum watch time, so these are"
+        " probably broken rather than unwanted)",
+        f"# Watched at least once: {count('watched')}",
+        f"# Too new to judge: {count('too_new')}",
+        f"# Excluded by your settings: {count('excluded')}",
+        f"# Not observable: {count('unobservable')}",
+        "#",
+        "# ABOUT THIS RUN",
+        f"# Built: {_fmt_local(model.get('generated_at'))}",
+        f"# Run mode: {'Scheduled' if model.get('is_scheduled') else 'Manual'}",
+        f"# Tracking since: {_fmt_local(model.get('stats_since'))}",
+        f"# Days tracked: {model.get('tracked_days', _MISSING)}",
+        f"# Coverage: {coverage_text} (the share of the tracking window the"
+        " collector was actually sampling)",
+        f"# Data judged trustworthy: {_yes_no(gate.get('ok'))}",
+        "#",
+        "# THE SETTINGS THIS RUN USED",
+    ]
+    lines.extend(_setting_line(key, thresholds) for key in SETTING_LABELS)
+    lines.append("#")
+    return "\n".join(lines) + "\n"
+
+
 def render_csv(model):
-    """One row per channel across every section, deduplicated by uuid."""
+    """One row per channel across every section, deduplicated by uuid.
+
+    The rows are preceded by a commented preamble saying what the file is, what
+    the run found and what settings it used. Before that preamble existed, a
+    file named report-<stamp>.csv sitting in a folder told a reader nothing at
+    all about which run had produced it or what that run had concluded.
+    """
     buffer = io.StringIO()
+    buffer.write(csv_preamble(model))
     writer = csv.writer(buffer, lineterminator="\n")
     writer.writerow([key for key, _ in _COLUMNS] + ["uuid", "last_watched",
                                                     "last_tuned"])
@@ -1437,14 +1684,41 @@ def _atomic_write(path, text):
 ARCHIVE_KEEP = 8
 
 
+def _matching_files(dirpath, prefix, suffix):
+    """The names in `dirpath` belonging to one dated archive stream.
+
+    ONE definition of "this file is ours", used by both pruning passes below.
+    They were written separately and each carried its own copy of the
+    startswith/endswith pair, so a change to the naming convention had to be
+    made in two places that must agree or files stop being matched. Returns an
+    empty list rather than raising when the directory cannot be read.
+
+    Both halves of the pair are load-bearing. The prefix keeps the sweep off
+    the live `report.html`, which carries no stamp, and off any other plugin's
+    files if this directory is ever shared. The suffix keeps the HTML stream
+    and the CSV stream apart, since they differ only in that.
+    """
+    try:
+        return [n for n in os.listdir(dirpath)
+                if n.startswith(prefix) and n.endswith(suffix)]
+    except OSError:
+        return []
+
+
 def _prune_archives(dirpath, prefix, suffix, keep=ARCHIVE_KEEP):
     """Bound the report-<stamp>.* archive stream (unbounded since Phase 1;
     spec F3). Filename sort IS chronological (stamp is %Y%m%d-%H%M%S).
-    Never raises; never matches the live report.html (prefix 'report-')."""
-    try:
-        names = sorted(n for n in os.listdir(dirpath)
-                       if n.startswith(prefix) and n.endswith(suffix))
-    except OSError:
+    Never raises; never matches the live report.html (prefix 'report-').
+
+    This is the COUNT cap and it orders by filename. `prune_aged` below is the
+    separate AGE rule and it orders by modification time. They are kept apart
+    deliberately: they answer different questions and rank files by different
+    keys, so merging them would mean picking one ranking and changing what the
+    other one does. What they DO share, the definition of which files belong
+    to this stream, is now `_matching_files`.
+    """
+    names = sorted(_matching_files(dirpath, prefix, suffix))
+    if not names:
         return
     for name in names[:-keep] if keep > 0 else names:
         try:
@@ -1453,7 +1727,106 @@ def _prune_archives(dirpath, prefix, suffix, keep=ARCHIVE_KEEP):
             pass
 
 
-def write_report(model, report_dir, csv_dir, now):
+SECONDS_PER_DAY = 86400.0
+
+
+def aged_files_to_delete(entries, retention_days, now, prefix, suffix, protect=None):
+    """Which of one dated archive stream's files are old enough to remove.
+
+    This half is pure: `entries` is a sequence of (filename, modification time)
+    pairs, normally everything in the report directory, and the return is the
+    names to delete, sorted. It touches no filesystem, which is where the tests
+    for the rules below live.
+
+    The modification time is used rather than the timestamp inside the
+    filename, which can be malformed or absent on a file somebody dropped in by
+    hand.
+
+    Five rules, each with its own test in tests/test_report_retention.py:
+
+    * Off unless configured. Zero, negative, blank, absent and unparseable all
+      mean delete nothing, so nobody loses a file merely by upgrading.
+    * Only this stream's files. `prefix` and `suffix` must BOTH match. The
+      report directory holds two dated streams that share the `report-` prefix
+      and differ only in suffix, and the live `report.html` carries no stamp at
+      all, so it fails the prefix test and is never swept. The same pairing is
+      what keeps a sweep off another plugin's files in a shared export
+      directory.
+    * Never the file just written. `protect` is excluded whatever the age
+      arithmetic says, and it takes the survivor slot when it is present.
+    * At least one file always survives. If every file is old, the newest is
+      kept, so a small retention number cannot empty the directory.
+    * A modification time that is not a number is skipped entirely. Keeping it
+      is worse than dropping it: every comparison against NaN is false, so it
+      wins the "which is newest" test, becomes the survivor, and every real
+      file is deleted instead of one being kept.
+
+    The comparison is strict. A file exactly N days old is not older than N
+    days.
+    """
+    try:
+        days = int(retention_days)
+    except (TypeError, ValueError, OverflowError):
+        return []
+    if days <= 0:
+        return []
+
+    mine = []
+    for name, mtime in entries:
+        if not (name.startswith(prefix) and name.endswith(suffix)):
+            continue
+        try:
+            stamp = float(mtime)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if stamp != stamp:      # NaN: the age is unknowable, so do not rank it
+            continue
+        mine.append((name, stamp))
+    if not mine:
+        return []
+
+    survivor = protect if any(name == protect for name, _ in mine) else None
+    if survivor is None:
+        # The name breaks a modification-time tie so the choice is stable.
+        survivor = max(mine, key=lambda pair: (pair[1], pair[0]))[0]
+
+    cutoff = float(now) - days * SECONDS_PER_DAY
+    return sorted(name for name, stamp in mine
+                  if stamp < cutoff and name != survivor)
+
+
+def prune_aged(dirpath, prefix, suffix, retention_days, now, protect=None):
+    """Delete one dated archive stream's files older than retention_days.
+
+    The thin half: list the directory, ask `aged_files_to_delete` what to
+    remove, remove it. Returns how many were deleted.
+
+    NEVER raises. This runs immediately after a successful export, and a
+    failure to tidy up must not turn that export into a reported error.
+    """
+    entries = []
+    for name in _matching_files(dirpath, prefix, suffix):
+        try:
+            entries.append((name, os.path.getmtime(os.path.join(dirpath, name))))
+        except OSError:
+            # It vanished between the listing and the question, so there is
+            # nothing left to delete.
+            continue
+
+    removed = 0
+    for name in aged_files_to_delete(entries, retention_days, now, prefix,
+                                     suffix, protect):
+        try:
+            os.remove(os.path.join(dirpath, name))
+            removed += 1
+            LOGGER.info("Deleted report archive older than %s days: %s",
+                        retention_days, name)
+        except OSError as exc:
+            LOGGER.warning("Could not delete old report archive %s: %s", name, exc)
+    return removed
+
+
+def write_report(model, report_dir, csv_dir, now, retention_days=0):
     """Write the HTML report + CSV. Never raises (M-global: I/O must degrade).
 
     The HTML report is the product; the CSV is a convenience export. If the
@@ -1493,6 +1866,13 @@ def write_report(model, report_dir, csv_dir, now):
         _atomic_write(archive_path, html)
         out["archive_path"] = archive_path
         _prune_archives(report_dir, "report-", ".html")
+        # Age-based cleanup runs at the single point where a file is written,
+        # so it covers the manual button and the scheduled build alike and the
+        # directory stays bounded at all times. A separate scheduled job would
+        # need its own leader election and duplicate-fire handling for no gain,
+        # because nothing accumulates unless an export happens.
+        prune_aged(report_dir, "report-", ".html", retention_days, now,
+                   os.path.basename(archive_path))
     except OSError as exc:
         # Same degrade-not-fail contract as the CSV block below.
         out["error"] = f"archive write failed: {exc}"
@@ -1503,6 +1883,8 @@ def write_report(model, report_dir, csv_dir, now):
         _atomic_write(csv_path, render_csv(model))
         out["csv_path"] = csv_path
         _prune_archives(csv_dir, "report-", ".csv")
+        prune_aged(csv_dir, "report-", ".csv", retention_days, now,
+                   os.path.basename(csv_path))
     except OSError as exc:
         # The HTML report is the product; a failed CSV must degrade, not
         # raise. Joined rather than assigned so a same-run archive failure

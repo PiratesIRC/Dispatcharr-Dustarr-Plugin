@@ -5,7 +5,7 @@ import re
 import time
 
 import pytest
-from conftest import NOW, SETTINGS, load_plugin, model
+from conftest import NOW, SETTINGS, csv_data, load_plugin, model
 
 load_plugin()
 
@@ -129,7 +129,7 @@ def test_no_exclusion_note_when_nothing_watched_is_excluded(rp, gw):
 
 def test_csv_has_one_row_per_channel_with_a_reason(rp, gw):
     text = rp.render_csv(model(rp, gw, n=5, watched=2))
-    rows = list(csv.DictReader(io.StringIO(text)))
+    rows = list(csv.DictReader(csv_data(text)))
     assert len(rows) == 5
     assert {"uuid", "name", "group", "watch_count", "hours", "reason"} <= set(rows[0])
     assert {r["reason"] for r in rows} == {"watched", "never_watched"}
@@ -238,7 +238,7 @@ def test_csv_last_watched_and_last_tuned_are_iso8601_not_raw_epoch(rp, gw):
              "meta": {"stats_since": NOW - 40 * 86400, "coverage": {}}}
     built = rp.build_model(rows, usage, SETTINGS, NOW)
     text = rp.render_csv(built)
-    row = next(csv.DictReader(io.StringIO(text)))
+    row = next(csv.DictReader(csv_data(text)))
     assert row["last_watched"] == time.strftime("%Y-%m-%dT%H:%M:%SZ",
                                                 time.gmtime(NOW - 3600))
     assert row["last_tuned"] == time.strftime("%Y-%m-%dT%H:%M:%SZ",
@@ -248,7 +248,7 @@ def test_csv_last_watched_and_last_tuned_are_iso8601_not_raw_epoch(rp, gw):
 
 def test_csv_blank_last_watched_stays_blank_not_a_bogus_epoch_date(rp, gw):
     text = rp.render_csv(model(rp, gw, n=3, watched=0))
-    row = next(csv.DictReader(io.StringIO(text)))
+    row = next(csv.DictReader(csv_data(text)))
     assert row["last_watched"] == ""
 
 
@@ -287,7 +287,7 @@ def test_a_cold_channel_outside_both_ranking_slices_appears_in_the_csv(rp, gw):
     assert "u0" in {e["uuid"] for e in built["cold_abandoned"]}
 
     text = rp.render_csv(built)
-    uuids = {row["uuid"] for row in csv.DictReader(io.StringIO(text))}
+    uuids = {row["uuid"] for row in csv.DictReader(csv_data(text))}
     assert "u0" in uuids
 
 
@@ -330,7 +330,7 @@ def _model_with_channel_name(rp, gw, name):
 @pytest.mark.parametrize("payload", _FORMULA_PAYLOADS)
 def test_csv_neutralizes_formula_injection_in_channel_name(rp, gw, payload):
     text = rp.render_csv(_model_with_channel_name(rp, gw, payload))
-    row = next(csv.DictReader(io.StringIO(text)))
+    row = next(csv.DictReader(csv_data(text)))
     # Neutralized: a leading single quote defeats Excel/LibreOffice formula
     # evaluation while keeping the text visible.
     assert row["name"] == "'" + payload
@@ -343,13 +343,13 @@ def test_csv_neutralizes_formula_injection_in_group_name(rp, gw, payload):
                           proxying=True)]
     usage = {"channels": {}, "meta": {"stats_since": NOW - 40 * 86400, "coverage": {}}}
     text = rp.render_csv(rp.build_model(rows, usage, SETTINGS, NOW))
-    row = next(csv.DictReader(io.StringIO(text)))
+    row = next(csv.DictReader(csv_data(text)))
     assert row["group"] == "'" + payload
 
 
 def test_csv_leaves_ordinary_channel_names_untouched(rp, gw):
     text = rp.render_csv(_model_with_channel_name(rp, gw, "BBC 1 FHD"))
-    row = next(csv.DictReader(io.StringIO(text)))
+    row = next(csv.DictReader(csv_data(text)))
     assert row["name"] == "BBC 1 FHD"
 
 
@@ -364,7 +364,7 @@ def test_csv_does_not_mangle_negative_numbers_in_numeric_columns(rp, gw):
     built = rp.build_model(rows, usage, SETTINGS, NOW)
     assert built["never_watched"][0]["age_days"] < 0
     text = rp.render_csv(built)
-    row = next(csv.DictReader(io.StringIO(text)))
+    row = next(csv.DictReader(csv_data(text)))
     assert row["age_days"] == str(built["never_watched"][0]["age_days"])
     assert not row["age_days"].startswith("'")
 
@@ -597,7 +597,8 @@ def test_a_full_size_report_stays_under_the_attachment_ceiling(rp, gw):
 
 def test_the_csv_carries_the_recency_columns(rp, gw):
     csv_text = rp.render_csv(model(rp, gw))
-    header = csv_text.splitlines()[0]
+    header = next(line for line in csv_text.splitlines()
+                  if not line.startswith("#"))
     assert "days_since_watched" in header
     assert "avg_session_minutes" in header
 

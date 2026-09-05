@@ -116,8 +116,8 @@ thread all produce a perfectly formatted report claiming every channel is dead.
 | Path | What |
 |---|---|
 | `/config/dustarr/report.html` | The latest report. Self contained: no external stylesheet, script, font or image. |
-| `/config/dustarr/report-<timestamp>.html` | The same report kept as a dated archive. The last eight are retained. |
-| `/config/dustarr/report-<timestamp>.csv` | The same data as CSV, for a spreadsheet. The last eight are retained. |
+| `/config/dustarr/report-<timestamp>.html` | The same report kept as a dated archive. The newest eight are kept whatever their age, and older ones are also deleted if you set a retention in days. |
+| `/config/dustarr/report-<timestamp>.csv` | The same data as CSV, for a spreadsheet, with a commented preamble above the rows saying what the file is and what the run found. The newest eight are kept whatever their age, and older ones are also deleted if you set a retention in days. |
 | `/data/dustarr/usage.json` | The recorded usage. This is the irreplaceable file: delete it and the tracking window restarts from zero. |
 | `/data/dustarr/report_count.json` | The running total of reports written. |
 | `/data/dustarr/scheduled_run.json` | When the scheduled report last actually ran. |
@@ -136,7 +136,7 @@ your household watches.
 
 Every setting lives on the plugin's card in Dispatcharr's **Plugins** page.
 
-### Collection
+### How watching is measured
 
 These four change how watching is recorded. Changing any of them restarts the
 collector, which discards any watch session in progress at that moment.
@@ -145,10 +145,10 @@ collector, which discards any watch session in progress at that moment.
 |---|---|---|
 | **Poll interval (s)** | 15 | How often the collector samples Redis. Accepts 5 to 25. It has to stay below Dispatcharr's 30 second live channel metadata timeout, or a fast channel change can happen entirely between two samples and never be seen. |
 | **Minimum watch (s)** | 120 | The line between a recorded watch and a channel surf. A session shorter than this is still recorded, as a tune, which is what feeds the "tuned but never qualified" list. |
-| **Client gap grace (s)** | 90 | How long a player may report zero clients, during a reconnect or a retry, before the session is treated as finished. Real retry gaps exceed 40 seconds, so a shorter value splits one genuine watch into several. |
+| **Client gap grace (s)** | 90 | How long a player may report zero clients, during a reconnect or a retry, before the session is treated as finished. Real retry gaps exceed 40 seconds, so a shorter value splits one real watch into several. |
 | **Session merge gap (s)** | 120 | A channel tuned again within this window continues the same watch rather than starting a new one. |
 
-### Judgment
+### When a channel counts as unused
 
 These change how the report reads the recorded data. Changing them does not
 restart the collector and does not affect anything already recorded.
@@ -157,10 +157,9 @@ restart the collector and does not affect anything already recorded.
 |---|---|---|
 | **Unused threshold (days)** | 30 | How old a channel has to be before it can fairly be called unused. Channels younger than this are listed as too new to judge instead. |
 | **Cold threshold (days)** | 30 | How long an absence counts as cold, for the "channels going cold" list. The minimum is 7 rather than 1, because a watch is recorded only when the session ends: a channel that has been streaming continuously for longer than the window has no recent watch on record while it is still on screen. |
-| **Top/bottom N** | 20 | How many entries the most used and least used lists carry. |
 | **Never-watched alarm ceiling** | 0.98 | The share of judged channels that must look never watched before the data itself is treated as untrustworthy. Judged means never watched plus too new plus tuned but never qualified plus watched; excluded and unobservable channels are not counted. It is deliberately high, because a normal household shows 80 to 90 percent never watched among the channels it was ever asked to judge. It only fires on the shape where essentially every judged channel looks dead. |
 
-### Exclusions
+### Channels that are never judged
 
 Some channels look unused but are not, so they are kept out of the never watched
 judgment. They still appear in the report, in the excluded section.
@@ -168,7 +167,7 @@ judgment. They still appear in the report, in the excluded section.
 | Setting | Default | What it does |
 |---|---|---|
 | **Exclude auto-created channels** | on | Protects pay per view and live event slots, which sit idle between events, and which an M3U sync renames in place, so a slot that idled on "NO EVENT" for a month would otherwise read as permanently dead. |
-| **Excluded groups** | `US: PPV, US: STL, US: News, US: NBC, US: ABC, US: CBS, US: FOX, US: Sports` | Comma separated group names that are never judged unused. Local and over the air news is the emergency broadcast tier and is supposed to sit unused. Sports has a legitimate off season. |
+| **Excluded groups (comma separated)** | `US: PPV, US: STL, US: News, US: NBC, US: ABC, US: CBS, US: FOX, US: Sports` | Comma separated group names that are never judged unused. Local and over the air news is the emergency broadcast tier and is supposed to sit unused. Sports has a legitimate off season. |
 | **Excluded name regex** | `(?i)(LIVE EVENT|PPV|NO EVENT|24/7)` | A regular expression matched against the channel name. Anything matching is never judged unused. |
 
 A channel whose stream profile is not proxying, for example one set to Redirect,
@@ -176,12 +175,14 @@ never writes the Redis keys the collector reads, so Dustarr cannot see it at
 all. Those are reported separately as unobservable rather than being counted as
 never watched. This is decided from the profile's structure, not from its name.
 
-### Output
+### The report, and what happens to it
 
 | Setting | Default | What it does |
 |---|---|---|
+| **Rows in the Most used and Least used tables** | 20 | How many entries each of the two ranking lists carries. It changes the report only, never what is collected or how a channel is judged. |
 | **Send notifications to Newsflasharr** | off | Hands the report summary and any honesty gate alerts to the Newsflasharr plugin. See [emailing the report](#emailing-the-report). |
 | **Scheduled report** | Weekly (Mon 03:00) | Off, daily at 03:00, weekly on Monday at 03:00, or monthly on the first at 03:00. Times are in Dispatcharr's own system timezone, not UTC. |
+| **Delete saved reports older than (days)** | 0 | Housekeeping for the dated copies in the config folder. After each report is built, this plugin's own `report-<stamp>.html` and `report-<stamp>.csv` files older than this many days are deleted. 0 is off, so nothing is removed unless you ask for it. The report just written is never deleted, at least one file of each kind always survives, and the live `report.html` is never touched. This sits on top of an existing cap that keeps only the newest eight of each kind whatever their age, so the two together bound the folder both ways. |
 
 ## Actions reference
 

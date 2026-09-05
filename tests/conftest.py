@@ -436,3 +436,49 @@ def rp():
 @pytest.fixture()
 def gw():
     return sys.modules["dustarr_under_test.gateway"]
+
+
+def csv_data(text):
+    """The CSV export's data rows, with the commented preamble removed.
+
+    `render_csv` writes a commented block above the column header row saying
+    what the file is, what the run found and what settings it used. A
+    spreadsheet is told to skip those lines on import, and a test reading the
+    rows has to do the same. Returns a file-like object ready for csv.reader
+    or csv.DictReader.
+    """
+    import io as _io
+    return _io.StringIO("\n".join(line for line in text.splitlines()
+                                  if not line.startswith("#")))
+
+
+# Characters that must never appear in text this plugin shows the operator or
+# writes to a file. Kept here rather than in each test file because the same
+# list was pasted into two of them, and the workspace notes track this set:
+# adding a lookalike character should mean editing ONE place.
+#
+#   zero width space/non-joiner/joiner, word joiner, byte order mark,
+#   soft hyphen, no-break space, line separator, paragraph separator,
+#   and the replacement character, which is the marker that a scripted edit
+#   mangled the text rather than a character anyone typed.
+#
+# Written as codepoints, never as literals: a literal one is unreviewable by
+# eye and a formatter can delete it silently.
+INVISIBLE_CODEPOINTS = frozenset({0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF,
+                                  0x00AD, 0x00A0, 0x2028, 0x2029, 0xFFFD})
+
+
+def find_invisible(text):
+    """The invisible characters in `text`, as hex codepoints, sorted.
+
+    Scans the WHOLE string on purpose: str.splitlines() SPLITS on U+2028 and
+    U+2029, so a line by line search reports clean for exactly the two
+    characters most likely to cause trouble.
+    """
+    return sorted({hex(ord(c)) for c in (text or "")
+                   if ord(c) in INVISIBLE_CODEPOINTS})
+
+
+def find_non_ascii(text):
+    """The characters outside ASCII in `text`, as hex codepoints, sorted."""
+    return sorted({hex(ord(c)) for c in (text or "") if ord(c) > 127})
