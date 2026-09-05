@@ -16,14 +16,28 @@
 # report a clean result it could not compute. A silent pass here would look
 # exactly like a genuinely clean tree.
 #
-# Secrets are not available to a pull request opened from a fork, so that case
-# fails rather than passing quietly. This repository has a single maintainer who
-# pushes directly, so no real workflow is blocked by it. Revisit if that changes.
+# GitHub does not give repository secrets to a pull request opened from a fork,
+# nor to one opened by Dependabot, which has its own separate secret store. So
+# on those runs the deny list CANNOT be present, and failing there says nothing
+# about the code: it reports the absence of a secret, every time, forever.
 #
-# This repository is PRIVATE today. That is not a reason to skip the scan: a
-# repository can be flipped to public in two clicks, a collaborator can be added
-# at any time, and the tree is also the source of any release archive. The audit
-# is about what the tree WOULD publish, not about who can read it right now.
+# That was the behaviour until 2026-09-05 and it was actively harmful. All five
+# open Dependabot pull requests carried a red audit check for a reason unrelated
+# to their content, which is how a person learns to stop reading a red audit.
+# Now such a run SKIPS with a notice instead, and only when the secret is
+# genuinely empty AND the event is a pull request.
+#
+# THE GUARANTEE THAT MATTERS IS UNCHANGED: nothing reaches master unaudited.
+# Merging any pull request produces a push to master, and the push trigger below
+# always has the secret and still fails hard without it. A fork's content is not
+# published by opening a pull request; it is published by merging one, and that
+# merge is audited. A push that cannot find the deny list is still an error.
+#
+# This repository is PUBLIC (since 2026-08-25). It was private when this file
+# was written and the comment here still said so, which was wrong for eleven
+# days. Being public raises the stakes but does not change the rule: the audit
+# is about what the tree WOULD publish, and the tree is also the source of every
+# release archive.
 #
 # The push trigger is load bearing. The maintainer pushes to master directly, so
 # a pull-request-only trigger would leave every direct push unaudited. That
@@ -57,8 +71,35 @@ jobs:
         with:
           python-version: "3.12"
 
+      # Deliberately a plain `if`, with no pipeline. `cmd | grep -q PATTERN`
+      # under `set -o pipefail` reports "no match" when there IS one, because
+      # grep exits on its first hit and its feeder dies with 141. That has
+      # already disabled a security gate in this workspace once, and this step
+      # decides whether a security scan runs at all.
+      #
+      # It tests only whether the value is EMPTY. It never echoes it: the deny
+      # list names the exact strings it exists to keep out, and this
+      # repository's Actions logs are public.
+      - name: Decide whether the deny list can be present at all
+        id: rules
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ -n "${PUBLISH_AUDIT_RULES}" ]; then
+            echo "run_scan=true" >> "$GITHUB_OUTPUT"
+            echo "The deny list is present. The scan will run."
+          elif [ "${EVENT_NAME}" = "pull_request" ]; then
+            echo "run_scan=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Publish audit skipped::No deny list is reachable from this pull request, because GitHub withholds repository secrets from fork and Dependabot pull requests. This says nothing about the changes. The audit runs in full when the change is pushed to master, which is what merging does."
+          else
+            echo "No deny list on a ${EVENT_NAME} run. The deny list is the half that catches real leaks in this repository, so an absent one is an error rather than a reason to skip the scan. Set the PUBLISH_AUDIT_RULES repository secret." >&2
+            exit 1
+          fi
+
       - name: Check the deny list is present and parses
+        if: steps.rules.outputs.run_scan == 'true'
         run: python .github/scripts/check_audit_rules.py
 
       - name: Scan the tree against the deny list
+        if: steps.rules.outputs.run_scan == 'true'
         run: python .github/scripts/scan_tree.py
