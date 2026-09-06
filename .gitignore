@@ -26,3 +26,5 @@ docs/CLAUDE-HISTORY.md
 # git coverage at all.
 docs/CLAUDE-PROMPT-*.md
 docs/superpowers/
+# release build output (build_release_zip.py, CI release job)
+dist/

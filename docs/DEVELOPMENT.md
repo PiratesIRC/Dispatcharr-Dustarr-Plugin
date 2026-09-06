@@ -107,9 +107,9 @@ does the same work without touching that timestamp.
 ## Publishing
 
 Run the workspace publish audit before any push. A second, narrower scan runs
-automatically in CI on every push to `master`
-(`.github/workflows/publish-audit.yml`), applying a repository-specific deny
-list. That deny list is the half that catches real problems, because a provider
+automatically in CI on every push to `master`, as the `publish-audit` job in
+`.github/workflows/ci.yml` (`.github/scripts/publish_audit_ci.py`), applying a
+repository-specific deny list. That deny list is the half that catches real problems, because a provider
 hostname and a local network prefix look like ordinary words to a generic
 scanner.
 
@@ -117,8 +117,9 @@ scanner.
 exact strings it exists to keep out. Each pattern is written with a single
 character class so the rules do not match themselves while scanning, and that
 defeats the scanner but not a person reading the file, so committing it would
-publish everything it protects. The rules come from one of two places, and
-`.github/scripts/audit_rules.py` is what loads them:
+publish everything it protects. The rules come from one of two places; the CI job reads the `PUBLISH_AUDIT_RULES`
+secret, and `.github/scripts/audit_rules.py` (kept for the local tests) documents
+the same loading order:
 
 | Where | Used by | Notes |
 |---|---|---|
