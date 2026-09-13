@@ -92,7 +92,9 @@ installation has successfully written. It counts reports that reached the disk,
 not times a button was pressed, so a build that failed to write does not
 increment it. The same number is in `/data/dustarr/report_count.json` for
 another tool to read. If it is missing or unreadable the chip does not render at
-all, because a counter must never invent activity.
+all, because a counter must never invent activity. On the maintainer's own
+installation this number also feeds the **Reports Built** badge on the project
+README; your installation's count stays on your machine.
 
 ### The honesty banner
 

@@ -106,6 +106,17 @@ does the same work without touching that timestamp.
 
 ## Publishing
 
+**The Reports Built badge on the README** is refreshed by
+`scripts/update_reports_built_badge.py`, which reads
+`/data/dustarr/report_count.json` from the running container and writes a
+Shields.io endpoint document to the Gist whose id is committed in
+`scripts/.reports_built_badge_gist`. `scripts/update_reports_built_badge.ps1`
+wraps it for a Windows scheduled task and logs to the gitignored `dist/`.
+`tests/test_badge_script.py` binds the id file, the Gist filename and the README
+line together, because renaming any one of them breaks the badge with no error.
+Run it with `--dry-run` to see what would be published; `--create` is a one-time
+setup that makes a new Gist and records its id.
+
 Run the workspace publish audit before any push. A second, narrower scan runs
 automatically in CI on every push to `master`, as the `publish-audit` job in
 `.github/workflows/ci.yml` (`.github/scripts/publish_audit_ci.py`), applying a
