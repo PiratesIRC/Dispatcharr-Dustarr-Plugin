@@ -12,10 +12,10 @@ A Dispatcharr plugin that records which channels are actually watched, and repor
 [![Workflow Guide](https://img.shields.io/badge/%F0%9F%93%96-Workflow_Guide-1F6FEB?style=flat)](https://piratesirc.github.io/Dispatcharr-Plugin-Workflow/)
 [![Discord](https://img.shields.io/badge/Discord-Discussion-5865F2?logo=discord&logoColor=white)](https://discord.com/channels/1340492560220684331/1542141054080524310)
 [![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/PiratesIRC)
-[![Reports Built](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/PiratesIRC/b7116c2e44b8250a4995dfe1836da70b/raw/dustarr-reports-built.json)](#what-it-does)
 
 [![GitHub Release](https://img.shields.io/github/v/release/PiratesIRC/Dispatcharr-Dustarr-Plugin?include_prereleases&logo=github)](https://github.com/PiratesIRC/Dispatcharr-Dustarr-Plugin/releases)
 [![Downloads](https://img.shields.io/github/downloads/PiratesIRC/Dispatcharr-Dustarr-Plugin/total?color=success&label=Downloads&logo=github)](https://github.com/PiratesIRC/Dispatcharr-Dustarr-Plugin/releases)
+[![Reports Built](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/PiratesIRC/b7116c2e44b8250a4995dfe1836da70b/raw/dustarr-reports-built.json)](#what-it-does)
 [![Stars](https://img.shields.io/github/stars/PiratesIRC/Dispatcharr-Dustarr-Plugin?logo=github)](https://github.com/PiratesIRC/Dispatcharr-Dustarr-Plugin/stargazers)
 
 ![Top Language](https://img.shields.io/github/languages/top/PiratesIRC/Dispatcharr-Dustarr-Plugin)
