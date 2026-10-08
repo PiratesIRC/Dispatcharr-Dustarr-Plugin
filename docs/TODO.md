@@ -126,19 +126,20 @@ scheduled.
 
 ## Verification
 
-- **The publish audit's new skip path has NOT been seen on a real pull request,
-  measured 2026-09-05.** The workflow used to fail on every Dependabot pull
+- **The publish audit's pull-request skip path is CONFIRMED (2026-10-01); the
+  push-fails-hard path is not.** The workflow used to fail on every Dependabot pull
   request, because GitHub withholds repository secrets from those and the audit
   scripts fail closed when the deny list is absent. It now skips with a notice,
   and only when the value is empty and the event is a pull request.
 
   All five branches of that decision were exercised locally, and a manual run on
   the real runner confirmed the scan still executes when the secret IS present:
-  7 deny and 11 allow rules compiled, 69 files scanned, no findings. What has
-  not been observed is the skip itself, because no fork or Dependabot pull
-  request has been open since. **The next Dependabot update is its first real
-  test. Check that it reports a skip rather than a pass, and that a push to the
-  default branch still fails hard when the deny list is missing.**
+  7 deny and 11 allow rules compiled, 69 files scanned, no findings. **The skip
+  itself was observed 2026-10-01** on Dependabot pull request #6 (run
+  `36931101939`, the `publish-audit` job inside `ci.yml` logged the "No deny
+  list is reachable" notice). **Still open: a push to the default branch that
+  cannot reach the deny list has never been observed failing hard on the
+  runner.**
 
 - **The scheduled report is confirmed running, measured 2026-08-24.** This was
   open for a month: a schedule row deleted by a plugin reload had cost two
