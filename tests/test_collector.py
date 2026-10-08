@@ -5,6 +5,16 @@ THRESHOLDS = {"min_watch_seconds": 120.0, "client_gap_grace_s": 90.0,
               "merge_gap_s": 120.0, "poll_interval_s": 15.0}
 
 
+# Channel keys must carry canonical hyphenated UUIDs (see uuid_from_key), so the
+# fake channels use UUIDs; the short names survive only as these constants.
+U1 = "00000000-0000-4000-8000-000000000001"
+U2 = "00000000-0000-4000-8000-000000000002"
+
+
+def chan_uuid(i):
+    return f"00000000-0000-4000-8000-{i:012d}"
+
+
 @pytest.fixture()
 def col_mod():
     return load_pure("collector")
@@ -117,7 +127,7 @@ def test_follower_never_writes_usage_json(col_mod, sess_mod, storage_mod,
     leader.tick(fake_clock.wall())
     col = make_collector(col_mod, sess_mod, storage_mod, fake_redis, fake_clock,
                          tmp_path, token="me")
-    fake_redis.open_channel("u1", clients=1)
+    fake_redis.open_channel(U1, clients=1)
     for _ in range(10):
         leader.tick(fake_clock.wall())
         col.run_tick()
@@ -139,15 +149,15 @@ def test_leader_samples_and_flushes(col_mod, sess_mod, storage_mod, fake_redis,
         # models Dispatcharr's real 30s TTL, refreshed by Dispatcharr every
         # second in production). Re-arm it every poll or the fake channel
         # "goes dark" after 30s and the session never accrues 180s.
-        fake_redis.open_channel("u1", clients=1)
+        fake_redis.open_channel(U1, clients=1)
         col.run_tick()
         fake_clock.advance(15)
-    fake_redis.close_channel("u1")
+    fake_redis.close_channel(U1)
     for _ in range(20):                        # drain the grace + merge window
         col.run_tick()
         fake_clock.advance(15)
     data = storage_mod.Storage(str(tmp_path)).load(fake_clock.wall())
-    assert data["channels"]["u1"]["watch_count"] == 1
+    assert data["channels"][U1]["watch_count"] == 1
     assert data["meta"]["stats_since"] > 0
 
 
@@ -158,7 +168,7 @@ def test_presence_set_comes_from_the_full_scan(col_mod, sess_mod, storage_mod,
     col = make_collector(col_mod, sess_mod, storage_mod, fake_redis, fake_clock,
                          tmp_path)
     for i in range(40):
-        fake_redis.open_channel(f"u{i}", clients=1)
+        fake_redis.open_channel(chan_uuid(i), clients=1)
     col.run_tick()
     assert col.stats["channels_seen"] == 40
     assert len(col.sessionizer.open_sessions) == 40
@@ -168,7 +178,7 @@ def test_losing_leadership_drops_open_sessions(col_mod, sess_mod, storage_mod,
                                                fake_redis, fake_clock, tmp_path):
     col = make_collector(col_mod, sess_mod, storage_mod, fake_redis, fake_clock,
                          tmp_path, token="me")
-    fake_redis.open_channel("u1", clients=1)
+    fake_redis.open_channel(U1, clients=1)
     col.run_tick()
     assert col.sessionizer.open_sessions
     # Another worker steals the lease (ours expired while we were stalled).
@@ -319,7 +329,7 @@ def test_follower_shutdown_does_not_wipe_usage_json_when_lease_is_free(
     leader" just in time to overwrite a real recorded watch with its own
     never-loaded empty state."""
     store = storage_mod.Storage(str(tmp_path))
-    store.write({"channels": {"u1": {"watch_count": 1, "watch_seconds": 500.0,
+    store.write({"channels": {U1: {"watch_count": 1, "watch_seconds": 500.0,
                                       "tune_count": 1, "last_watched": 100.0,
                                       "last_tuned": 100.0, "first_seen": 50.0}},
                  "meta": {"stats_since": 50.0}}, 100.0)
@@ -330,7 +340,7 @@ def test_follower_shutdown_does_not_wipe_usage_json_when_lease_is_free(
     col.shutdown()
 
     data = storage_mod.Storage(str(tmp_path)).load(fake_clock.wall())
-    assert data["channels"]["u1"]["watch_count"] == 1   # must NOT have been wiped
+    assert data["channels"][U1]["watch_count"] == 1   # must NOT have been wiped
     assert fake_redis.get(col_mod.LEADER_KEY) is None   # never took the free lease either
 
 
@@ -345,10 +355,10 @@ def test_unobserved_lease_loss_does_not_clobber_interim_leaders_writes(
     stale in-memory state over the interim leader's write."""
     col = make_collector(col_mod, sess_mod, storage_mod, fake_redis, fake_clock,
                          tmp_path, token="me")
-    fake_redis.open_channel("u1", clients=1)
+    fake_redis.open_channel(U1, clients=1)
     col.run_tick()
-    assert "u1" in col.sessionizer.open_sessions
-    stale_session = col.sessionizer.open_sessions["u1"]
+    assert U1 in col.sessionizer.open_sessions
+    stale_session = col.sessionizer.open_sessions[U1]
 
     # "me" stalls past LEASE_TTL without ever calling run_tick again --
     # _was_leader stays True the whole time; it never observes the loss.
@@ -361,7 +371,7 @@ def test_unobserved_lease_loss_does_not_clobber_interim_leaders_writes(
     interim_store = storage_mod.Storage(str(tmp_path))
     existing = interim_store.ensure_stats_since(interim_store.load(fake_clock.wall()),
                                                  fake_clock.wall())
-    existing["channels"]["u2"] = {"watch_count": 1, "watch_seconds": 500.0,
+    existing["channels"][U2] = {"watch_count": 1, "watch_seconds": 500.0,
                                   "tune_count": 1, "last_watched": fake_clock.wall(),
                                   "last_tuned": fake_clock.wall(),
                                   "first_seen": fake_clock.wall()}
@@ -369,7 +379,7 @@ def test_unobserved_lease_loss_does_not_clobber_interim_leaders_writes(
     interim.release()   # frees the key cleanly
 
     # "me" resumes. Re-arm u1's metadata TTL and tick.
-    fake_redis.open_channel("u1", clients=1)
+    fake_redis.open_channel(U1, clients=1)
     assert col._was_leader is True   # never observed the loss
     col.run_tick()
 
@@ -377,11 +387,11 @@ def test_unobserved_lease_loss_does_not_clobber_interim_leaders_writes(
     # "me" never saw) must now be present in memory, and the stale in-flight
     # session from before the stall must have been dropped, not silently
     # adopted.
-    assert "u2" in col.sessionizer.channels
-    assert col.sessionizer.open_sessions.get("u1") is not stale_session
+    assert U2 in col.sessionizer.channels
+    assert col.sessionizer.open_sessions.get(U1) is not stale_session
 
     data = storage_mod.Storage(str(tmp_path)).load(fake_clock.wall())
-    assert data["channels"]["u2"]["watch_count"] == 1   # interim leader's write survives
+    assert data["channels"][U2]["watch_count"] == 1   # interim leader's write survives
 
 
 def test_existing_usage_is_loaded_on_first_tick(col_mod, sess_mod, storage_mod,
@@ -415,7 +425,7 @@ def test_channels_seen_resets_to_zero_on_a_sample_error(col_mod, sess_mod, stora
     redis = BreaksOnDemand(clock=fake_clock)
     col = make_collector(col_mod, sess_mod, storage_mod, redis, fake_clock, tmp_path)
     for i in range(5):
-        redis.open_channel(f"u{i}", clients=1)
+        redis.open_channel(chan_uuid(i), clients=1)
     col.run_tick()
     assert col.stats["channels_seen"] == 5
 
@@ -432,7 +442,7 @@ def test_malformed_scan_keys_are_counted_not_silently_dropped(
     be counted, not silently dropped with no trace."""
     col = make_collector(col_mod, sess_mod, storage_mod, fake_redis, fake_clock,
                          tmp_path)
-    fake_redis.open_channel("u1", clients=1)
+    fake_redis.open_channel(U1, clients=1)
     fake_redis.kv["live:channel::metadata"] = "malformed"
     fake_redis.exp["live:channel::metadata"] = fake_clock.wall() + 100.0
 
@@ -487,7 +497,7 @@ def test_deposed_and_connection_wedged_leader_does_not_write_on_shutdown(
     proxy = WedgeableProxy(fake_redis)
     col = make_collector(col_mod, sess_mod, storage_mod, proxy, fake_clock,
                          tmp_path, token="A")
-    fake_redis.open_channel("u1", clients=1)
+    fake_redis.open_channel(U1, clients=1)
     col.run_tick()                                  # A legitimately leads + flushes
     assert (tmp_path / "usage.json").exists()
     assert col.lease.owned is True
@@ -571,7 +581,7 @@ def test_observe_is_given_effective_interval_not_configured(
         return real_observe(now, present, effective_interval)
     col.sessionizer.observe = spy_observe
 
-    fake_redis.open_channel("u1", clients=1)
+    fake_redis.open_channel(U1, clients=1)
     col.run_tick()
 
     assert seen == [999.0]
@@ -616,24 +626,24 @@ def test_corrupt_but_parseable_record_does_not_kill_collection(
     sanitize their own copy) kept rendering fine."""
     store = storage_mod.Storage(str(tmp_path))
     store.write({"channels": {
-        "u1": {"watch_count": "3", "watch_seconds": None, "tune_count": None,
+        U1: {"watch_count": "3", "watch_seconds": None, "tune_count": None,
                "last_watched": "not a timestamp", "last_tuned": None,
                "first_seen": None},
-        "u2": None},
+        U2: None},
         "meta": {"stats_since": 500.0, "coverage": {"2026-01-01T00": None}}},
         fake_clock.wall())
     sess = sess_mod.Sessionizer(dict(THRESHOLDS))
     col = col_mod.Collector(fake_redis, sess, store, dict(THRESHOLDS),
                             token="me", wall=fake_clock.wall)
 
-    fake_redis.open_channel("u1", clients=1)
+    fake_redis.open_channel(U1, clients=1)
     col.run_tick()                      # acquire leadership + load state
     fake_clock.advance(16.0)
     col.run_tick()                      # observe() credits u1: must not raise
 
-    assert col.sessionizer.channels["u1"]["tune_count"] == 1
-    assert col.sessionizer.channels["u1"]["watch_count"] == 3
-    assert col.sessionizer.channels["u2"]["tune_count"] == 0
+    assert col.sessionizer.channels[U1]["tune_count"] == 1
+    assert col.sessionizer.channels[U1]["watch_count"] == 3
+    assert col.sessionizer.channels[U2]["tune_count"] == 0
 
 
 def test_acquire_state_preserves_unknown_per_channel_keys(
@@ -643,7 +653,7 @@ def test_acquire_state_preserves_unknown_per_channel_keys(
     without discarding unknown ones."""
     store = storage_mod.Storage(str(tmp_path))
     store.write({"channels": {
-        "u1": {"watch_count": 1, "watch_seconds": 60.0, "tune_count": 1,
+        U1: {"watch_count": 1, "watch_seconds": 60.0, "tune_count": 1,
                "last_watched": 400.0, "last_tuned": 400.0, "first_seen": 300.0,
                "future_key": {"kept": True}}},
         "meta": {"stats_since": 500.0, "coverage": {}}},
@@ -653,7 +663,7 @@ def test_acquire_state_preserves_unknown_per_channel_keys(
                             token="me", wall=fake_clock.wall)
     col.run_tick()
 
-    assert col.sessionizer.channels["u1"]["future_key"] == {"kept": True}
+    assert col.sessionizer.channels[U1]["future_key"] == {"kept": True}
 
 
 def test_backward_clock_step_does_not_suspend_sampling(
@@ -701,3 +711,85 @@ def test_flush_cadence_survives_throttling(
     # 100 s elapsed under a 120 s sampling interval: at least one flush must
     # still land on the 60 s cadence.
     assert flushes
+
+
+# ---- Stream previews are not channels ----------------------------------------
+
+CHANNEL_UUID = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
+PREVIEW_HASH = "0123456789abcdef" * 4          # 64 lowercase hex: a stream hash
+
+
+def test_uuid_from_key_rejects_stream_preview_keys(col_mod):
+    """Dispatcharr writes stream previews under the same key pattern. A bare
+    64-hex stream hash, and <hash>.p<N> from Dispatcharr 0.32.0, are not
+    channel UUIDs and must never be returned as one."""
+    assert col_mod.uuid_from_key(f"live:channel:{PREVIEW_HASH}:metadata") is None
+    assert col_mod.uuid_from_key(f"live:channel:{PREVIEW_HASH}.p3:metadata") is None
+
+
+def test_uuid_from_key_rejects_unhyphenated_32_hex(col_mod):
+    """uuid.UUID() accepts 32 bare hex digits, so the canonical shape must be
+    checked explicitly rather than left to the parser."""
+    bare = CHANNEL_UUID.replace("-", "")
+    assert col_mod.uuid_from_key(f"live:channel:{bare}:metadata") is None
+
+
+def test_uuid_from_key_returns_canonical_uuid_unchanged(col_mod):
+    assert col_mod.uuid_from_key(f"live:channel:{CHANNEL_UUID}:metadata") == CHANNEL_UUID
+    upper = CHANNEL_UUID.upper()
+    assert col_mod.uuid_from_key(f"live:channel:{upper}:metadata") == upper
+
+
+def test_sample_counts_stream_previews_as_non_channel_keys(
+        col_mod, sess_mod, storage_mod, fake_redis, fake_clock, tmp_path):
+    """One real channel plus a bare stream hash plus a <hash>.p3 preview: only
+    the channel is present, the two previews are counted as non_channel_keys
+    (not malformed), and SCARD is never issued for a preview key."""
+    col = make_collector(col_mod, sess_mod, storage_mod, fake_redis, fake_clock,
+                         tmp_path)
+    fake_redis.open_channel(CHANNEL_UUID, clients=1)
+    for key in (f"live:channel:{PREVIEW_HASH}:metadata",
+                f"live:channel:{PREVIEW_HASH}.p3:metadata"):
+        fake_redis.hashes[key] = {"stream": "preview"}
+        fake_redis.exp[key] = fake_clock.wall() + 30.0
+
+    pipelines = []
+    real_pipeline = fake_redis.pipeline
+
+    def spy_pipeline():
+        pipe = real_pipeline()
+        pipelines.append(pipe)
+        return pipe
+    fake_redis.pipeline = spy_pipeline
+
+    present = col._sample(fake_clock.wall())
+
+    assert set(present) == {CHANNEL_UUID}
+    assert col.stats["non_channel_keys"] == 2
+    assert col.stats["malformed_keys"] == 0
+    scarded = [args[0] for pipe in pipelines
+               for name, args, _kwargs in pipe.ops if name == "scard"]
+    assert scarded == [f"live:channel:{CHANNEL_UUID}:clients"]
+
+
+def test_non_channel_keys_starts_at_zero(col_mod, sess_mod, storage_mod,
+                                         fake_redis, fake_clock, tmp_path):
+    col = make_collector(col_mod, sess_mod, storage_mod, fake_redis, fake_clock,
+                         tmp_path)
+    assert col.stats["non_channel_keys"] == 0
+
+
+def test_non_channel_keys_is_exported_in_self_health(
+        col_mod, sess_mod, storage_mod, fake_redis, fake_clock, tmp_path):
+    """Exported next to malformed_keys in the flushed self_health block."""
+    col = make_collector(col_mod, sess_mod, storage_mod, fake_redis, fake_clock,
+                         tmp_path)
+    fake_redis.open_channel(CHANNEL_UUID, clients=1)
+    key = f"live:channel:{PREVIEW_HASH}:metadata"
+    fake_redis.hashes[key] = {"stream": "preview"}
+    fake_redis.exp[key] = fake_clock.wall() + 30.0
+
+    col.run_tick()
+
+    data = storage_mod.Storage(str(tmp_path)).load(fake_clock.wall())
+    assert data["meta"]["self_health"]["non_channel_keys"] == 1

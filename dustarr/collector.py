@@ -6,6 +6,7 @@ duck-typed: get/set/delete/expire/scard/scan_iter/pipeline.
 from __future__ import annotations
 
 import math
+import re
 import time
 import traceback
 
@@ -14,6 +15,11 @@ LEASE_TTL = 60
 
 SCAN_PATTERN = "live:channel:*:metadata"
 SCAN_COUNT = 1000
+
+# The canonical hyphenated channel UUID, exactly as str(uuid.UUID(...)) writes
+# it. uuid.UUID() also accepts 32 bare hex digits, so the shape is checked here.
+_CHANNEL_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 SOFT_BUDGET_MS = 50.0
 HARD_BUDGET_MS = 250.0
@@ -84,11 +90,26 @@ def _sanitize_bucket(bucket):
     return out
 
 
+def _key_segment(key):
+    """Third colon-separated segment of a live:channel key, or None when the key
+    has too few segments or an empty one (malformed)."""
+    parts = to_text(key).split(":")
+    if len(parts) < 4 or not parts[2]:
+        return None
+    return parts[2]
+
+
 def uuid_from_key(key):
     """live:channel:<uuid>:metadata -> <uuid>. The segment is the channel UUID,
-    never the numeric id (verified in redis_keys.py + the proxy routes)."""
-    parts = to_text(key).split(":")
-    return parts[2] if len(parts) >= 4 else None
+    never the numeric id (verified in redis_keys.py + the proxy routes).
+
+    Returns None unless the segment is a canonical hyphenated UUID. Stream
+    previews share this key pattern and are not channels: a bare 64-hex stream
+    hash, and <hash>.p<N> since Dispatcharr 0.32.0."""
+    segment = _key_segment(key)
+    if segment is None or not _CHANNEL_UUID_RE.fullmatch(segment):
+        return None
+    return segment
 
 
 class Lease:
@@ -209,7 +230,7 @@ class Collector:
         self.stats = {"cycle_seq": 0, "channels_seen": 0, "redis_errors": 0,
                       "over_budget_count": 0, "total_ticks": 0,
                       "last_tick_ts": None, "last_error": None,
-                      "malformed_keys": 0}
+                      "malformed_keys": 0, "non_channel_keys": 0}
 
     # ---- helpers ------------------------------------------------------------
     def base_tick(self):
@@ -274,12 +295,16 @@ class Collector:
         channel. No round-robin cap: a cap can miss an entire 2-minute watch."""
         uuids = []
         malformed = 0
+        non_channel = 0
         for key in self.r.scan_iter(match=SCAN_PATTERN, count=SCAN_COUNT):
-            uuid = uuid_from_key(key)
-            if uuid:
-                uuids.append(uuid)
-            else:
+            segment = _key_segment(key)
+            if segment is None:
                 malformed += 1
+            elif _CHANNEL_UUID_RE.fullmatch(segment):
+                uuids.append(segment)
+            else:
+                # A stream preview (see uuid_from_key), not a channel.
+                non_channel += 1
 
         present = {}
         if uuids:
@@ -292,6 +317,7 @@ class Collector:
 
         self.stats["channels_seen"] = len(present)
         self.stats["malformed_keys"] += malformed
+        self.stats["non_channel_keys"] += non_channel
         return present
 
     def _throttle(self, cycle_ms):
@@ -338,6 +364,7 @@ class Collector:
                     "over_budget_count": self.stats["over_budget_count"],
                     "last_error": self.stats["last_error"],
                     "malformed_keys": self.stats["malformed_keys"],
+                    "non_channel_keys": self.stats["non_channel_keys"],
                     "dropped_writes": self.storage.stats["dropped_writes"],
                     "corrupt_sidelines": self.storage.stats["corrupt_sidelines"],
                 },
