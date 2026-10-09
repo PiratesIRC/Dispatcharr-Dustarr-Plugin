@@ -39,6 +39,15 @@ def test_plugin_json_matches_plugin_version():
     assert manifest["version"] == plugin.PLUGIN_VERSION
 
 
+def test_plugin_json_matches_plugin_class_description():
+    """Dispatcharr's loader shows the Plugin class's `description` and reads
+    plugin.json only when that attribute is empty, so the two copies must
+    agree or the card and the manifest drift apart silently."""
+    plugin = load_plugin()
+    manifest = json.loads((PLUGIN_DIR / "plugin.json").read_text(encoding="utf-8"))
+    assert manifest["description"] == plugin.Plugin.description
+
+
 def test_fields_use_only_supported_types_and_have_defaults():
     plugin = load_plugin()
     for field in plugin.FIELDS:

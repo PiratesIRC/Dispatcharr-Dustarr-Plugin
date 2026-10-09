@@ -985,7 +985,7 @@ def sync_schedule(settings):
 class Plugin:
     name = "Dustarr"
     version = PLUGIN_VERSION
-    description = "Channel usage metrics: which channels are watched, which never are."
+    description = ("Records which channels are actually watched and reports the ones that are not, so you can turn off the dead weight in your lineup. Read only: it never changes a channel and never contacts your provider.")
     fields = FIELDS
     actions = ACTIONS
 
