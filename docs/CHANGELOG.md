@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.26.2821314, October 9, 2026
+
+**Stream previews are no longer counted as channels, and the plugin is checked
+against Dispatcharr 0.32.0.** Nothing about how a real channel's viewing is
+recorded or judged has changed.
+
+- **A stream preview no longer shows up as a watched channel.** Playing a
+  stream from the Streams page makes Dispatcharr write the same kind of
+  activity record as a channel, but named by the stream instead of a channel.
+  Dustarr recorded those as channels. They never appeared in the report's
+  lists, but a preview left playing for two minutes or more counted toward the
+  number of channels watched in the summary and in the checks that decide
+  whether the data is trustworthy. Dispatcharr 0.32.0 adds a second form of
+  preview record, so this would have happened more often after upgrading. Only
+  real channels are recorded now, and previews are counted separately in the
+  collector's health figures. Preview records collected by earlier versions are
+  left where they are.
+- **Checked against Dispatcharr 0.32.0.** Every part of Dispatcharr this plugin
+  reads is unchanged in 0.32.0, and a recorded watch and a skipped preview were
+  both confirmed on a live 0.32.0 install. The plugin still works on 0.31.0.
+
 ## 1.26.2481620, September 5, 2026
 
 **Housekeeping for saved reports, a record at the top of the CSV, and a
