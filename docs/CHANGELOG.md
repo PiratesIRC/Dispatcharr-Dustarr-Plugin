@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.26.2832018, October 10, 2026
+
+### Added
+
+- **Anonymous usage counts.** A new setting, Share anonymous usage counts, at the end of the settings and on by default, sends this plugin's Reports Built total and a random install id to the plugin author's counter at plugin-stats.dpas.workers.dev, so the README badges count every install, not only the author's. It sends when an action finishes or a report is built, at most once an hour after a successful send, or ten minutes after the last successful send when a report has just been built. No names, channels, streams, URLs, providers or settings are sent. Untick it to stop; this install's figures are deleted from the server the next time an action runs or a report is built. Installs upgraded to this version start sending on their next action unless the setting is unticked. Details: README, Anonymous usage counts.
+
+### Changed
+
+- The README and SECURITY.md now name this one outbound HTTPS request; they previously said the plugin made none. The README badges read the plugin-stats counter.
+
 ## 1.26.2821314, October 9, 2026
 
 **Stream previews are no longer counted as channels, and the plugin is checked
