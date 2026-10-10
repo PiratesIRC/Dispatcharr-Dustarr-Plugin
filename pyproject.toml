@@ -40,6 +40,9 @@ ignore = [
 # trips import-order and unused-import rules.
 "**/tests/**" = ["E402", "F401", "F811"]
 "**/conftest.py" = ["E402", "F401"]
+# The vendored usage client is sha256-pinned and must stay byte-identical to
+# plugin-stats/client/usage_client.py, so it cannot be edited to satisfy a style rule here.
+"dustarr/usage_client.py" = ["UP031"]
 
 [tool.ruff.format]
 quote-style = "double"

@@ -11,7 +11,6 @@ import json
 import pathlib
 
 import pytest
-
 from conftest import load_plugin
 
 
