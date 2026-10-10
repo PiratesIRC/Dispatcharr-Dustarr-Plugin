@@ -8,6 +8,7 @@ the result, through a non-forced call. The checkbox sits in its own section at t
 the form.
 """
 import json
+import pathlib
 
 import pytest
 
@@ -192,3 +193,16 @@ def test_the_form_ends_with_the_usage_section_and_checkbox(mod):
     assert fields[-1]["id"] == "share_usage_counts"
     assert fields[-2]["id"] == "_section_usage" and fields[-2]["type"] == "info"
     assert [f.get("id") for f in fields].count("share_usage_counts") == 1
+
+
+def test_the_docs_name_the_usage_count_as_the_only_network_request():
+    """Three sentences once said the plugin makes no network request. They are now
+    corrected; this keeps them from coming back while the usage count is shipped."""
+    repo = pathlib.Path(__file__).resolve().parent.parent
+    banned = ("No internet access of any kind", "makes no outbound network request")
+    for name in ("README.md", "SECURITY.md"):
+        text = (repo / name).read_text(encoding="utf-8")
+        for phrase in banned:
+            assert phrase not in text, f"{name} still says the plugin makes no network request"
+    security = (repo / "SECURITY.md").read_text(encoding="utf-8")
+    assert "plugin-stats.dpas.workers.dev" in security

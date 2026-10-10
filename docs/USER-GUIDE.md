@@ -197,7 +197,7 @@ README count the installs that keep it ticked.
 
 | Setting | Default | What it does |
 |---|---|---|
-| **Share anonymous usage counts** | On | Sends the Reports Built total and a random install id to the plugin author's counter after an action finishes or a report is built. It sends at most once an hour, or ten minutes after the last successful send when a report has just been built. A run that finishes inside that gap is not sent later: the total goes out with the first later action or report build that is an hour past the last successful send, or with a later report build once ten minutes have passed. No names, channels, streams, providers or settings are sent. Untick it to stop; this install's figures are deleted from the server. |
+| **Share anonymous usage counts** | On | Sends the Reports Built total and a random install id to the plugin author's counter after an action finishes or a report is built. It sends at most once an hour after a successful send, or ten minutes after the last successful send when a report has just been built. A run that finishes inside that gap is not sent later: the total goes out with the first later action or report build that is an hour past the last successful send, or with a later report build once ten minutes have passed. No names, channels, streams, providers or settings are sent. Untick it to stop; this install's figures are deleted from the server the next time an action runs or a report is built after you untick. |
 
 The README section Anonymous usage counts has the full disclosure.
 

@@ -24,7 +24,7 @@ A Dispatcharr plugin that records which channels are actually watched, and repor
 ![Last Commit](https://img.shields.io/github/last-commit/PiratesIRC/Dispatcharr-Dustarr-Plugin)
 ![License](https://img.shields.io/github/license/PiratesIRC/Dispatcharr-Dustarr-Plugin)
 
-**It never changes anything in Dispatcharr.** It reads which channels have viewers, and writes its own report files. Nothing else.
+**It never changes anything in Dispatcharr.** It reads which channels have viewers, writes its own report files, and keeps the state for the anonymous usage count in /data/plugin_stats/dustarr/. Nothing else.
 
 ## What it does
 
@@ -70,7 +70,7 @@ Click a heading and its tables appear.
 ## Requirements
 
 * Dispatcharr v0.20.0+
-* No internet access of any kind. The plugin never contacts your provider, never checks for its own updates, and fetches nothing when rendering a report.
+* The only internet access is the anonymous usage count: an HTTPS request to plugin-stats.dpas.workers.dev, which you can switch off (see [Anonymous usage counts](#anonymous-usage-counts)). The plugin never contacts your provider, never checks for its own updates, and fetches nothing when rendering a report.
 * The [Newsflasharr](https://github.com/PiratesIRC/Dispatcharr-Newsflasharr-Plugin) plugin, only if you want emailed reports. It is what actually sends the mail. Dustarr does not require it: with Newsflasharr absent or disabled, nothing is sent and nothing fails.
 
 ## Installation
@@ -112,15 +112,15 @@ The Reports Built and Active Installs badges count every install that leaves the
 action or builds at least one scheduled report.
 
 Reports Built counts the reports this plugin has written on the install. Its total
-is kept in /data/dustarr/report_count.json and only goes up: deleting old report
-files with the retention setting does not lower it. A report counts only once its
+is kept in /data/dustarr/report_count.json and only goes up, short of deleting that
+file: deleting old report files with the retention setting does not lower it. A report counts only once its
 HTML file is confirmed on disk, so a run that wrote nothing adds nothing. Emails
 are not counted.
 
 When an action finishes or a report is built, the plugin sends this install's
 Reports Built total and a random id for this plugin on this install to the plugin
-author's counter at plugin-stats.dpas.workers.dev. It sends at most once an hour,
-or ten minutes after the last successful send when a report has just been built.
+author's counter at plugin-stats.dpas.workers.dev. It sends at most once an hour after
+a successful send, or ten minutes after the last successful send when a report has just been built.
 A run that finishes inside that gap is not sent later: the total goes out with the
 first later action or report build that is an hour past the last successful send,
 or with a later report build once ten minutes have passed.
@@ -135,7 +135,7 @@ block for IPv6) for up to three days. Cloudflare, which hosts the server, keeps 
 own request logs. No names, channels, streams, URLs, providers or settings are sent.
 The figures are self-reported by installs and capped by the server, not verified.
 
-What counts as an active install: an install that sent at least one report in the
+What counts as an active install: an install that sent at least one usage count in the
 last 30 UTC days. A badge changes after the server's hourly recount, which runs at
 the start of each UTC hour, and Shields may cache the badge for up to an hour more,
 so a new report can take up to about two hours to show.

@@ -51,8 +51,11 @@ What it does touch:
   is scoped to text that reads as a media URL and is deliberately not applied to
   free text, because a bare-hostname rule produces false matches on ordinary
   words.
-- **The plugin makes no outbound network request of its own.** The only thing
-  that leaves the machine is the notification you configured, sent by
+- **The plugin makes one outbound network request of its own: the anonymous usage
+  count, an HTTPS request to plugin-stats.dpas.workers.dev carrying this plugin's
+  Reports Built total and a random install id, sent at most once an hour while the
+  Share anonymous usage counts setting is ticked. Untick it to stop. Apart from that,
+  the only thing that leaves the machine is the notification you configured, sent by
   Newsflasharr through the channel you configured.
 
 ## Supported versions
