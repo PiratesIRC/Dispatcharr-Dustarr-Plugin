@@ -22,12 +22,7 @@ successfully published.
 
 That is the whole contract. One key, one non-negative integer.
 
-**One consumer exists today.** `scripts/update_reports_built_badge.py` in this
-repository reads the file from outside the container and publishes the total as
-the **Reports Built** badge on the README, through a Shields.io endpoint
-document held in a Gist. It is the reference implementation of this page: it
-reads the one key, treats anything it cannot trust as 0, and sends nothing but
-the integer onward.
+**The first consumer was retired.** `scripts/update_reports_built_badge.py` read the file from outside the container and published the total as the **Reports Built** badge through a Gist. It was retired 2026-10-10; the README badge now reads the plugin-stats Worker. Its rule still stands: read the one key, treat anything it cannot trust as 0, and send nothing but the integer onward.
 
 **What the number counts:** reports whose HTML file was confirmed written to
 disk. It increments once per successful build, whether an operator pressed the
