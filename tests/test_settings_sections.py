@@ -52,6 +52,8 @@ SECTION_BOUNDARIES = [
     ("_section_judging", "unused_threshold_days"),
     ("_section_exclusions", "exclude_auto_created"),
     ("_section_report", "top_n"),
+    # The anonymous usage counts checkbox, placed last.
+    ("_section_usage", "share_usage_counts"),
 ]
 
 

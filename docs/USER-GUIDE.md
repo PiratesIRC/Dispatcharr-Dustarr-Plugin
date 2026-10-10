@@ -121,7 +121,8 @@ thread all produce a perfectly formatted report claiming every channel is dead.
 | `/config/dustarr/report-<timestamp>.html` | The same report kept as a dated archive. The newest eight are kept whatever their age, and older ones are also deleted if you set a retention in days. |
 | `/config/dustarr/report-<timestamp>.csv` | The same data as CSV, for a spreadsheet, with a commented preamble above the rows saying what the file is and what the run found. The newest eight are kept whatever their age, and older ones are also deleted if you set a retention in days. |
 | `/data/dustarr/usage.json` | The recorded usage. This is the irreplaceable file: delete it and the tracking window restarts from zero. |
-| `/data/dustarr/report_count.json` | The running total of reports written. |
+| `/data/dustarr/report_count.json` | The running total of reports written. The anonymous usage counter reads it; see [Anonymous usage counts](#anonymous-usage-counts). |
+| `/data/plugin_stats/dustarr/` | The anonymous usage counter's install id and send timing. It holds no report content. |
 | `/data/dustarr/scheduled_run.json` | When the scheduled report last actually ran. |
 
 `/config` is Dispatcharr's existing bind mount, so `/config/dustarr/` is a real
@@ -185,6 +186,20 @@ never watched. This is decided from the profile's structure, not from its name.
 | **Send notifications to Newsflasharr** | off | Hands the report summary and any honesty gate alerts to the Newsflasharr plugin. See [emailing the report](#emailing-the-report). |
 | **Scheduled report** | Weekly (Mon 03:00) | Off, daily at 03:00, weekly on Monday at 03:00, or monthly on the first at 03:00. Times are in Dispatcharr's own system timezone, not UTC. |
 | **Delete saved reports older than (days)** | 0 | Housekeeping for the dated copies in the config folder. After each report is built, this plugin's own `report-<stamp>.html` and `report-<stamp>.csv` files older than this many days are deleted. 0 is off, so nothing is removed unless you ask for it. The report just written is never deleted, at least one file of each kind always survives, and the live `report.html` is never touched. This sits on top of an existing cap that keeps only the newest eight of each kind whatever their age, so the two together bound the folder both ways. |
+
+### Anonymous usage counts
+
+Read the table row for the setting first: the setting is the last one in the form,
+in its own section, and it is on by default. Share anonymous usage counts sends this
+plugin's Reports Built total and a random id for this plugin on this install to the
+plugin author's counter. The public Reports Built and Active Installs badges in the
+README count the installs that keep it ticked.
+
+| Setting | Default | What it does |
+|---|---|---|
+| **Share anonymous usage counts** | On | Sends the Reports Built total and a random install id to the plugin author's counter after an action finishes or a report is built. It sends at most once an hour, or ten minutes after the last successful send when a report has just been built. A run that finishes inside that gap is not sent later: the total goes out with the first later action or report build that is an hour past the last successful send, or with a later report build once ten minutes have passed. No names, channels, streams, providers or settings are sent. Untick it to stop; this install's figures are deleted from the server. |
+
+The README section Anonymous usage counts has the full disclosure.
 
 ## Actions reference
 

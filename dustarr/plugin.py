@@ -24,6 +24,7 @@ from celery import shared_task
 try:
     from . import collector as collector_mod
     from . import gates, gateway, notify_report, redaction, reports, sessionizer, storage
+    from .usage_client import UsageReporter, json_field, load_plugin_settings, with_usage_field
 except ImportError:                     # standalone (non-package) import path
     import collector as collector_mod
     import gates
@@ -33,8 +34,21 @@ except ImportError:                     # standalone (non-package) import path
     import reports
     import sessionizer
     import storage
+    from usage_client import UsageReporter, json_field, load_plugin_settings, with_usage_field
 
 _LOGGER = logging.getLogger(__name__)
+
+# Reports the Reports Built total and a random install id to the plugin-stats Worker, so
+# the README badges count each install that keeps the setting ticked and runs (README,
+# "Anonymous usage counts"). report() never raises; only the network send runs on a
+# background thread. The total is read at send time from the counter file.
+USAGE = UsageReporter(
+    plugin="dustarr",
+    counter="reports_built",
+    label="Reports Built",
+    total_fn=lambda: json_field(_report_count_path(), "reports_built"),
+    settings_fn=lambda: load_plugin_settings("dustarr"),
+)
 
 PLUGIN_VERSION = "1.26.2821314"
 
@@ -207,6 +221,10 @@ FIELDS = [
                     "are considered. This is on top of the existing cap that "
                     "keeps the newest few of each kind regardless of age."},
 ]
+FIELDS = with_usage_field(FIELDS + [
+    {"id": "_section_usage", "type": "info", "label": "Anonymous usage counts",
+     "description": "The setting below sends this plugin's Reports Built total and a random id to the plugin author's counter so the public badges can count installs. No names, channels, streams, providers or settings are sent. Untick it to stop; the user guide section Anonymous usage counts has the details."},
+], USAGE)
 
 ISSUES_URL = "https://github.com/PiratesIRC/Dispatcharr-Dustarr-Plugin/issues"
 
@@ -783,9 +801,18 @@ def bump_report_count():
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump({"reports_built": current + 1}, fh)
         os.replace(tmp, _report_count_path())
+        _report_usage(None, _LOGGER, force=True)
         return current + 1
     except Exception:
         return current
+
+
+def _report_usage(settings=None, logger=None, force=False):
+    """Give the usage client its chance to send. Never raises."""
+    try:
+        USAGE.report(settings, logger or _LOGGER, force=force)
+    except Exception:
+        pass
 
 
 NOTIFY_SOURCE = "dustarr"
@@ -1062,6 +1089,13 @@ class Plugin:
             pass
 
     def run(self, action, params=None, context=None):
+        try:
+            return self._run_action(action, params, context)
+        finally:
+            if action in ("build_report", "show_summary", "validate_settings", "report_issue"):
+                _report_usage((context or {}).get("settings"), _LOGGER)
+
+    def _run_action(self, action, params=None, context=None):
         settings = (context or {}).get("settings") or {}
         try:
             ensure_collector(settings)

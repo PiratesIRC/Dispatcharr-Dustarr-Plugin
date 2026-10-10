@@ -1430,11 +1430,12 @@ SETTING_LABELS = {
     "exclude_name_regex": "Excluded name regex",
     "top_n": "Rows in the Most used and Least used tables",
     "notify_enabled": "Send notifications to Newsflasharr",
+    "share_usage_counts": "Share anonymous usage counts",
     "report_schedule": "Scheduled report",
     "report_retention_days": "Delete saved reports older than (days)",
 }
 
-_BOOLEAN_SETTINGS = ("exclude_auto_created", "notify_enabled")
+_BOOLEAN_SETTINGS = ("exclude_auto_created", "notify_enabled", "share_usage_counts")
 
 # The stored schedule value is a bare word; the form offers a longer label
 # carrying the time of day, which is the part a reader of the record wants.

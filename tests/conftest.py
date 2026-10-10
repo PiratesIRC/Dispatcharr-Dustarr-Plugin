@@ -482,3 +482,23 @@ def find_invisible(text):
 def find_non_ascii(text):
     """The characters outside ASCII in `text`, as hex codepoints, sorted."""
     return sorted({hex(ord(c)) for c in (text or "") if ord(c) > 127})
+
+
+@pytest.fixture(autouse=True)
+def _no_real_usage_reporting(tmp_path, monkeypatch):
+    """No test may reach /data/plugin_stats or the Worker. The counter writer
+    reports, so the real writer reaches the client in every test that bumps."""
+    module = load_plugin()
+    started = []
+    if getattr(module, "USAGE", None) is None:
+        yield started          # before Step 3 there is no USAGE to guard
+        return
+    monkeypatch.setattr(module.USAGE, "data_dir", str(tmp_path / "plugin_stats"))
+    monkeypatch.setattr(module.USAGE, "directory", str(tmp_path / "plugin_stats" / "dustarr"))
+    # The recorder replaces the send. report() swallows every exception, so a
+    # recorded attempt is the only trace a real send would leave. There is no
+    # teardown assertion: existing tests call Plugin().run(..., {"settings": {}})
+    # about 35 times, and on Linux an empty settings dict is consent, so the
+    # recorder legitimately receives calls. The recorder alone prevents a send.
+    monkeypatch.setattr(module.USAGE, "_start", lambda *a, **k: started.append(a))
+    yield started
