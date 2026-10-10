@@ -71,11 +71,13 @@ def test_the_gist_id_file_is_committed_next_to_the_script():
     assert id_file.read_text(encoding="utf-8").strip(), "the gist id file is empty"
 
 
-def test_the_readme_badge_points_at_the_recorded_gist():
-    """Renaming the Gist file or changing the id breaks the badge silently."""
-    mod = _load()
+def test_the_readme_shows_the_worker_badges_not_the_gist():
+    """The README badges read the plugin-stats Worker. The gist id the retired badge
+    used must not come back, or the public count silently reverts to the gist."""
     gist_id = (REPO / "scripts" / ".reports_built_badge_gist").read_text(encoding="utf-8").strip()
     readme = (REPO / "README.md").read_text(encoding="utf-8")
-    expected = (f"https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/"
-                f"PiratesIRC/{gist_id}/raw/{mod.GIST_FILENAME}")
-    assert expected in readme, "README.md does not carry the Reports Built badge for the recorded gist"
+    assert "https://plugin-stats.dpas.workers.dev/badge/dustarr/reports_built" in readme, \
+        "README.md does not carry the Reports Built Worker badge"
+    assert "https://plugin-stats.dpas.workers.dev/badge/dustarr/installs" in readme, \
+        "README.md does not carry the Active Installs Worker badge"
+    assert gist_id not in readme, "README.md still points at the retired gist"

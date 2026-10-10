@@ -15,7 +15,8 @@ A Dispatcharr plugin that records which channels are actually watched, and repor
 
 [![GitHub Release](https://img.shields.io/github/v/release/PiratesIRC/Dispatcharr-Dustarr-Plugin?include_prereleases&logo=github)](https://github.com/PiratesIRC/Dispatcharr-Dustarr-Plugin/releases)
 [![Downloads](https://img.shields.io/github/downloads/PiratesIRC/Dispatcharr-Dustarr-Plugin/total?color=success&label=Downloads&logo=github)](https://github.com/PiratesIRC/Dispatcharr-Dustarr-Plugin/releases)
-[![Reports Built](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/PiratesIRC/b7116c2e44b8250a4995dfe1836da70b/raw/dustarr-reports-built.json)](#what-it-does)
+[![Reports Built](https://img.shields.io/endpoint?url=https://plugin-stats.dpas.workers.dev/badge/dustarr/reports_built)](#anonymous-usage-counts)
+[![Active Installs](https://img.shields.io/endpoint?url=https://plugin-stats.dpas.workers.dev/badge/dustarr/installs)](#anonymous-usage-counts)
 [![Stars](https://img.shields.io/github/stars/PiratesIRC/Dispatcharr-Dustarr-Plugin?logo=github)](https://github.com/PiratesIRC/Dispatcharr-Dustarr-Plugin/stargazers)
 
 ![Top Language](https://img.shields.io/github/languages/top/PiratesIRC/Dispatcharr-Dustarr-Plugin)
@@ -103,6 +104,52 @@ This is the part worth reading before installing anything that watches what your
 ## Where things are written
 
 The report and the CSV land in `/config/dustarr/`. `/config` is Dispatcharr's existing bind mount, so that is a real folder on your host: open the report by double clicking it. The full list of paths is in the [user guide](docs/USER-GUIDE.md#where-the-files-are-written).
+
+## Anonymous usage counts
+
+The Reports Built and Active Installs badges count every install that leaves the
+"Share anonymous usage counts" setting (on by default) ticked and runs at least one
+action or builds at least one scheduled report.
+
+Reports Built counts the reports this plugin has written on the install. Its total
+is kept in /data/dustarr/report_count.json and only goes up: deleting old report
+files with the retention setting does not lower it. A report counts only once its
+HTML file is confirmed on disk, so a run that wrote nothing adds nothing. Emails
+are not counted.
+
+When an action finishes or a report is built, the plugin sends this install's
+Reports Built total and a random id for this plugin on this install to the plugin
+author's counter at plugin-stats.dpas.workers.dev. It sends at most once an hour,
+or ten minutes after the last successful send when a report has just been built.
+A run that finishes inside that gap is not sent later: the total goes out with the
+first later action or report build that is an hour past the last successful send,
+or with a later report build once ten minutes have passed.
+
+The server stores that id with the total and the date of the last report, and keeps
+them until this install unticks the setting and the delete succeeds, or until the
+plugin author removes them by hand. An install that stops reporting still counts
+toward Reports Built. The connection shows the server your public IP address; the
+server uses it only to limit abuse and does not store it in its database, though
+when an install first registers it keeps a salted one-way hash of it (of its /64
+block for IPv6) for up to three days. Cloudflare, which hosts the server, keeps its
+own request logs. No names, channels, streams, URLs, providers or settings are sent.
+The figures are self-reported by installs and capped by the server, not verified.
+
+What counts as an active install: an install that sent at least one report in the
+last 30 UTC days. A badge changes after the server's hourly recount, which runs at
+the start of each UTC hour, and Shields may cache the badge for up to an hour more,
+so a new report can take up to about two hours to show.
+
+The setting is the last one in the settings form, in its own section. Unticking it
+takes effect the next time an action runs or a report is built; the plugin then asks
+the server to delete this install's figures. Once the server confirms the delete,
+the plugin forgets its id, and ticking the setting again later starts a new one; if
+the delete could not reach the server, the plugin keeps the id and retries. The
+plugin keeps that id and the timing of its reports in /data/plugin_stats/dustarr/.
+To start a new id, untick the setting and let an action run so the server deletes
+this install's figures; deleting that folder while the setting is ticked leaves
+the old figures on the server, and the new id then sends the full total again, so
+the badge counts it twice.
 
 ## Documentation
 

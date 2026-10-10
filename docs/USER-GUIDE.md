@@ -189,8 +189,8 @@ never watched. This is decided from the profile's structure, not from its name.
 
 ### Anonymous usage counts
 
-Read the table row for the setting first: the setting is the last one in the form,
-in its own section, and it is on by default. Share anonymous usage counts sends this
+The setting is the last one in the form, in its own section, and it is on by default.
+Share anonymous usage counts sends this
 plugin's Reports Built total and a random id for this plugin on this install to the
 plugin author's counter. The public Reports Built and Active Installs badges in the
 README count the installs that keep it ticked.
