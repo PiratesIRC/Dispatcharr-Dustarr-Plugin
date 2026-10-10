@@ -2,3 +2,6 @@
 *.png binary
 *.zip binary
 .githooks/* text eol=lf
+# The vendored usage client is sha256-pinned (scripts/client_manifest.json and
+# tests/test_usage_client_parity.py), so it MUST stay LF on every OS.
+dustarr/usage_client.py text eol=lf
