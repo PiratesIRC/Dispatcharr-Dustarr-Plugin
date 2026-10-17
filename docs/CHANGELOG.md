@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.26.2901903, October 17, 2026
+
+### Fixed
+
+- **The report is published even when /config cannot be written.** Build Report and the scheduled report wrote the HTML report, its archive and the CSV only to `/config/dustarr`, which a stock Dispatcharr image does not let plugins write, so no report was published there. They now use `/config/dustarr` when it can be written and `/data/dustarr/reports` otherwise, never `/data/logos`. Installations where `/config` already worked are unchanged.
+
+### Changed
+
+- The release archive now carries signed build provenance. Check a downloaded copy with `gh attestation verify Dustarr-1.26.2901903.zip -R PiratesIRC/Dispatcharr-Dustarr-Plugin --signer-workflow PiratesIRC/Dispatcharr-Dustarr-Plugin/.github/workflows/ci.yml`.
+
 ## 1.26.2832018, October 10, 2026
 
 ### Added
