@@ -128,7 +128,10 @@ thread all produce a perfectly formatted report claiming every channel is dead.
 `/config` is Dispatcharr's existing bind mount, so `/config/dustarr/` is a real
 folder on your host and you can open the report by double clicking it.
 `/data` is a named volume with no host path, which is why nothing you need to
-read is written there.
+read is written there while `/config/dustarr/` can be written. When it cannot,
+as on a stock Dispatcharr image with no writable `/config`, the three report
+files go to `/data/dustarr/reports/` instead, and the plugin card names the path
+it used.
 
 **Nothing is served over HTTP, deliberately.** Earlier versions wrote the report
 into `/data/logos/`, which Dispatcharr's own nginx serves to your entire local

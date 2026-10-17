@@ -61,6 +61,10 @@ DATA_DIR = "/data/dustarr"           # plugin state (named volume)
 # it back.
 REPORT_DIR = "/config/dustarr"       # bind-mounted, so reachable from the host
 CSV_DIR = "/config/dustarr"          # same directory; suffix keeps the archives apart
+# Used only when /config/dustarr cannot be written: Dispatcharr's plugin guide
+# asks plugins to write under /data, and a stock image has no writable /config,
+# where the choice is this or no report at all. Never /data/logos (see above).
+REPORT_FALLBACK_DIR = "/data/dustarr/reports"
 
 THREAD_NAME = "dustarr-collector"
 TASK_NAME = "dustarr_build_report"
@@ -280,6 +284,20 @@ _NUMERIC_FLOORS = {"poll_interval_s": (5, MAX_POLL_INTERVAL_S),
                    "top_n": (1, 500),
                    "never_watched_ceiling": (0.05, 1.0),
                    "report_retention_days": (0, 3650)}
+
+
+def _writable_dir(preferred, fallback):
+    """Return `preferred` when it exists or can be created and is writable, else
+    `fallback`. When neither can be used, `preferred`, so the write fails and is
+    reported exactly as it was before the fallback existed."""
+    for directory in (preferred, fallback):
+        try:
+            os.makedirs(directory, exist_ok=True)
+        except (OSError, ValueError):
+            continue
+        if os.access(directory, os.W_OK):
+            return directory
+    return preferred
 
 
 def coerce_settings(settings):
@@ -506,7 +524,8 @@ def _build_report(settings, is_scheduled=False):
     # the single point where a file is written, so it covers this action and
     # the scheduled build alike. It is report-only, so it is deliberately not
     # part of _thresholds_fingerprint and cannot respawn the collector.
-    written = reports.write_report(model, REPORT_DIR, CSV_DIR, now,
+    written = reports.write_report(model, _writable_dir(REPORT_DIR, REPORT_FALLBACK_DIR),
+                                   _writable_dir(CSV_DIR, REPORT_FALLBACK_DIR), now,
                                    retention_days=thresholds["report_retention_days"])
 
     counts = model["counts"]
@@ -535,8 +554,8 @@ def _build_report(settings, is_scheduled=False):
     # function, so both count.
     if published:
         written["reports_built"] = bump_report_count()
-    # A filesystem path, never a URL: the report is not served over HTTP. The
-    # directory is bind-mounted, so this path is openable from Windows.
+    # A filesystem path, never a URL: the report is not served over HTTP. On this
+    # installation the directory is bind-mounted, so the path opens from Windows.
     where = html_path or REPORT_DIR
     result = {"status": "ok" if published else "error",
               "message": message + f" Report: {where}",
