@@ -23,10 +23,11 @@ from celery import shared_task
 
 try:
     from . import collector as collector_mod
-    from . import gates, gateway, notify_report, redaction, reports, sessionizer, storage
+    from . import form_fields, gates, gateway, notify_report, redaction, reports, sessionizer, storage
     from .usage_client import UsageReporter, json_field, load_plugin_settings, with_usage_field
 except ImportError:                     # standalone (non-package) import path
     import collector as collector_mod
+    import form_fields
     import gates
     import gateway
     import notify_report
@@ -714,7 +715,15 @@ def _load_settings():
         config = PluginConfig.objects.get(key="dustarr")
     except PluginConfig.DoesNotExist:
         return {}
-    return config.settings or {}
+    return _legacy(config.settings or {})
+
+
+def _legacy(settings):
+    """Write the 0.34 form's pick-list values back into the text settings the
+    rest of the plugin reads (form_fields.legacy_settings). Called at every
+    entry point that reads settings: Plugin._run_action and _load_settings,
+    which feeds the scheduled Celery task. A no-op on Dispatcharr 0.33."""
+    return form_fields.legacy_settings(settings, gateway.fields_api_available())
 
 
 CRON_BY_SCHEDULE = {"daily": "0 3 * * *", "weekly": "0 3 * * 1",
@@ -1064,6 +1073,24 @@ class Plugin:
         except Exception:
             pass
 
+    def get_fields(self, context=None):
+        """The settings form for Dispatcharr 0.34 and later, in collapsible
+        sections, with Excluded groups as a pick list (form_fields.build_form).
+
+        0.34 calls this at discovery and on a reload instead of reading
+        `fields`; 0.33 and earlier never call it and read the flat `fields`,
+        which must keep only the types 0.33 knows. Dispatcharr does not catch
+        an exception raised here, so any failure returns the flat form.
+        `context["settings"]` holds the SAVED settings, with no defaults."""
+        try:
+            settings = (context or {}).get("settings") or {}
+            return form_fields.build_form(self.fields, settings,
+                                          gateway.channel_group_names())
+        except Exception as exc:
+            _LOGGER.warning("dustarr: sectioned settings form failed, using the "
+                            "flat form: %s", redaction.redact(str(exc)))
+            return list(self.fields)
+
     def stop(self, context=None):
         """Called by the loader on disable/uninstall/reload (C2). Must never
         raise -- a cleanup failure must not break the loader.
@@ -1115,7 +1142,7 @@ class Plugin:
                 _report_usage((context or {}).get("settings"), _LOGGER)
 
     def _run_action(self, action, params=None, context=None):
-        settings = (context or {}).get("settings") or {}
+        settings = _legacy((context or {}).get("settings") or {})
         try:
             ensure_collector(settings)
         except Exception:

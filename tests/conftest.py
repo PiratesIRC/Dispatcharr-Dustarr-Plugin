@@ -131,7 +131,7 @@ def load_plugin():
         pkg = types.ModuleType(_PKG)
         pkg.__path__ = [str(PLUGIN_DIR)]
         sys.modules[_PKG] = pkg
-    for mod in ("sessionizer", "storage", "collector", "gates", "gateway",
+    for mod in ("sessionizer", "storage", "collector", "gates", "gateway", "form_fields",
                 "redaction", "reports", "notify_client", "notify_report",
                 "plugin"):
         key = f"{_PKG}.{mod}"

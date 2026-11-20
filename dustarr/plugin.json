@@ -7,5 +7,11 @@
   "license": "MIT",
   "repo_url": "https://github.com/PiratesIRC/Dispatcharr-Dustarr-Plugin",
   "help_url": "https://github.com/PiratesIRC/Dispatcharr-Dustarr-Plugin",
-  "min_dispatcharr_version": "v0.20.0"
+  "min_dispatcharr_version": "v0.20.0",
+  "manifest_version": 1,
+  "capabilities": [
+    "outbound_network",
+    "filesystem_write",
+    "proxy_internals"
+  ]
 }

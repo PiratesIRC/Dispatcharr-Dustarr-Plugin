@@ -101,6 +101,36 @@ class DjangoGateway:
         return rows
 
 
+def channel_group_names():
+    """Names of the channel groups that hold at least one channel, for the 0.34
+    settings form's Excluded groups pick list. Read-only; one query. Returns []
+    on any error, so the form still draws (its options then hold only the
+    values already saved)."""
+    try:
+        from apps.channels.models import Channel  # Dispatcharr runtime only
+
+        names = (Channel.objects.exclude(channel_group=None)
+                 .values_list("channel_group__name", flat=True).distinct())
+        return sorted({str(n).strip() for n in names if n and str(n).strip()},
+                      key=str.casefold)
+    except Exception:
+        return []
+
+
+def fields_api_available():
+    """True when the running Dispatcharr has the 0.34 settings form.
+
+    Decided by whether ``apps.plugins.field_versions`` (new in 0.34) imports,
+    not by whether ``Plugin.get_fields`` ran in this process: the Celery worker
+    loads plugins from a cache and may never call it, and the scheduled report
+    runs there."""
+    try:
+        import apps.plugins.field_versions  # noqa: F401  Dispatcharr 0.34+ only
+    except Exception:
+        return False
+    return True
+
+
 def _epoch(value):
     if value is None:
         return None
