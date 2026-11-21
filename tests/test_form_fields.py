@@ -143,7 +143,7 @@ def test_long_help_is_split_into_titled_info_fields(plugin):
 
 
 def test_rendered_copy_has_no_dashes_line_breaks_or_contractions(plugin):
-    texts = [meta["help_text"] for meta in ff.NEW_FIELDS.values()]
+    texts = [meta["help_text"] for meta in ff.NEW_FIELDS.values()] + [ff.REGEX_HELP_TEXT]
     for short, paragraphs in ff.HELP_PARAGRAPHS.values():
         texts.append(short)
         texts.extend(title + " " + text for title, text in paragraphs)
@@ -184,6 +184,96 @@ def test_legacy_settings_does_nothing_on_033():
 def test_legacy_settings_ignores_a_non_list_value():
     out = ff.legacy_settings({"exclude_group_list": "Movies", "exclude_groups": "x"}, True)
     assert out["exclude_groups"] == "x"
+
+
+def test_name_keywords_pick_list_sits_before_the_regex_in_the_exclusions(plugin):
+    form = _form(plugin)
+    ids = [f["id"] for f in form]
+    field = _by_id(form)[ff.KEYWORD_ID]
+    assert field["type"] == "multiselect"
+    assert field["section"] == "_section_exclusions"
+    assert ids.index(ff.KEYWORD_ID) == ids.index(ff.REGEX_ID) - 1
+    assert [o["value"] for o in field["options"]] == sorted(ff.NAME_KEYWORDS, key=str.casefold)
+
+
+def test_name_keywords_default_is_empty_so_no_install_changes_behaviour(plugin):
+    """Dispatcharr stores only the fields a save changed, so a default that
+    depended on the regex would be lost the moment the regex alone is saved."""
+    for settings in ({}, {"exclude_name_regex": ""}, {"exclude_name_regex": "FOO"}):
+        form = _by_id(_form(plugin, settings))
+        assert form[ff.KEYWORD_ID]["default"] == []
+    assert _by_id(_form(plugin))[ff.REGEX_ID]["default"] == gateway.DEFAULT_EXCLUDE_NAME_RE
+
+
+def test_regex_keeps_its_id_and_gets_help_in_the_034_form(plugin):
+    field = _by_id(_form(plugin))[ff.REGEX_ID]
+    assert field["type"] == "string"
+    assert field["help_text"] == ff.REGEX_HELP_TEXT
+
+
+def test_a_stored_keyword_no_longer_offered_stays_an_option(plugin):
+    field = _by_id(_form(plugin, {ff.KEYWORD_ID: ["Old Word", "PPV"]}))[ff.KEYWORD_ID]
+    assert {"Old Word", "PPV"} <= {o["value"] for o in field["options"]}
+
+
+def test_every_keyword_is_matched_by_the_default_regex():
+    """The pick list offers the words the default regex already covers."""
+    import re
+    default = re.compile(gateway.DEFAULT_EXCLUDE_NAME_RE)
+    for word in ff.NAME_KEYWORDS:
+        assert default.search(word.lower()), word
+
+
+def _name_re(settings):
+    return gateway.parse_exclusions(settings)["name_re"]
+
+
+def test_keywords_alone_build_a_case_insensitive_name_rule():
+    out = ff.legacy_settings({ff.KEYWORD_ID: ["PPV", "24/7"], "exclude_name_regex": ""}, True)
+    rule = _name_re(out)
+    assert rule.search("ppv 03: Fight Night")
+    assert rule.search("24/7 Cartoons")
+    assert not rule.search("ESPN")
+
+
+def test_keywords_are_added_to_a_regex_holding_a_global_flag():
+    out = ff.legacy_settings({ff.KEYWORD_ID: ["NO EVENT"],
+                              "exclude_name_regex": "(?i)^foo"}, True)
+    rule = _name_re(out)
+    assert rule.search("FOO channel") and rule.search("no event")
+    assert not rule.search("bar")
+
+
+def test_keywords_with_no_saved_regex_keep_the_default_regex():
+    out = ff.legacy_settings({ff.KEYWORD_ID: ["Special Word"]}, True,
+                             default_regex=gateway.DEFAULT_EXCLUDE_NAME_RE)
+    rule = _name_re(out)
+    assert rule.search("LIVE EVENT 04") and rule.search("special word 1")
+
+
+def test_an_empty_keyword_list_leaves_the_regex_alone():
+    settings = {ff.KEYWORD_ID: [], "exclude_name_regex": "FOO"}
+    assert ff.legacy_settings(settings, True)["exclude_name_regex"] == "FOO"
+    assert "exclude_name_regex" not in ff.legacy_settings({ff.KEYWORD_ID: []}, True)
+
+
+def test_keywords_are_ignored_on_033_and_when_not_a_list():
+    settings = {ff.KEYWORD_ID: ["PPV"], "exclude_name_regex": ""}
+    assert ff.legacy_settings(settings, False)["exclude_name_regex"] == ""
+    settings = {ff.KEYWORD_ID: "PPV", "exclude_name_regex": ""}
+    assert ff.legacy_settings(settings, True)["exclude_name_regex"] == ""
+
+
+def test_run_reads_the_keyword_value(plugin, monkeypatch):
+    monkeypatch.setattr(plugin.gateway, "fields_api_available", lambda: True)
+    monkeypatch.setattr(plugin.Plugin, "_validate", lambda self, s: s)
+    monkeypatch.setattr(plugin, "ensure_collector", lambda *_a, **_k: None)
+    monkeypatch.setattr(plugin, "sync_schedule", lambda *_a, **_k: None)
+    monkeypatch.setattr(plugin, "_report_usage", lambda *_a, **_k: None)
+    seen = plugin.Plugin.__new__(plugin.Plugin).run(
+        "validate_settings", context={"settings": {ff.KEYWORD_ID: ["PPV"]}})
+    rule = _name_re(seen)
+    assert rule.search("PPV 01") and rule.search("LIVE EVENT 02")
 
 
 def test_fields_api_available_is_false_without_field_versions(monkeypatch):

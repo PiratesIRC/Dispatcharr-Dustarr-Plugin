@@ -11,16 +11,43 @@ The 0.34 form draws ``exclude_groups`` as a pick list under a NEW id,
 comma-separated string under the old id would break the form. The old id keeps
 its text value for 0.33, and ``legacy_settings`` writes a list saved under the
 new id back into the old id at run time, so every reader sees one text form.
+
+The name regex works the same way. The 0.34 form adds a keyword pick list,
+``exclude_name_keywords``, in front of the regex, which stays for patterns the
+keywords do not cover. ``legacy_settings`` appends the ticked keywords to the
+regex as a case-insensitive alternation, so the name rule is the regex OR any
+keyword. The keyword default is empty on every install: Dispatcharr stores only
+the fields a save changed, so a default that depended on the regex would be
+lost as soon as the regex alone was saved.
 """
 from __future__ import annotations
 
 import copy
+import re
 
 # new id: old id
 LIST_SETTINGS = {"exclude_group_list": "exclude_groups"}
 NEW_ID_BY_OLD_ID = {old: new for new, old in LIST_SETTINGS.items()}
 
+KEYWORD_ID = "exclude_name_keywords"
+REGEX_ID = "exclude_name_regex"
+# The words the default name regex covers (gateway.DEFAULT_EXCLUDE_NAME_RE).
+NAME_KEYWORDS = ("LIVE EVENT", "PPV", "NO EVENT", "24/7")
+
+REGEX_HELP_TEXT = ("Optional, for channel names the keywords above do not cover. A "
+                   "Python regular expression: a channel whose name matches it or "
+                   "contains a ticked keyword is never judged unused. The default "
+                   "expression already covers the four keywords, so clear it if you "
+                   "manage them with the pick list instead.")
+
 NEW_FIELDS = {
+    KEYWORD_ID: {
+        "label": "Excluded name keywords",
+        "help_text": "Channels whose name contains any of these words, ignoring "
+                     "case, are never judged unused. The match is on the word, not "
+                     "on one channel, so an event slot that M3U sync renames in "
+                     "place keeps its protection.",
+    },
     "exclude_group_list": {
         "label": "Excluded groups",
         "help_text": "Channel groups that are never judged unused. Local, OTA and "
@@ -91,14 +118,16 @@ def split_list(value):
     return [part.strip() for part in str(value).split(",") if part.strip()]
 
 
-def legacy_settings(settings, enabled):
+def legacy_settings(settings, enabled, default_regex=""):
     """Return a copy of ``settings`` with every list value saved under a new id
-    written back into its old text setting.
+    written back into its old text setting, and the ticked name keywords
+    appended to the name regex.
 
     Only a new id holding a list counts. ``enabled`` is
     ``gateway.fields_api_available()`` at the call site: False on Dispatcharr
     0.33 and earlier, where the settings come back unchanged, so a list left
-    over from a downgrade never overrides the text the operator now edits."""
+    over from a downgrade never overrides the text the operator now edits.
+    ``default_regex`` is the regex that applies when none was saved."""
     out = dict(settings) if isinstance(settings, dict) else {}
     if not enabled:
         return out
@@ -106,7 +135,22 @@ def legacy_settings(settings, enabled):
         value = out.get(new_id)
         if isinstance(value, list):
             out[old_id] = ", ".join(split_list(value))
+    words = out.get(KEYWORD_ID)
+    if isinstance(words, list) and split_list(words):
+        base = out[REGEX_ID] if REGEX_ID in out else default_regex
+        out[REGEX_ID] = name_rule(base, split_list(words))
     return out
+
+
+def name_rule(base, words):
+    """``base`` OR any of ``words`` as one regex, the words matched as literal
+    text ignoring case. ``base`` goes first so a global flag at its start, such
+    as ``(?i)``, stays at the start where Python requires it."""
+    base = str(base or "")
+    if not words:
+        return base
+    keywords = "(?i:" + "|".join(re.escape(w) for w in words) + ")"
+    return f"{base}|{keywords}" if base else keywords
 
 
 def _options(names, extra=()):
@@ -143,6 +187,12 @@ def pick_list_fields(flat_fields, settings=None, group_names=()):
     settings = settings if isinstance(settings, dict) else {}
     out = []
     for field in flat_fields or []:
+        if isinstance(field, dict) and field.get("id") == REGEX_ID:
+            out.append(_keyword_field(settings))
+            regex = copy.deepcopy(field)
+            regex["help_text"] = REGEX_HELP_TEXT
+            out.append(regex)
+            continue
         if not isinstance(field, dict) or field.get("id") not in NEW_ID_BY_OLD_ID:
             out.append(copy.deepcopy(field) if isinstance(field, dict) else field)
             continue
@@ -158,6 +208,17 @@ def pick_list_fields(flat_fields, settings=None, group_names=()):
             "help_text": meta["help_text"],
         })
     return out
+
+
+def _keyword_field(settings):
+    """The name keyword pick list. Default empty; a stored keyword that is no
+    longer offered stays an option so the next save is not rejected."""
+    stored = settings.get(KEYWORD_ID)
+    stored = split_list(stored) if isinstance(stored, list) else []
+    meta = NEW_FIELDS[KEYWORD_ID]
+    return {"id": KEYWORD_ID, "label": meta["label"], "type": "multiselect",
+            "default": [], "options": _options(NAME_KEYWORDS, stored),
+            "help_text": meta["help_text"]}
 
 
 def sectioned_fields(flat_fields):

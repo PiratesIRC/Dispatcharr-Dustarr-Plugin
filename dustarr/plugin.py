@@ -723,7 +723,8 @@ def _legacy(settings):
     rest of the plugin reads (form_fields.legacy_settings). Called at every
     entry point that reads settings: Plugin._run_action and _load_settings,
     which feeds the scheduled Celery task. A no-op on Dispatcharr 0.33."""
-    return form_fields.legacy_settings(settings, gateway.fields_api_available())
+    return form_fields.legacy_settings(settings, gateway.fields_api_available(),
+                                       gateway.DEFAULT_EXCLUDE_NAME_RE)
 
 
 CRON_BY_SCHEDULE = {"daily": "0 3 * * *", "weekly": "0 3 * * 1",
