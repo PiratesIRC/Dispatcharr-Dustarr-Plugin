@@ -51,7 +51,7 @@ USAGE = UsageReporter(
     settings_fn=lambda: load_plugin_settings("dustarr"),
 )
 
-PLUGIN_VERSION = "1.26.2901903"
+PLUGIN_VERSION = "1.26.3251749"
 
 DATA_DIR = "/data/dustarr"           # plugin state (named volume)
 # Both outputs go to the SAME directory, under Dispatcharr's existing /config

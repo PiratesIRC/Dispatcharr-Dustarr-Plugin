@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.26.3251749, November 21, 2026
+
+**This version needs Dispatcharr 0.34.0 or later.** It declares the 0.34 plugin manifest format, which Dispatcharr 0.33.0 and earlier cannot install. If you are still on 0.33 or earlier, stay on 1.26.2901903 until you upgrade Dispatcharr. Your saved settings carry over unchanged.
+
+### Added
+
+- **The settings form is split into collapsible sections.** Quick start, how watching is measured, when a channel counts as unused, channels that are never judged, the report, and anonymous usage counts each have their own section. The two sections most people never change start closed. The longer help texts are shortened, with the rest shown as titled notes right below the setting.
+- **Excluded groups is a pick list.** It lists the channel groups that hold at least one channel, so you choose them instead of typing names separated by commas. Your current list is ticked. A group added after the plugin loaded appears once you press the refresh control on the Plugins page.
+- **Excluded name keywords.** A new pick list, LIVE EVENT, PPV, NO EVENT and 24/7, sits above the name regex. A channel whose name contains a ticked word, ignoring case, is never judged unused. The regex stays for patterns the keywords do not cover, and a channel matching either one is excluded. Nothing is ticked by default, so no installation changes what it excludes until you tick a word. The default regex already covers these four words; clear it if you would rather manage them with the pick list.
+
+### Changed
+
+- Requirements in the README now say Dispatcharr 0.34.0 or later.
+
 ## 1.26.2901903, October 17, 2026
 
 ### Fixed
