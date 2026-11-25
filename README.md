@@ -109,7 +109,7 @@ The report and the CSV land in `/config/dustarr/`. `/config` is Dispatcharr's ex
 
 Dustarr's private state lives in Dispatcharr's data folder for the plugin, `/data/plugins/_data/dustarr/`.
 That folder holds `usage.json` (the recorded usage, the one file worth backing up),
-`report_count.json`, `scheduled_run.json`, `notify_state.json` and `usage/dustarr/`
+`scheduled_run.json`, `notify_state.json` and `usage/dustarr/`
 (the anonymous usage counter's install id and send timing). The reports Newsflasharr
 emails, when `/config` cannot be written, go to `/data/plugins/_shared/newsflasharr/dustarr/`.
 Nothing beside that folder is needed.
@@ -129,7 +129,7 @@ The Reports Built and Active Installs badges count every install that leaves the
 action or builds at least one scheduled report.
 
 Reports Built counts the reports this plugin has written on the install. Its total
-is kept in /data/plugins/_data/dustarr/report_count.json and only goes up, short of deleting that
+is kept in /data/dustarr/report_count.json and only goes up, short of deleting that
 file: deleting old report files with the retention setting does not lower it. A report counts only once its
 HTML file is confirmed on disk, so a run that wrote nothing adds nothing. Emails
 are not counted.

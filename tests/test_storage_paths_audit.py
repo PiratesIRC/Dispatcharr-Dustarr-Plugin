@@ -20,7 +20,10 @@ SKIPPED = {"data_paths.py", "plugin_storage.py"}
 
 PLUGIN_LITERALS = {
     "/data/dustarr", "/data/dustarr/usage.json", "/data/dustarr/scheduled_run.json",
-    "/data/dustarr/report_count.json", "/data/dustarr/notify_state.json",
+    # Read by Newsflasharr (notifier/newsflasharr/report_count.py) at /data/<source>/report_count.json,
+    # so it is allowed to stay at this path in every mode and is never moved by bind.
+    "/data/dustarr/report_count.json",
+    "/data/dustarr/notify_state.json",
     "/data/dustarr/reports", "/data/plugin_stats",
 }
 

@@ -19,14 +19,14 @@ except ImportError:  # loaded as a bare module, as plugin.py allows
 # storage.adopt_newer_file).
 ROLLOUT_DUAL_PATHS = True
 
-# (constant name, kind, rel under the data dir). The usage file, the run stamp, the report counter
-# and the notify gate state move into the data directory. The report fallback folder is a
+# (constant name, kind, rel under the data dir). The usage file, the run stamp and the notify gate
+# state move into the data directory. The report counter does not move: Newsflasharr reads
+# /data/<source>/report_count.json, so it stays at /data/dustarr/report_count.json in every mode. The report fallback folder is a
 # nocopy row named by reports_constant: it moves to the shared Newsflasharr reports folder and
 # the old reports are not carried over. The usage reporter's folder moves under the data dir.
 _BIND_TABLE = (
     ("USAGE_FILE_PATH", "file", "usage.json"),
     ("SCHEDULED_RUN_PATH", "file", "scheduled_run.json"),
-    ("REPORT_COUNT_PATH", "file", "report_count.json"),
     ("NOTIFY_STATE_PATH", "file", "notify_state.json"),
     ("USAGE_DATA_DIR", "usage_dir", "usage"),
     ("REPORT_FALLBACK_DIR", "nocopy", None),

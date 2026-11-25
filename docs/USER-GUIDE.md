@@ -90,8 +90,8 @@ report renders identically offline, on a television, or as an email attachment.
 The chip under the title reads **Report #N**: the running total of reports this
 installation has successfully written. It counts reports that reached the disk,
 not times a button was pressed, so a build that failed to write does not
-increment it. The same number is in `/data/plugins/_data/dustarr/report_count.json` for
-another tool to read. If it is missing or unreadable the chip does not render at
+increment it. The same number is in `/data/dustarr/report_count.json` for
+another tool to read. It stays at that path on purpose: Newsflasharr reads it there. If it is missing or unreadable the chip does not render at
 all, because a counter must never invent activity. On the maintainer's own
 installation this number also feeds the **Reports Built** badge on the project
 README; your installation's count stays on your machine.
@@ -121,7 +121,7 @@ thread all produce a perfectly formatted report claiming every channel is dead.
 | `/config/dustarr/report-<timestamp>.html` | The same report kept as a dated archive. The newest eight are kept whatever their age, and older ones are also deleted if you set a retention in days. |
 | `/config/dustarr/report-<timestamp>.csv` | The same data as CSV, for a spreadsheet, with a commented preamble above the rows saying what the file is and what the run found. The newest eight are kept whatever their age, and older ones are also deleted if you set a retention in days. |
 | `/data/plugins/_data/dustarr/usage.json` | The recorded usage. This is the irreplaceable file: delete it and the tracking window restarts from zero. |
-| `/data/plugins/_data/dustarr/report_count.json` | The running total of reports written. The anonymous usage counter reads it; see [Anonymous usage counts](#anonymous-usage-counts). |
+| `/data/dustarr/report_count.json` | The running total of reports written. The anonymous usage counter reads it; see [Anonymous usage counts](#anonymous-usage-counts). |
 | `/data/plugins/_data/dustarr/usage/dustarr/` | The anonymous usage counter's install id and send timing. It holds no report content. |
 | `/data/plugins/_data/dustarr/scheduled_run.json` | When the scheduled report last actually ran. |
 

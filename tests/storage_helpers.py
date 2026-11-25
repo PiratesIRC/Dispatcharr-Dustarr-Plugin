@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 PLUGIN_SOURCE = pathlib.Path(__file__).resolve().parent.parent / "dustarr" / "plugin.py"
 # Every constant the carry-over moves, plus the usage reporter's folder and the reports folder.
-STATE_NAMES = ("USAGE_FILE_PATH", "SCHEDULED_RUN_PATH", "REPORT_COUNT_PATH", "NOTIFY_STATE_PATH",
+STATE_NAMES = ("USAGE_FILE_PATH", "SCHEDULED_RUN_PATH", "NOTIFY_STATE_PATH",
                "USAGE_DATA_DIR", "REPORT_FALLBACK_DIR")
 
 

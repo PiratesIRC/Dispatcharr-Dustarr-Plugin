@@ -30,12 +30,26 @@ def test_bind_rebinds_every_state_row_and_records_the_legacy_paths(data_paths, m
     assert cfg.DATA_DIR == layout.data_dir
     assert cfg.USAGE_FILE_PATH == os.path.join(layout.data_dir, "usage.json")
     assert cfg.SCHEDULED_RUN_PATH == os.path.join(layout.data_dir, "scheduled_run.json")
-    assert cfg.REPORT_COUNT_PATH == os.path.join(layout.data_dir, "report_count.json")
     assert cfg.NOTIFY_STATE_PATH == os.path.join(layout.data_dir, "notify_state.json")
     assert cfg.USAGE_DATA_DIR == os.path.join(layout.data_dir, "usage")
     # The report fallback is the shared Newsflasharr folder, not the data directory.
     assert cfg.REPORT_FALLBACK_DIR == os.path.join(layout.plugins_dir, "_shared", "newsflasharr", "dustarr")
     assert cfg.STORAGE_MIGRATION is not None
+
+
+def test_the_report_counter_path_is_not_moved_by_bind(data_paths, monkeypatch, tmp_path):
+    """Newsflasharr reads /data/<source>/report_count.json, so the counter keeps its literal
+    path after a bind into the data directory, and it is no carry-over row."""
+    literals = source_literals()
+    cfg = make_cfg(dict(literals))
+    layout = make_layout(data_paths, str(tmp_path))
+    monkeypatch.setattr(data_paths._ps, "resolve", lambda *a, **k: layout)
+
+    data_paths.bind(cfg, str(tmp_path / "plugin.py"), Log())
+
+    assert cfg.REPORT_COUNT_PATH == "/data/dustarr/report_count.json"
+    assert "REPORT_COUNT_PATH" not in cfg.LEGACY_PATHS
+    assert all(row[0] != "REPORT_COUNT_PATH" for row in data_paths.SPEC.table)
 
 
 def test_bind_names_the_legacy_paths_the_way_the_source_does(data_paths):

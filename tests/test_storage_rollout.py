@@ -34,7 +34,6 @@ def bound(plugin_impl, monkeypatch, tmp_path):
     monkeypatch.setattr(plugin_impl, "STORAGE_LAYOUT", layout)
     monkeypatch.setattr(plugin_impl, "DATA_DIR", layout.data_dir)
     monkeypatch.setattr(plugin_impl, "USAGE_FILE_PATH", os.path.join(layout.data_dir, "usage.json"))
-    monkeypatch.setattr(plugin_impl, "REPORT_COUNT_PATH", os.path.join(layout.data_dir, "report_count.json"))
     monkeypatch.setattr(plugin_impl, "SCHEDULED_RUN_PATH", os.path.join(layout.data_dir, "scheduled_run.json"))
     monkeypatch.setattr(plugin_impl, "NOTIFY_STATE_PATH", os.path.join(layout.data_dir, "notify_state.json"))
     os.makedirs(layout.data_dir, exist_ok=True)
@@ -148,21 +147,6 @@ def test_the_lease_acquisition_reads_the_old_leader_state(storage, bound, plugin
     assert col.sessionizer.channels[UUID_OLD]["watch_count"] == 4
 
 
-def test_the_report_counter_adopts_a_newer_old_count_before_it_increments(plugin_impl, bound):
-    layout, legacy = bound
-    put(legacy["REPORT_COUNT_PATH"], {"reports_built": 12}, NOW - 10)
-    assert plugin_impl.read_report_count() == 12
-    assert plugin_impl.bump_report_count() == 13
-    assert read(plugin_impl.REPORT_COUNT_PATH) == {"reports_built": 13}
-
-
-def test_the_report_counter_keeps_a_newer_new_count(plugin_impl, bound):
-    layout, legacy = bound
-    put(legacy["REPORT_COUNT_PATH"], {"reports_built": 2}, NOW - 600)
-    put(plugin_impl.REPORT_COUNT_PATH, {"reports_built": 8}, time.time())
-    assert plugin_impl.read_report_count() == 8
-
-
 def test_the_scheduled_run_stamp_adopts_a_newer_old_run(plugin_impl, bound):
     layout, legacy = bound
     put(legacy["SCHEDULED_RUN_PATH"], {"last_scheduled_run_ts": NOW}, NOW)
@@ -179,6 +163,15 @@ def test_the_notify_gate_state_adopts_a_newer_old_file(plugin_impl, bound):
 def test_nothing_is_adopted_once_the_flag_is_off(plugin_impl, bound, monkeypatch):
     layout, legacy = bound
     monkeypatch.setattr(plugin_impl.data_paths, "ROLLOUT_DUAL_PATHS", False)
-    put(legacy["REPORT_COUNT_PATH"], {"reports_built": 12}, NOW - 10)
-    assert plugin_impl.read_report_count() == 0
-    assert not os.path.exists(plugin_impl.REPORT_COUNT_PATH)
+    put(legacy["SCHEDULED_RUN_PATH"], {"last_scheduled_run_ts": NOW}, NOW)
+    assert plugin_impl._read_scheduled_run_ts() is None
+    assert not os.path.exists(plugin_impl.SCHEDULED_RUN_PATH)
+
+
+def test_the_report_counter_is_never_adopted(plugin_impl, bound):
+    """The counter path is the same in both releases, so there is nothing to adopt: a bound
+    worker reads and writes the one literal file."""
+    layout, legacy = bound
+    from storage_helpers import source_literals
+    assert source_literals()["REPORT_COUNT_PATH"] == "/data/dustarr/report_count.json"
+    assert "REPORT_COUNT_PATH" not in plugin_impl.LEGACY_PATHS

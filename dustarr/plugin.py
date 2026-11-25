@@ -50,6 +50,8 @@ PLUGIN_DB_KEY = "dustarr"
 DATA_DIR = "/data/dustarr"           # plugin state; rebound to the data directory
 USAGE_FILE_PATH = "/data/dustarr/usage.json"
 SCHEDULED_RUN_PATH = "/data/dustarr/scheduled_run.json"
+# Not moved by data_paths.bind. Newsflasharr (notifier/newsflasharr/report_count.py) reads
+# /data/<source>/report_count.json, so this path is a cross-plugin contract in every mode.
 REPORT_COUNT_PATH = "/data/dustarr/report_count.json"
 NOTIFY_STATE_PATH = "/data/dustarr/notify_state.json"
 # The usage reporter's folder: the install id, the send record and the lock.
@@ -847,7 +849,6 @@ def read_report_count():
     file must not hide one and it degrades toward "never ran". This one feeds a
     badge, so an unreadable file must not INVENT activity.
     """
-    _adopt_rollout_file(_report_count_path(), "REPORT_COUNT_PATH")
     try:
         with open(_report_count_path(), encoding="utf-8") as fh:
             value = int(json.load(fh).get("reports_built", 0))

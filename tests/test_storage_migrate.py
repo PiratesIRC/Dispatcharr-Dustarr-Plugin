@@ -13,7 +13,6 @@ from storage_helpers import Log, make_cfg, make_layout, tmp_legacy
 OLD_FILES = {
     "USAGE_FILE_PATH": b'{"channels": {}, "meta": {}}',
     "SCHEDULED_RUN_PATH": b'{"last_scheduled_run_ts": 1.0}',
-    "REPORT_COUNT_PATH": b'{"reports_built": 3}',
     "NOTIFY_STATE_PATH": b'{"prev_ok": true}',
 }
 
