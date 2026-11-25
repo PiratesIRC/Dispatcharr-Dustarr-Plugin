@@ -1096,8 +1096,7 @@ def test_gate_state_round_trips_through_the_task(plugin, tmp_path, monkeypatch):
     monkeypatch.setattr(plugin.reports, "build_model",
                         lambda *a, **k: next(models))
 
-    state_path = os.path.join(str(tmp_path / "data"),
-                              plugin.notify_report.STATE_FILE)
+    state_path = plugin.NOTIFY_STATE_PATH
 
     plugin.build_report_task()
     assert plugin.notify_report.load_prev_ok(state_path) is False
@@ -1245,6 +1244,13 @@ def test_sync_schedule_does_not_requeue_when_removing_the_schedule(plugin, monke
 # provenance-blind -- it stamps on ANY smtp send carrying a file, so a manual
 # send satisfies it identically. Neither can answer "did the schedule fire".
 
+def _state_file(path):
+    """A Path under the redirected state folder, its parent created (see conftest)."""
+    from pathlib import Path
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    return Path(path)
+
+
 def test_scheduled_run_ts_round_trips(plugin, monkeypatch, tmp_path):
     monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
     assert plugin._read_scheduled_run_ts() is None
@@ -1256,7 +1262,7 @@ def test_a_corrupt_scheduled_run_file_reads_as_never(plugin, monkeypatch, tmp_pa
     """Degrade to 'never ran' -- the SAFE direction. This file exists to REPORT
     a problem, so it must never become one, and it must not hide one either."""
     monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
-    (tmp_path / "scheduled_run.json").write_text("{not json", encoding="utf-8")
+    _state_file(plugin.SCHEDULED_RUN_PATH).write_text("{not json", encoding="utf-8")
     assert plugin._read_scheduled_run_ts() is None
 
 
@@ -1837,13 +1843,13 @@ def test_the_counter_degrades_to_zero_on_a_corrupt_file(plugin, tmp_path, monkey
     INVENT activity. Note this is the opposite direction from
     _read_scheduled_run_ts, which reports a problem and so must not hide one."""
     monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
-    (tmp_path / plugin.REPORT_COUNT_FILE).write_text("{not json", encoding="utf-8")
+    _state_file(plugin.REPORT_COUNT_PATH).write_text("{not json", encoding="utf-8")
     assert plugin.read_report_count() == 0
 
 
 def test_the_counter_rejects_a_negative_stored_value(plugin, tmp_path, monkeypatch):
     monkeypatch.setattr(plugin, "DATA_DIR", str(tmp_path))
-    (tmp_path / plugin.REPORT_COUNT_FILE).write_text(
+    _state_file(plugin.REPORT_COUNT_PATH).write_text(
         '{"reports_built": -5}', encoding="utf-8")
     assert plugin.read_report_count() == 0
 
@@ -1910,7 +1916,7 @@ def test_the_counter_file_is_the_machine_readable_contract(plugin, tmp_path,
     plugin.bump_report_count()
     import json
     on_disk = json.loads(
-        (tmp_path / plugin.REPORT_COUNT_FILE).read_text(encoding="utf-8"))
+        _state_file(plugin.REPORT_COUNT_PATH).read_text(encoding="utf-8"))
     assert on_disk == {"reports_built": 2}, "the file shape IS the contract"
 
 

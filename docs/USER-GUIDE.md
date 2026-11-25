@@ -90,7 +90,7 @@ report renders identically offline, on a television, or as an email attachment.
 The chip under the title reads **Report #N**: the running total of reports this
 installation has successfully written. It counts reports that reached the disk,
 not times a button was pressed, so a build that failed to write does not
-increment it. The same number is in `/data/dustarr/report_count.json` for
+increment it. The same number is in `/data/plugins/_data/dustarr/report_count.json` for
 another tool to read. If it is missing or unreadable the chip does not render at
 all, because a counter must never invent activity. On the maintainer's own
 installation this number also feeds the **Reports Built** badge on the project
@@ -120,17 +120,17 @@ thread all produce a perfectly formatted report claiming every channel is dead.
 | `/config/dustarr/report.html` | The latest report. Self contained: no external stylesheet, script, font or image. |
 | `/config/dustarr/report-<timestamp>.html` | The same report kept as a dated archive. The newest eight are kept whatever their age, and older ones are also deleted if you set a retention in days. |
 | `/config/dustarr/report-<timestamp>.csv` | The same data as CSV, for a spreadsheet, with a commented preamble above the rows saying what the file is and what the run found. The newest eight are kept whatever their age, and older ones are also deleted if you set a retention in days. |
-| `/data/dustarr/usage.json` | The recorded usage. This is the irreplaceable file: delete it and the tracking window restarts from zero. |
-| `/data/dustarr/report_count.json` | The running total of reports written. The anonymous usage counter reads it; see [Anonymous usage counts](#anonymous-usage-counts). |
-| `/data/plugin_stats/dustarr/` | The anonymous usage counter's install id and send timing. It holds no report content. |
-| `/data/dustarr/scheduled_run.json` | When the scheduled report last actually ran. |
+| `/data/plugins/_data/dustarr/usage.json` | The recorded usage. This is the irreplaceable file: delete it and the tracking window restarts from zero. |
+| `/data/plugins/_data/dustarr/report_count.json` | The running total of reports written. The anonymous usage counter reads it; see [Anonymous usage counts](#anonymous-usage-counts). |
+| `/data/plugins/_data/dustarr/usage/dustarr/` | The anonymous usage counter's install id and send timing. It holds no report content. |
+| `/data/plugins/_data/dustarr/scheduled_run.json` | When the scheduled report last actually ran. |
 
 `/config` is Dispatcharr's existing bind mount, so `/config/dustarr/` is a real
 folder on your host and you can open the report by double clicking it.
 `/data` is a named volume with no host path, which is why nothing you need to
 read is written there while `/config/dustarr/` can be written. When it cannot,
 as on a stock Dispatcharr image with no writable `/config`, the three report
-files go to `/data/dustarr/reports/` instead, and the plugin card names the path
+files go to `/data/plugins/_shared/newsflasharr/dustarr/` instead, and the plugin card names the path
 it used.
 
 **Nothing is served over HTTP, deliberately.** Earlier versions wrote the report
@@ -254,7 +254,7 @@ Off, daily, weekly or monthly, run by Celery Beat inside Dispatcharr. Weekly on
 Monday at 03:00 is the default.
 
 The only reliable evidence that a scheduled run happened is the timestamp in
-`/data/dustarr/scheduled_run.json`, which is written by the scheduled task
+`/data/plugins/_data/dustarr/scheduled_run.json`, which is written by the scheduled task
 itself after the report is confirmed published. Celery's own run counter counts
 messages sent, not messages executed, so it advances whether or not the task
 ever ran. Validate settings reads the timestamp for you.
@@ -306,6 +306,6 @@ does not spool anything and does not fail.
 3. Press **Validate settings** and check that the collector is running and the
    schedule is armed.
 
-Your recorded usage is in `/data/dustarr/usage.json` and is not touched by an
+Your recorded usage is in `/data/plugins/_data/dustarr/usage.json` and is not touched by an
 upgrade. It is the one file worth backing up: deleting it restarts the tracking
 window, and there is no way to rebuild it.

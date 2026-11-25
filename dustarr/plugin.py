@@ -16,6 +16,7 @@ import json
 import logging
 import math
 import os
+import sys
 import threading
 import time
 
@@ -23,10 +24,11 @@ from celery import shared_task
 
 try:
     from . import collector as collector_mod
-    from . import form_fields, gates, gateway, notify_report, redaction, reports, sessionizer, storage
+    from . import data_paths, form_fields, gates, gateway, notify_report, redaction, reports, sessionizer, storage
     from .usage_client import UsageReporter, json_field, load_plugin_settings, with_usage_field
 except ImportError:                     # standalone (non-package) import path
     import collector as collector_mod
+    import data_paths
     import form_fields
     import gates
     import gateway
@@ -39,21 +41,19 @@ except ImportError:                     # standalone (non-package) import path
 
 _LOGGER = logging.getLogger(__name__)
 
-# Reports the Reports Built total and a random install id to the plugin-stats Worker, so
-# the README badges count each install that keeps the setting ticked and runs (README,
-# "Anonymous usage counts"). report() never raises; only the network send runs on a
-# background thread. The total is read at send time from the counter file.
-USAGE = UsageReporter(
-    plugin="dustarr",
-    counter="reports_built",
-    label="Reports Built",
-    total_fn=lambda: json_field(_report_count_path(), "reports_built"),
-    settings_fn=lambda: load_plugin_settings("dustarr"),
-)
-
 PLUGIN_VERSION = "1.26.3251749"
+PLUGIN_DB_KEY = "dustarr"
 
-DATA_DIR = "/data/dustarr"           # plugin state (named volume)
+# Private state. Each literal is the legacy /data path; data_paths.bind moves the state
+# constants into Dispatcharr's plugin data directory once per import, before the usage reporter
+# below is built. Legacy mode (Dispatcharr 0.33, tests) leaves every literal as written.
+DATA_DIR = "/data/dustarr"           # plugin state; rebound to the data directory
+USAGE_FILE_PATH = "/data/dustarr/usage.json"
+SCHEDULED_RUN_PATH = "/data/dustarr/scheduled_run.json"
+REPORT_COUNT_PATH = "/data/dustarr/report_count.json"
+NOTIFY_STATE_PATH = "/data/dustarr/notify_state.json"
+# The usage reporter's folder: the install id, the send record and the lock.
+USAGE_DATA_DIR = "/data/plugin_stats"
 # Both outputs go to the SAME directory, under Dispatcharr's existing /config
 # bind mount, so they land in a real folder on the host that the operator can
 # open directly. The HTML report used to live in /data/logos/dustarr, which
@@ -65,7 +65,60 @@ CSV_DIR = "/config/dustarr"          # same directory; suffix keeps the archives
 # Used only when /config/dustarr cannot be written: Dispatcharr's plugin guide
 # asks plugins to write under /data, and a stock image has no writable /config,
 # where the choice is this or no report at all. Never /data/logos (see above).
+# data_paths.bind moves it to the shared Newsflasharr reports folder; the old
+# reports are not carried over.
 REPORT_FALLBACK_DIR = "/data/dustarr/reports"
+
+# Set by data_paths.bind below: the legacy paths, the resolved layout and the carry-over result.
+LEGACY_PATHS = {}
+STORAGE_LAYOUT = None
+STORAGE_MIGRATION = None
+data_paths.bind(sys.modules[__name__], __file__, _LOGGER)
+
+
+def _apply_usage_storage(usage, migration):
+    """Stop this process's usage reporting when the old install id could not be carried over.
+
+    A fresh id minted here would count one install twice, and the settings argument cannot stop
+    that, so the reporter's report method is replaced for this process only. The next process
+    retries the carry-over.
+    """
+    if migration is not None and migration.install_id_blocked:
+        usage.report = lambda *args, **kwargs: None
+
+
+def _rollout_path(name):
+    """The old /data path of constant name during the rollout, else None. See data_paths.legacy_for."""
+    return data_paths.legacy_for(sys.modules[__name__], name)
+
+
+def _usage_store():
+    """The usage store for this process. The old usage.json is adopted when it is the newer one."""
+    return storage.Storage(DATA_DIR, legacy_path=_rollout_path("USAGE_FILE_PATH"))
+
+
+def _adopt_rollout_file(path, name):
+    """Rollout: adopt the old copy of a small state file when it is the newer one. Never raises."""
+    try:
+        storage.adopt_newer_file(path, _rollout_path(name), time.time())
+    except OSError:
+        _LOGGER.warning("dustarr could not adopt the old copy of %s", name)
+
+
+# Reports the Reports Built total and a random install id to the plugin-stats Worker, so
+# the README badges count each install that keeps the setting ticked and runs (README,
+# "Anonymous usage counts"). report() never raises; only the network send runs on a
+# background thread. The total is read at send time from the counter file. Built after
+# data_paths.bind, so the reporter's folder is the bound one.
+USAGE = UsageReporter(
+    plugin="dustarr",
+    counter="reports_built",
+    label="Reports Built",
+    total_fn=lambda: json_field(_report_count_path(), "reports_built"),
+    settings_fn=lambda: load_plugin_settings("dustarr"),
+    data_dir=USAGE_DATA_DIR,
+)
+_apply_usage_storage(USAGE, STORAGE_MIGRATION)
 
 THREAD_NAME = "dustarr-collector"
 TASK_NAME = "dustarr_build_report"
@@ -405,7 +458,7 @@ def _spawn_collector(settings):
 
         token = f"{os.getpid()}:{uuid_mod.uuid4().hex}:{PLUGIN_VERSION}"
         sess = sessionizer.Sessionizer(thresholds)
-        store = storage.Storage(DATA_DIR)
+        store = _usage_store()
         col = None
         backoff = 5.0
         last_error_log = 0.0
@@ -495,7 +548,7 @@ def ensure_collector(settings=None):
 # ---- report ------------------------------------------------------------------
 def _build_report(settings, is_scheduled=False):
     thresholds = coerce_settings(settings)
-    store = storage.Storage(DATA_DIR)
+    store = _usage_store()
     gw = _gateway()
     now = gw.now()
 
@@ -623,7 +676,8 @@ def _emit_notifications(settings, model, written):
             # so a realistic refusal carried no cause at all.
             result["error"] = why
 
-        state_path = os.path.join(DATA_DIR, notify_report.STATE_FILE)
+        state_path = NOTIFY_STATE_PATH
+        _adopt_rollout_file(state_path, "NOTIFY_STATE_PATH")
         prev_ok = notify_report.load_prev_ok(state_path)
         new_ok, _action = notify_report.emit_gate(
             nc.notify, model, thresholds, prev_ok)
@@ -735,11 +789,8 @@ CRON_BY_SCHEDULE = {"daily": "0 3 * * *", "weekly": "0 3 * * 1",
 CADENCE_DAYS = {"daily": 1.0, "weekly": 7.0, "monthly": 31.0}
 
 
-SCHEDULED_RUN_FILE = "scheduled_run.json"
-
-
 def _scheduled_run_path():
-    return os.path.join(DATA_DIR, SCHEDULED_RUN_FILE)
+    return SCHEDULED_RUN_PATH
 
 
 def _write_scheduled_run_ts(now):
@@ -755,7 +806,7 @@ def _write_scheduled_run_ts(now):
     Never raises: a health signal must not break the run it reports on.
     """
     try:
-        os.makedirs(DATA_DIR, exist_ok=True)
+        os.makedirs(os.path.dirname(_scheduled_run_path()), exist_ok=True)
         tmp = _scheduled_run_path() + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump({"last_scheduled_run_ts": float(now)}, fh)
@@ -770,6 +821,7 @@ def _read_scheduled_run_ts():
     Degrades to "never ran", which is the SAFE direction: this file exists to
     REPORT a problem, so an unreadable one must not hide one.
     """
+    _adopt_rollout_file(_scheduled_run_path(), "SCHEDULED_RUN_PATH")
     try:
         with open(_scheduled_run_path(), encoding="utf-8") as fh:
             value = json.load(fh).get("last_scheduled_run_ts")
@@ -778,11 +830,8 @@ def _read_scheduled_run_ts():
         return None
 
 
-REPORT_COUNT_FILE = "report_count.json"
-
-
 def _report_count_path():
-    return os.path.join(DATA_DIR, REPORT_COUNT_FILE)
+    return REPORT_COUNT_PATH
 
 
 def read_report_count():
@@ -798,6 +847,7 @@ def read_report_count():
     file must not hide one and it degrades toward "never ran". This one feeds a
     badge, so an unreadable file must not INVENT activity.
     """
+    _adopt_rollout_file(_report_count_path(), "REPORT_COUNT_PATH")
     try:
         with open(_report_count_path(), encoding="utf-8") as fh:
             value = int(json.load(fh).get("reports_built", 0))
@@ -825,7 +875,7 @@ def bump_report_count():
     """
     current = read_report_count()
     try:
-        os.makedirs(DATA_DIR, exist_ok=True)
+        os.makedirs(os.path.dirname(_report_count_path()), exist_ok=True)
         tmp = _report_count_path() + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump({"reports_built": current + 1}, fh)
@@ -1137,6 +1187,10 @@ class Plugin:
 
     def run(self, action, params=None, context=None):
         try:
+            data_paths.check_context(STORAGE_LAYOUT, context, _LOGGER)
+        except Exception:
+            pass  # a diagnostic warning must never fail the action
+        try:
             return self._run_action(action, params, context)
         finally:
             if action in ("build_report", "show_summary", "validate_settings", "report_issue"):
@@ -1274,7 +1328,7 @@ class Plugin:
 
     def _show_summary(self, settings):
         thresholds = coerce_settings(settings)
-        store = storage.Storage(DATA_DIR)
+        store = _usage_store()
         now = _gateway().now()      # M8: same clock source as _build_report
         usage = store.load(now)
         channels = (usage.get("channels") or {})

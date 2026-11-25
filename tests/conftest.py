@@ -484,6 +484,25 @@ def find_non_ascii(text):
     return sorted({hex(ord(c)) for c in (text or "") if ord(c) > 127})
 
 
+@pytest.fixture
+def plugin_impl():
+    """plugin.py itself (the package re-exports nothing the storage tests need)."""
+    return load_plugin()
+
+
+@pytest.fixture(autouse=True)
+def _state_paths_under_tmp(tmp_path, monkeypatch):
+    """No test may write the real /data/dustarr files. The state constants that moved into the
+    data directory are redirected to a folder under tmp_path; a test that wants a specific file
+    names the constant (plugin.SCHEDULED_RUN_PATH and friends), not a literal path."""
+    module = load_plugin()
+    state = tmp_path / "state"
+    for name in ("USAGE_FILE_PATH", "SCHEDULED_RUN_PATH", "REPORT_COUNT_PATH", "NOTIFY_STATE_PATH"):
+        basename = getattr(module, name).rsplit("/", 1)[-1]
+        monkeypatch.setattr(module, name, str(state / basename))
+    yield
+
+
 @pytest.fixture(autouse=True)
 def _no_real_usage_reporting(tmp_path, monkeypatch):
     """No test may reach /data/plugin_stats or the Worker. The counter writer

@@ -39,7 +39,7 @@ def usage(mod, monkeypatch):
 
 @pytest.fixture()
 def counter_dir(mod, monkeypatch, tmp_path):
-    monkeypatch.setattr(mod, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(mod, "REPORT_COUNT_PATH", str(tmp_path / "report_count.json"))
     return tmp_path
 
 
@@ -89,7 +89,7 @@ def test_a_published_report_is_forced_after_the_counter_moves(mod, counter_dir, 
 def test_a_report_that_was_not_published_neither_counts_nor_reports(mod, counter_dir, usage, monkeypatch):
     blocker = counter_dir / "not-a-dir"
     blocker.write_text("x", encoding="utf-8")
-    monkeypatch.setattr(mod, "DATA_DIR", str(blocker / "sub"))
+    monkeypatch.setattr(mod, "REPORT_COUNT_PATH", str(blocker / "sub" / "report_count.json"))
     assert mod.bump_report_count() == 0
     assert usage.calls == []
 
