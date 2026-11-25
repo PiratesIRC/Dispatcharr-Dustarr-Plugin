@@ -16,7 +16,6 @@ import json
 import logging
 import math
 import os
-import sys
 import threading
 import time
 
@@ -71,11 +70,34 @@ CSV_DIR = "/config/dustarr"          # same directory; suffix keeps the archives
 # reports are not carried over.
 REPORT_FALLBACK_DIR = "/data/dustarr/reports"
 
+class _ModuleConfig:
+    """Attribute access to THIS module's own globals(), used as the config for data_paths.
+
+    sys.modules[__name__] is not safe for this: when Dispatcharr executes this module twice at
+    startup (concurrently or re-entrantly), that name can point at the other, partly executed
+    module object, so bind would write its state there and read it back as None. A read of a
+    missing name raises AttributeError, as a module attribute would.
+    """
+
+    __slots__ = ()
+
+    def __getattr__(self, name):
+        try:
+            return globals()[name]
+        except KeyError:
+            raise AttributeError(name) from None
+
+    def __setattr__(self, name, value):
+        globals()[name] = value
+
+
+_MODULE_CFG = _ModuleConfig()
+
 # Set by data_paths.bind below: the legacy paths, the resolved layout and the carry-over result.
 LEGACY_PATHS = {}
 STORAGE_LAYOUT = None
 STORAGE_MIGRATION = None
-data_paths.bind(sys.modules[__name__], __file__, _LOGGER)
+data_paths.bind(_MODULE_CFG, __file__, _LOGGER)
 
 
 def _apply_usage_storage(usage, migration):
@@ -91,7 +113,7 @@ def _apply_usage_storage(usage, migration):
 
 def _rollout_path(name):
     """The old /data path of constant name during the rollout, else None. See data_paths.legacy_for."""
-    return data_paths.legacy_for(sys.modules[__name__], name)
+    return data_paths.legacy_for(_MODULE_CFG, name)
 
 
 def _usage_store():

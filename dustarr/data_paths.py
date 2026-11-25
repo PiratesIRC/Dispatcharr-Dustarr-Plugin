@@ -72,8 +72,16 @@ def bind(cfg, plugin_file, logger):
     directory itself holds no state of its own. A legacy or failed bind leaves DATA_DIR as written.
     """
     layout = _ps.bind(SPEC, cfg, plugin_file, logger)
-    if not layout.legacy:
-        cfg.DATA_DIR = layout.data_dir
+    if layout is None:
+        # Never raise here: a None from the vendored bind means cfg lost its layout while bind ran.
+        # Read it back from cfg, or record a legacy layout, and keep the legacy DATA_DIR.
+        layout = getattr(cfg, "STORAGE_LAYOUT", None)
+        if layout is None:
+            layout = Layout(True, None, None, getattr(cfg, "PLUGIN_DB_KEY", ""), "bind returned no layout")
+            cfg.STORAGE_LAYOUT = layout
+    data_dir = getattr(layout, "data_dir", None)
+    if not getattr(layout, "legacy", True) and isinstance(data_dir, str):
+        cfg.DATA_DIR = data_dir
     return layout
 
 

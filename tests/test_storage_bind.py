@@ -5,6 +5,7 @@ the legacy literals read from the source, so they never touch a real /data path.
 """
 import ast
 import os
+import sys
 import types
 
 import pytest
@@ -157,3 +158,76 @@ def test_a_failed_install_id_copy_sets_the_blocked_flag(data_paths, monkeypatch,
     assert migration.install_id_blocked is True
     assert not os.path.exists(layout.beside(".migrated")), "a blocked pass must not settle"
     assert not os.path.exists(layout.beside(".active"))
+
+
+def test_bind_with_no_layout_from_the_vendored_bind_does_not_raise(data_paths, monkeypatch, tmp_path):
+    """A None from the vendored bind must not raise on layout.legacy: the process keeps the legacy
+    DATA_DIR and gets a legacy layout recorded on cfg."""
+    literals = source_literals()
+    cfg = make_cfg(dict(literals))
+    monkeypatch.setattr(data_paths._ps, "bind", lambda spec, cfg, plugin_file, logger: None)
+
+    got = data_paths.bind(cfg, str(tmp_path / "plugin.py"), Log())
+
+    assert got.legacy is True
+    assert cfg.STORAGE_LAYOUT is got
+    assert cfg.DATA_DIR == literals["DATA_DIR"]
+
+
+def test_bind_with_no_returned_layout_reads_a_bound_layout_back_from_cfg(data_paths, monkeypatch, tmp_path):
+    """When the vendored bind returns None but cfg holds a bound layout, bind uses that layout and
+    rebinds DATA_DIR to it, the same as a normal bind."""
+    literals = source_literals()
+    layout = make_layout(data_paths, str(tmp_path))
+    cfg = make_cfg(dict(literals, STORAGE_LAYOUT=layout))
+    monkeypatch.setattr(data_paths._ps, "bind", lambda spec, cfg, plugin_file, logger: None)
+
+    got = data_paths.bind(cfg, str(tmp_path / "plugin.py"), Log())
+
+    assert got is layout
+    assert cfg.DATA_DIR == layout.data_dir
+
+
+def test_the_module_config_reads_and_writes_this_modules_globals(plugin_impl, monkeypatch):
+    """The config handed to data_paths is bound to the module's own globals, not to sys.modules."""
+    cfg = plugin_impl._MODULE_CFG
+    with pytest.raises(AttributeError):
+        getattr(cfg, "NO_SUCH_STATE_NAME_XYZ")
+    assert getattr(cfg, "NO_SUCH_STATE_NAME_XYZ", "fallback") == "fallback"
+    monkeypatch.setattr(plugin_impl, "_PROBE_CFG_WRITE", "before", raising=False)
+    setattr(cfg, "_PROBE_CFG_WRITE", "after")
+    assert plugin_impl._PROBE_CFG_WRITE == "after"
+    assert cfg._PROBE_CFG_WRITE == "after"
+
+
+def test_a_second_module_object_under_the_same_name_does_not_capture_the_bind(
+        data_paths, monkeypatch, tmp_path):
+    """Startup race: while plugin.py binds, sys.modules[name] names a second, partly executed module
+    object, and that object's own top-level STORAGE_LAYOUT = None runs during bind. The old code
+    passed sys.modules[__name__] as the config, so bind returned None and data_paths.bind raised
+    AttributeError on layout.legacy. The fixed plugin binds its own globals and is unaffected."""
+    name = "dustarr_under_test.plugin_reentry"
+    other = types.ModuleType(name)
+    for key, value in source_literals().items():
+        setattr(other, key, value)
+    monkeypatch.setitem(sys.modules, name, other)
+    celery_mod = sys.modules["celery"]
+    monkeypatch.setattr(celery_mod, "registered_tasks", dict(celery_mod.registered_tasks))
+    layout = make_layout(data_paths, str(tmp_path))
+    monkeypatch.setattr(data_paths._ps, "resolve", lambda *a, **k: layout)
+
+    def migrate_while_the_other_module_runs(*a, **k):
+        other.STORAGE_LAYOUT = None
+        return None
+
+    monkeypatch.setattr(data_paths._ps, "migrate", migrate_while_the_other_module_runs)
+    namespace = {"__name__": name, "__package__": "dustarr_under_test",
+                 "__file__": str(PLUGIN_SOURCE), "__builtins__": __builtins__}
+    code = compile(PLUGIN_SOURCE.read_text(encoding="utf-8"), str(PLUGIN_SOURCE), "exec")
+
+    exec(code, namespace)
+
+    assert namespace["STORAGE_LAYOUT"] is layout
+    assert namespace["DATA_DIR"] == layout.data_dir
+    assert namespace["USAGE_FILE_PATH"] == os.path.join(layout.data_dir, "usage.json")
+    assert namespace["LEGACY_PATHS"]["USAGE_FILE_PATH"] == "/data/dustarr/usage.json"
