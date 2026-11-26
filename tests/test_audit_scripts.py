@@ -59,14 +59,29 @@ def _systemroot():
     return os.environ.get("SYSTEMROOT", "")
 
 
+def _scratch_git_env():
+    """The environment for git commands in a throwaway repository.
+
+    A git hook exports GIT_INDEX_FILE, GIT_DIR and friends into the hooks' children. Inherited
+    here, they point the scratch repository at the real one's index, so the file is staged there
+    and the scan finds no repository. Every GIT_* variable is dropped; the rest is kept.
+    """
+    import os
+    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+
+def _scratch_git(args, cwd):
+    return subprocess.run(["git", *args], cwd=cwd, check=True, env=_scratch_git_env())
+
+
 @pytest.fixture
 def repo_with_a_planted_match(tmp_path):
     """A git repository holding one tracked file that trips the second rule."""
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    _scratch_git(["init", "-q"], tmp_path)
     offender = tmp_path / "offender.txt"
     offender.write_text(f"harmless line\nthis line carries {SECRET_PLAIN} in it\n",
                         encoding="utf-8")
-    subprocess.run(["git", "add", "offender.txt"], cwd=tmp_path, check=True)
+    _scratch_git(["add", "offender.txt"], tmp_path)
     return tmp_path
 
 
