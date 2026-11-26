@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.26.3302105 (2026-11-26)
+
+### Fixed
+
+- An unreadable `usage.json` is now reported as an error on the plugin page instead of being treated as empty. A file that will not parse is set aside, not overwritten.
+- A warning is logged once when the data folder name does not match the plugin key.
+- After a failed first copy to the new data folder, legacy tally lines are counted once and the copy catches up in the same process.
+- State files written by the storage layer are readable only by their owner.
+- This release answers the Hub storage audit, issue #617.
+
 ## 1.26.3301548, November 26, 2026
 
 ### Changed
