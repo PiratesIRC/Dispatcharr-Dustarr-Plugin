@@ -9,7 +9,6 @@ import sys
 import types
 
 import pytest
-
 from storage_helpers import PLUGIN_SOURCE, STATE_NAMES, Log, make_cfg, make_layout, source_literals, tmp_legacy
 
 
@@ -192,10 +191,10 @@ def test_the_module_config_reads_and_writes_this_modules_globals(plugin_impl, mo
     """The config handed to data_paths is bound to the module's own globals, not to sys.modules."""
     cfg = plugin_impl._MODULE_CFG
     with pytest.raises(AttributeError):
-        getattr(cfg, "NO_SUCH_STATE_NAME_XYZ")
+        _ = cfg.NO_SUCH_STATE_NAME_XYZ
     assert getattr(cfg, "NO_SUCH_STATE_NAME_XYZ", "fallback") == "fallback"
     monkeypatch.setattr(plugin_impl, "_PROBE_CFG_WRITE", "before", raising=False)
-    setattr(cfg, "_PROBE_CFG_WRITE", "after")
+    cfg._PROBE_CFG_WRITE = "after"
     assert plugin_impl._PROBE_CFG_WRITE == "after"
     assert cfg._PROBE_CFG_WRITE == "after"
 

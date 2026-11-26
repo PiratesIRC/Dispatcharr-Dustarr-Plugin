@@ -43,6 +43,9 @@ ignore = [
 # The vendored usage client is sha256-pinned and must stay byte-identical to
 # plugin-stats/client/usage_client.py, so it cannot be edited to satisfy a style rule here.
 "dustarr/usage_client.py" = ["UP031"]
+# The vendored storage layer is sha256-pinned to _shared/plugin_storage.py (scripts/storage_manifest.json)
+# for the same reason.
+"dustarr/plugin_storage.py" = ["UP031"]
 
 [tool.ruff.format]
 quote-style = "double"

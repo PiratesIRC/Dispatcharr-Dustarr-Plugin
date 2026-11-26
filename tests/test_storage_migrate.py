@@ -7,7 +7,6 @@ import json
 import os
 
 import pytest
-
 from storage_helpers import Log, make_cfg, make_layout, tmp_legacy
 
 OLD_FILES = {

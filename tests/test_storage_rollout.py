@@ -10,7 +10,6 @@ import os
 import time
 
 import pytest
-
 from conftest import FakeClock, FakeRedis, load_pure
 from storage_helpers import make_layout, tmp_legacy
 
