@@ -715,7 +715,24 @@ def test_run_redacts_exception_text_in_the_catch_all(plugin, monkeypatch):
     monkeypatch.setattr(plugin, "_build_report", boom)
     result = plugin.Plugin().run("build_report", {}, {"settings": {}})
     assert result["status"] == "error"
-    assert "secretpass" not in result["message"]
+    assert "secretpass" not in result["error"]
+
+
+def test_an_unreadable_usage_file_is_an_error_result_and_a_logged_error(plugin, monkeypatch, caplog):
+    """Storage.load raises on a read failure other than bad bytes. The action must end as a
+    logged error and a result with `error` set and no `message`: a result with both is one
+    the workspace rules forbid."""
+    def denied(self, now):
+        raise PermissionError(13, "Permission denied", "/data/usage.json")
+
+    monkeypatch.setattr(plugin.storage.Storage, "load", denied)
+    caplog.set_level(logging.ERROR)
+    result = plugin.Plugin().run("show_summary", {}, {"settings": {}})
+    assert result["status"] == "error"
+    assert "Permission denied" in result["error"]
+    assert "message" not in result
+    assert any("show_summary" in r.getMessage() for r in caplog.records
+               if r.levelno >= logging.ERROR)
 
 
 # ---- I2: _validate must redact its own messages -----------------------------
@@ -1662,7 +1679,8 @@ def test_build_report_never_raises(plugin, monkeypatch, tmp_path):
     monkeypatch.setattr(plugin, "_build_report", boom)
     r = plugin.Plugin().run("build_report", {}, {"settings": {}})
     assert r["status"] == "error"
-    assert "secretpass" not in r["message"]
+    assert "secretpass" not in r["error"]
+    assert "message" not in r
 
 
 def test_build_report_still_errors_on_a_refusal_with_NO_reason(plugin, monkeypatch, tmp_path):

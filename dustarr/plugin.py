@@ -1243,15 +1243,16 @@ class Plugin:
         except Exception as exc:
             # Dispatcharr renders `error` (red, persistent) and `message` (a
             # transient GREEN toast); `status` renders NOWHERE. Without `error`
-            # a crash is pixel-identical to success.
+            # a crash is pixel-identical to success. Exactly one of the two is
+            # set (workspace rule), and a failure is `error`.
             redacted = redaction.redact(f"{exc}")
-            return {"status": "error", "error": redacted, "message": redacted}
+            _LOGGER.error("dustarr action %s failed: %s", action, redacted)
+            return {"status": "error", "error": redacted}
 
         # `error`, not just `message`: without it this failure renders as a
         # transient green toast, pixel-identical to success (see the comment
         # in the except branch above).
-        return {"status": "error", "error": f"Unknown action: {action}",
-                "message": f"Unknown action: {action}"}
+        return {"status": "error", "error": f"Unknown action: {action}"}
 
     def _report_issue(self):
         """Surface the issue tracker's address.

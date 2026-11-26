@@ -10,7 +10,10 @@ the usage.json that a previous release still writes under /data/dustarr.
 from __future__ import annotations
 
 import json
+import logging
 import os
+
+_LOG = logging.getLogger(__name__)
 
 USAGE = "usage.json"
 CIRCUIT_FAILS = 3
@@ -155,24 +158,37 @@ class Storage:
         return reason
 
     def load(self, now):
+        """Return the usage dict, or {} when the file does not exist.
+
+        Bytes that do not parse (a ValueError, UnicodeDecodeError included) are renamed aside and
+        {} is returned. Any other read failure (permissions, an I/O error) is logged and raised with
+        the file left in place: returning {} there would let the caller write a fresh usage.json
+        over the good one.
+        """
         self.adopt_legacy(now)
         path = self._path()
         try:
             with open(path, encoding="utf-8") as fh:
                 data = json.load(fh)
-            if not isinstance(data, dict):
-                raise ValueError("usage.json is not an object")
-            return data
         except FileNotFoundError:
             return {}
-        except (OSError, ValueError):
-            try:
-                os.replace(path, self._sideline_path(path, now))
-                # Only count a sideline that actually happened.
-                self.stats["corrupt_sidelines"] += 1
-            except OSError:
-                pass
-            return {}
+        except ValueError:
+            return self._sideline_corrupt(path, now)
+        except OSError as exc:
+            _LOG.warning("usage.json could not be read (%s); left in place", type(exc).__name__)
+            raise
+        if not isinstance(data, dict):
+            return self._sideline_corrupt(path, now)
+        return data
+
+    def _sideline_corrupt(self, path, now):
+        try:
+            os.replace(path, self._sideline_path(path, now))
+            # Only count a sideline that actually happened.
+            self.stats["corrupt_sidelines"] += 1
+        except OSError:
+            pass
+        return {}
 
     @staticmethod
     def _sideline_path(path, now):

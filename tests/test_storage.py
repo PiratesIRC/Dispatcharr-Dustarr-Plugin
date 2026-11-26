@@ -153,3 +153,30 @@ def test_sideline_collision_preserves_both_corrupt_files(store, tmp_path):
     contents = {p.read_text(encoding="utf-8") for p in sidelined}
     assert contents == {"first corrupt", "second corrupt"}
     assert store.stats["corrupt_sidelines"] == 2
+
+
+def test_unreadable_usage_file_is_raised_not_sidelined(store, storage_mod, tmp_path, monkeypatch):
+    """A read that fails for a reason other than bad bytes (permissions, an I/O error) must not
+    rename the file aside and hand back {}: the caller would then write a fresh usage.json over
+    the good one. The error propagates and the file stays where it is."""
+    path = tmp_path / "usage.json"
+    path.write_text('{"channels": {"u1": {}}}', encoding="utf-8")
+
+    def denied(*args, **kwargs):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(storage_mod, "open", denied, raising=False)
+    with pytest.raises(PermissionError):
+        store.load(1234.0)
+    monkeypatch.undo()
+    assert store.stats["corrupt_sidelines"] == 0
+    assert not list(tmp_path.glob("usage.json.corrupt-*"))
+    assert json.loads(path.read_text(encoding="utf-8")) == {"channels": {"u1": {}}}
+
+
+def test_undecodable_usage_file_is_still_sidelined(store, tmp_path):
+    """Bytes that are not UTF-8 are a parse failure (a ValueError), so the file is kept aside."""
+    (tmp_path / "usage.json").write_bytes(b"\xff\xfe\x00bad")
+    assert store.load(1234.0) == {}
+    assert store.stats["corrupt_sidelines"] == 1
+    assert len(list(tmp_path.glob("usage.json.corrupt-*"))) == 1
