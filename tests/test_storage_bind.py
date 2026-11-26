@@ -232,3 +232,32 @@ def test_a_second_module_object_under_the_same_name_does_not_capture_the_bind(
     assert namespace["USAGE_FILE_PATH"] == os.path.join(layout.data_dir, "usage.json")
     assert namespace["LEGACY_PATHS"]["USAGE_FILE_PATH"] == "/data/dustarr/usage.json"
 
+
+def test_a_data_directory_named_for_another_key_warns_once_and_still_binds(data_paths, monkeypatch, tmp_path):
+    """A Hub install can change the storage key (the slug), so the directory name may differ from
+    the plugin key. The bind logs one WARNING and keeps the resolved directory."""
+    legacy = tmp_legacy(tmp_path)
+    cfg = make_cfg(dict(legacy, DATA_DIR="/data/dustarr"))
+    plugins = str(tmp_path / "plugins")
+    layout = data_paths.Layout(False, os.path.join(plugins, "_data", "iptv-checker"), plugins,
+                               "dustarr", "test")
+    monkeypatch.setattr(data_paths._ps, "resolve", lambda *a, **k: layout)
+    log = Log()
+
+    data_paths.bind(cfg, str(tmp_path / "plugin.py"), log)
+
+    assert len(log.warnings) == 1
+    assert "iptv-checker" in log.warnings[0]
+    assert cfg.DATA_DIR == layout.data_dir
+
+
+def test_a_data_directory_named_for_the_key_logs_nothing(data_paths, monkeypatch, tmp_path):
+    legacy = tmp_legacy(tmp_path)
+    cfg = make_cfg(dict(legacy, DATA_DIR="/data/dustarr"))
+    layout = make_layout(data_paths, str(tmp_path))
+    monkeypatch.setattr(data_paths._ps, "resolve", lambda *a, **k: layout)
+    log = Log()
+
+    data_paths.bind(cfg, str(tmp_path / "plugin.py"), log)
+
+    assert log.warnings == []

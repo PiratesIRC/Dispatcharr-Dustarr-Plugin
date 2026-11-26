@@ -8,6 +8,8 @@ writer. Each public function passes SPEC to the vendored module.
 """
 from __future__ import annotations
 
+import os
+
 try:
     from . import plugin_storage as _ps
 except ImportError:  # loaded as a bare module, as plugin.py allows
@@ -81,8 +83,19 @@ def bind(cfg, plugin_file, logger):
             cfg.STORAGE_LAYOUT = layout
     data_dir = getattr(layout, "data_dir", None)
     if not getattr(layout, "legacy", True) and isinstance(data_dir, str):
+        _warn_if_misnamed(data_dir, cfg, logger)
         cfg.DATA_DIR = data_dir
     return layout
+
+
+def _warn_if_misnamed(data_dir, cfg, logger):
+    """Log one WARNING when the directory is not named for the plugin key. A Hub install can change
+    the storage key (the slug), so this is a diagnostic only: the bind still succeeds."""
+    key = getattr(cfg, "PLUGIN_DB_KEY", "")
+    name = os.path.basename(os.path.normpath(data_dir))
+    if name != key:
+        logger.warning("%s: data directory %s is not named for the plugin key %s; binding anyway",
+                       SPEC.label, name, key)
 
 
 def legacy_for(cfg, name):
