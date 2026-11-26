@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.26.3301548, November 26, 2026
+
+### Changed
+
+- **Dustarr's private state now lives in Dispatcharr's plugin data folder,** `/data/plugins/_data/dustarr/`, instead of `/data/dustarr/`. The usage history (`usage.json`), the scheduled run stamp and the notification gate state are copied across once on the first start. A file that is already in the new folder is never overwritten, and the old files are left in place.
+- The anonymous usage counter's folder moves from `/data/plugin_stats/dustarr/` to `usage/dustarr/` inside the new folder. The install id is copied with it. If the copy of the install id fails, this process sends no usage counts, so one install never gets a second id.
+- The report fallback folder, used only when `/config/dustarr` cannot be written, moves to `/data/plugins/_shared/newsflasharr/dustarr/`. Reports from the old fallback folder are not copied. The main report and CSV folder, `/config/dustarr/`, is unchanged.
+- The report counter stays at `/data/dustarr/report_count.json`, because Newsflasharr reads it there.
+- While the old and new versions run side by side, a worker takes over the old usage file, run stamp or gate state when that old copy is the newer valid file. A corrupt old file is never used. A corrupt new file is renamed aside, not deleted.
+- Uninstalling with "delete data" removes the new folder, including the usage history and the install id.
+
 ## 1.26.3251749, November 21, 2026
 
 **This version needs Dispatcharr 0.34.0 or later.** It declares the 0.34 plugin manifest format, which Dispatcharr 0.33.0 and earlier cannot install. If you are still on 0.33 or earlier, stay on 1.26.2901903 until you upgrade Dispatcharr. Your saved settings carry over unchanged.

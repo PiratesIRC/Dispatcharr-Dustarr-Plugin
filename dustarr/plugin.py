@@ -40,7 +40,7 @@ except ImportError:                     # standalone (non-package) import path
 
 _LOGGER = logging.getLogger(__name__)
 
-PLUGIN_VERSION = "1.26.3251749"
+PLUGIN_VERSION = "1.26.3301548"
 PLUGIN_DB_KEY = "dustarr"
 
 # Private state. Each literal is the legacy /data path; data_paths.bind moves the state
