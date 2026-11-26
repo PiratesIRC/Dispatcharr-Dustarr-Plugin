@@ -496,10 +496,18 @@ def _state_paths_under_tmp(tmp_path, monkeypatch):
     data directory are redirected to a folder under tmp_path; a test that wants a specific file
     names the constant (plugin.SCHEDULED_RUN_PATH and friends), not a literal path."""
     module = load_plugin()
+    # Arm the vendored layer's refusal: a write aimed at /data raises (tests/test_storage_refuse_real.py).
+    monkeypatch.setattr(module.data_paths._ps, "REFUSE_REAL_DATA", True)
     state = tmp_path / "state"
     for name in ("USAGE_FILE_PATH", "SCHEDULED_RUN_PATH", "REPORT_COUNT_PATH", "NOTIFY_STATE_PATH"):
         basename = getattr(module, name).rsplit("/", 1)[-1]
         monkeypatch.setattr(module, name, str(state / basename))
+    monkeypatch.setattr(module, "DATA_DIR", str(tmp_path / "dustarr-data"))
+    monkeypatch.setattr(module, "REPORT_FALLBACK_DIR", str(tmp_path / "reports-fallback"))
+    # Every legacy path bind recorded, moved under tmp: legacy mode and the adoption reads use these.
+    redirected = {name: str(tmp_path / "legacy" / value.lstrip("/"))
+                  for name, value in module.LEGACY_PATHS.items()}
+    monkeypatch.setattr(module, "LEGACY_PATHS", redirected)
     yield
 
 

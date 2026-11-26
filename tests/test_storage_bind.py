@@ -98,7 +98,8 @@ def test_a_failed_carry_over_falls_back_to_the_legacy_paths(data_paths, monkeypa
 def test_the_session_plugin_runs_in_legacy_mode(plugin_impl):
     """No Dispatcharr sandbox in the test process, so the real module never resolves a directory."""
     assert plugin_impl.STORAGE_LAYOUT.legacy is True
-    assert plugin_impl.DATA_DIR == "/data/dustarr"
+    # conftest moves DATA_DIR under tmp_path; the production literal is checked in source.
+    assert source_literals()["DATA_DIR"] == "/data/dustarr"
 
 
 def test_the_usage_reporter_is_built_after_bind_on_the_rebound_directory(plugin_impl):
@@ -230,3 +231,4 @@ def test_a_second_module_object_under_the_same_name_does_not_capture_the_bind(
     assert namespace["DATA_DIR"] == layout.data_dir
     assert namespace["USAGE_FILE_PATH"] == os.path.join(layout.data_dir, "usage.json")
     assert namespace["LEGACY_PATHS"]["USAGE_FILE_PATH"] == "/data/dustarr/usage.json"
+

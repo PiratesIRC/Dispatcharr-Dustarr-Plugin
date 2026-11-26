@@ -11,6 +11,7 @@ import sys
 
 import pytest
 from conftest import load_plugin
+from storage_helpers import source_literals
 
 NOW = 1_700_000_000.0
 
@@ -36,9 +37,11 @@ def test_the_preferred_directory_is_returned_when_neither_can_be_used(plugin):
     assert plugin._writable_dir("/nonexistent\x00a", "/nonexistent\x00b") == "/nonexistent\x00a"
 
 
-def test_the_fallback_is_under_data_and_never_under_logos(plugin):
-    assert plugin.REPORT_FALLBACK_DIR.startswith("/data/")
-    assert "/logos" not in plugin.REPORT_FALLBACK_DIR
+def test_the_fallback_is_under_data_and_never_under_logos():
+    # conftest redirects the live constant under tmp_path, so the production literal is read from source.
+    literal = source_literals()["REPORT_FALLBACK_DIR"]
+    assert literal.startswith("/data/")
+    assert "/logos" not in literal
 
 
 def test_build_report_publishes_to_the_fallback(plugin, tmp_path, monkeypatch):
