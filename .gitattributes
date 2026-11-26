@@ -5,3 +5,8 @@
 # The vendored usage client is sha256-pinned (scripts/client_manifest.json and
 # tests/test_usage_client_parity.py), so it MUST stay LF on every OS.
 dustarr/usage_client.py text eol=lf
+# The vendored storage layer and shared notify client are sha256-pinned by
+# scripts/storage_manifest.json and scripts/client_manifest.json (tests/test_storage_parity.py,
+# tests/test_client_parity.py), so they MUST stay LF on every OS.
+dustarr/plugin_storage.py text eol=lf
+dustarr/notify_client.py text eol=lf
